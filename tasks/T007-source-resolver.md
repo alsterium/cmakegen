@@ -62,6 +62,17 @@ T006.
 - Generated files: unchanged.
 - Follow-ups: none.
 
+## Execution record — review follow-up 4
+
+- Date: 2026-08-09
+- Summary: Preserved each normalized source entry's YAML path and source
+  location so resolver filesystem diagnostics identify the corresponding
+  `targets.<name>.sources[...]` entry rather than only the filesystem path.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure`.
+- Generated files: unchanged.
+- Follow-ups: none.
+
 ## Execution record — review follow-up 3
 
 - Date: 2026-08-09

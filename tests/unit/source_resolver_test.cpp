@@ -1,4 +1,6 @@
 #include "cmakegen/resolver/source_resolver.hpp"
+#include "cmakegen/domain/normalizer.hpp"
+#include "cmakegen/parser/parser.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -116,6 +118,28 @@ TEST_CASE("source resolver reports missing paths as structured filesystem diagno
     REQUIRE(resolved.error().diagnostics().size() == 1);
     CHECK(resolved.error().diagnostics()[0].code == diagnostic_codes::filesystem_error);
     CHECK(resolved.error().diagnostics()[0].path == "missing");
+}
+
+TEST_CASE("source resolver retains normalized YAML source-entry context in diagnostics") {
+    FixtureDirectory fixture;
+    const auto raw = parse_raw_spec(R"(
+schemaVersion: 1
+name: example
+targets:
+  App:
+    type: executable
+    sources: [src/missing.cpp]
+)");
+    REQUIRE(raw);
+    const auto project = normalize_project(*raw);
+
+    const auto resolved = resolve_sources(fixture.path(), project.targets.at("App").sources);
+    REQUIRE_FALSE(resolved);
+    REQUIRE(resolved.error().diagnostics().size() == 1);
+    const auto& diagnostic = resolved.error().diagnostics()[0];
+    CHECK(diagnostic.path == "targets.App.sources[0]");
+    REQUIRE(diagnostic.location);
+    CHECK(diagnostic.location->line == 7);
 }
 
 TEST_CASE("source resolver reports unreadable directories as filesystem diagnostics") {

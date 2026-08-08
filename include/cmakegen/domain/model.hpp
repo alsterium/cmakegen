@@ -1,5 +1,7 @@
 #pragma once
 
+#include "cmakegen/diagnostics/diagnostic.hpp"
+
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -24,6 +26,8 @@ struct SourceEntry {
     bool recursive = true;
     std::vector<std::string> exclude;
     SourceKind kind = SourceKind::automatic;
+    std::string diagnostic_path;
+    std::optional<SourceLocation> diagnostic_location;
 };
 
 struct ResolvedSource {

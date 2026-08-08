@@ -64,10 +64,11 @@ namespace {
     });
 }
 
-void add_filesystem_diagnostic(DiagnosticSet& diagnostics, const std::string& path,
+void add_filesystem_diagnostic(DiagnosticSet& diagnostics, const SourceEntry& entry,
                                const std::string& message) {
     diagnostics.add({std::string{diagnostic_codes::filesystem_error}, DiagnosticSeverity::error,
-                     message, path, std::nullopt});
+                     message, entry.diagnostic_path.empty() ? entry.path : entry.diagnostic_path,
+                     entry.diagnostic_location});
 }
 
 [[nodiscard]] std::filesystem::path entry_filesystem_path(const std::filesystem::path& base,
@@ -100,7 +101,7 @@ Result<std::vector<ResolvedSource>> resolve_sources(const std::filesystem::path&
         std::error_code error;
         const auto status = std::filesystem::symlink_status(input_path, error);
         if (error || status.type() == std::filesystem::file_type::not_found) {
-            add_filesystem_diagnostic(diagnostics, entry.path,
+            add_filesystem_diagnostic(diagnostics, entry,
                                       "source path does not exist: " + entry.path);
             continue;
         }
@@ -108,7 +109,7 @@ Result<std::vector<ResolvedSource>> resolve_sources(const std::filesystem::path&
         if (std::filesystem::is_regular_file(status) ||
             (std::filesystem::is_symlink(status) && std::filesystem::is_regular_file(input_path, error))) {
             if (error) {
-                add_filesystem_diagnostic(diagnostics, entry.path,
+                add_filesystem_diagnostic(diagnostics, entry,
                                           "could not inspect source file: " + entry.path);
             } else if (!excluded(entry, rendered_path(base, input_path), input_path.filename().generic_string())) {
                 const auto detected_kind = extension_kind(input_path);
@@ -121,17 +122,17 @@ Result<std::vector<ResolvedSource>> resolve_sources(const std::filesystem::path&
         const auto is_directory_symlink =
             std::filesystem::is_symlink(status) && std::filesystem::is_directory(input_path, error);
         if (error) {
-            add_filesystem_diagnostic(diagnostics, entry.path,
+            add_filesystem_diagnostic(diagnostics, entry,
                                       "could not inspect source path: " + entry.path);
             continue;
         }
         if (is_directory_symlink) {
-            add_filesystem_diagnostic(diagnostics, entry.path,
+            add_filesystem_diagnostic(diagnostics, entry,
                                       "source directory is a symlink and will not be traversed: " + entry.path);
             continue;
         }
         if (!std::filesystem::is_directory(status)) {
-            add_filesystem_diagnostic(diagnostics, entry.path,
+            add_filesystem_diagnostic(diagnostics, entry,
                                       "source path is neither a regular file nor a directory: " + entry.path);
             continue;
         }
@@ -173,7 +174,7 @@ Result<std::vector<ResolvedSource>> resolve_sources(const std::filesystem::path&
             }
         }
         if (error) {
-            add_filesystem_diagnostic(diagnostics, entry.path,
+            add_filesystem_diagnostic(diagnostics, entry,
                                       "could not scan source directory: " + entry.path + ": " + error.message());
         }
     }

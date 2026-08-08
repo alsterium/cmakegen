@@ -106,7 +106,10 @@ namespace {
 }
 
 [[nodiscard]] SourceEntry normalize_source(const RawSource& raw) {
-    SourceEntry source{normalize_path(raw.path.value), raw.recursive.value, {}, SourceKind::automatic};
+    auto diagnostic_path = raw.path.path;
+    if (diagnostic_path.ends_with(".path")) diagnostic_path.resize(diagnostic_path.size() - 5);
+    SourceEntry source{normalize_path(raw.path.value), raw.recursive.value, {}, SourceKind::automatic,
+                       std::move(diagnostic_path), raw.path.location};
     source.exclude.reserve(raw.exclude.size());
     for (const auto& exclude : raw.exclude) source.exclude.push_back(normalize_glob(exclude.value));
     return source;
