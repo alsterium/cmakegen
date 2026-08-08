@@ -14,12 +14,18 @@ namespace {
 
     std::string prefix;
     std::size_t start = 0;
+    bool drive_relative = false;
     const auto is_drive_root = slash_path.size() >= 3 &&
                                std::isalpha(static_cast<unsigned char>(slash_path[0])) &&
                                slash_path[1] == ':' && slash_path[2] == '/';
     if (is_drive_root) {
         prefix = slash_path.substr(0, 3);
         start = 3;
+    } else if (slash_path.size() >= 2 && std::isalpha(static_cast<unsigned char>(slash_path[0])) &&
+               slash_path[1] == ':') {
+        prefix = slash_path.substr(0, 2);
+        start = 2;
+        drive_relative = true;
     } else if (slash_path.starts_with("//")) {
         prefix = "//";
         start = 2;
@@ -36,7 +42,7 @@ namespace {
             if (component == "..") {
                 if (!components.empty() && components.back() != "..") {
                     components.pop_back();
-                } else if (prefix.empty()) {
+                } else if (prefix.empty() || drive_relative) {
                     components.push_back(component);
                 }
             } else {
@@ -49,7 +55,10 @@ namespace {
 
     std::string normalized = prefix;
     for (const auto component : components) {
-        if (!normalized.empty() && !normalized.ends_with('/')) normalized += '/';
+        if (!normalized.empty() && !normalized.ends_with('/') &&
+            !(drive_relative && normalized == prefix)) {
+            normalized += '/';
+        }
         normalized += component;
     }
     if (normalized.empty() && !slash_path.empty()) return ".";

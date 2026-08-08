@@ -125,6 +125,19 @@ targets:
     CHECK(project.targets.at("App").sources[0].path == "C:/bar");
 }
 
+TEST_CASE("normalization preserves Windows drive-relative prefixes on every host platform") {
+    const auto project = normalize(R"(
+schemaVersion: 1
+name: example
+targets:
+  App:
+    type: executable
+    sources: [C:foo\\..\\bar]
+)");
+
+    CHECK(project.targets.at("App").sources[0].path == "C:bar");
+}
+
 TEST_CASE("normalized JSON and YAML dumps are deterministic") {
     const auto project = normalize(R"(
 schemaVersion: 1

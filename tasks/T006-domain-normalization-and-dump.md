@@ -66,6 +66,16 @@ T004 and T005.
 - Generated files: unchanged.
 - Follow-ups: none.
 
+## Execution record — review follow-up 4
+
+- Date: 2026-08-09
+- Summary: Preserved Windows drive-relative prefixes such as `C:foo` during
+  host-independent logical-path normalization, including parent traversal.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure && git diff --check` (pass; 43/43 tests).
+- Generated files: unchanged.
+- Follow-ups: none.
+
 ## Execution record — review follow-up 3
 
 - Date: 2026-08-09
