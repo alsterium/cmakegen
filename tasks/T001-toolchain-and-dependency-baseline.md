@@ -36,3 +36,18 @@ None.
   documentation.
 - Check that decisions satisfy `docs/01_PRD.md`, `docs/02_ARCHITECTURE.md`, and
   `docs/13_SELF_HOSTING.md`.
+
+## Execution record
+
+- Date: 2026-08-08
+- Summary: Selected CMake 3.28/Preset schema 8; GCC 12.1, Clang/libc++ 16, and
+  Visual Studio 2022 17.6 baselines; CLI11 2.6.2, yaml-cpp 0.8.0,
+  nlohmann_json 3.12.0, and Catch2 3.15.3. Defined a user-owned dependency
+  hook that prefers installed CMake packages and otherwise uses hash-pinned
+  FetchContent archives. Chose an in-tree SHA-256 implementation for T011.
+- Verification: primary upstream documentation review and `git diff --check`
+  (pass); selected versions and targets cross-checked against PRD and
+  self-hosting specification (pass)
+- Generated files: unchanged; no generated CMake exists before T014
+- Follow-ups: T002 implements `cmake/dependencies.cmake` and bootstrap checks;
+  T011 selects and licenses the embedded SHA-256 source
