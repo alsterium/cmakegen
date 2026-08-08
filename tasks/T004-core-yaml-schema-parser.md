@@ -68,6 +68,21 @@ T003.
 - Generated files: unchanged.
 - Follow-ups: none.
 
+## Execution record — review follow-up 8
+
+- Date: 2026-08-08
+- Summary: Decoded YAML core octal and hexadecimal unsigned integer forms with
+  explicit base-aware parsing, and preserved signed NaN-like scalar names as
+  strings because only unsigned `.nan` is a YAML core numeric literal.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest
+  --test-dir build/bootstrap --output-on-failure && cmake -S bootstrap -B
+  build/bootstrap-gcc -DCMAKE_CXX_COMPILER=g++ && cmake --build
+  build/bootstrap-gcc --parallel 2 && ctest --test-dir build/bootstrap-gcc
+  --output-on-failure && git diff --check` (pass; 24/24 tests in each
+  configuration).
+- Generated files: unchanged.
+- Follow-ups: none.
+
 ## Execution record — review follow-up 7
 
 - Date: 2026-08-08

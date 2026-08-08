@@ -253,6 +253,19 @@ targets:
     CHECK(result->name.value == "1_2");
 }
 
+TEST_CASE("signed NaN-like project names remain string-valued YAML scalars") {
+    const auto result = parse_raw_spec(R"(
+schemaVersion: 1
+name: +.nan
+targets:
+  hello:
+    type: executable
+)");
+
+    REQUIRE(result);
+    CHECK(result->name.value == "+.nan");
+}
+
 TEST_CASE("quoted numeric-looking text remains valid for string fields") {
     const auto result = parse_raw_spec(R"(
 schemaVersion: 1
@@ -279,6 +292,19 @@ targets:
     const auto& diagnostic = result.error().diagnostics().front();
     CHECK(diagnostic.path == "schemaVersion");
     CHECK(diagnostic.message == "expected an unsigned integer");
+}
+
+TEST_CASE("YAML core octal integers are decoded correctly") {
+    const auto result = parse_raw_spec(R"(
+schemaVersion: 0o1
+name: hello
+targets:
+  hello:
+    type: executable
+)");
+
+    REQUIRE(result);
+    CHECK(result->schema_version.value == 1);
 }
 
 TEST_CASE("legacy YAML boolean spellings are rejected") {

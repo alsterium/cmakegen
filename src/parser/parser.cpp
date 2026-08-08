@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cctype>
 #include <cstdint>
 #include <optional>
@@ -28,7 +29,7 @@ namespace {
 
 [[nodiscard]] bool is_implicit_non_string(std::string_view value) {
     static const std::regex implicit_non_string{
-        R"(^(?:null|Null|NULL|~|true|True|TRUE|false|False|FALSE|[-+]?(?:[0-9][0-9]*|0o[0-7]+|0x[0-9a-fA-F]+)|[-+]?(?:(?:[0-9][0-9]*\.[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?|[0-9][0-9]*[eE][-+]?[0-9]+|\.(?:inf|Inf|INF|nan|NaN|NAN)))$)"};
+        R"(^(?:null|Null|NULL|~|true|True|TRUE|false|False|FALSE|[-+]?(?:[0-9][0-9]*|0o[0-7]+|0x[0-9a-fA-F]+)|[-+]?(?:(?:[0-9][0-9]*\.[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?|[0-9][0-9]*[eE][-+]?[0-9]+|\.(?:inf|Inf|INF))|\.(?:nan|NaN|NAN))$)"};
     return std::regex_match(value.begin(), value.end(), implicit_non_string);
 }
 
@@ -134,12 +135,26 @@ void reject_duplicate_keys(const YAML::Node& node, std::string_view path,
         add_invalid(diagnostics, path, node, "expected an unsigned integer");
         return std::nullopt;
     }
-    try {
-        return RawValue<std::uint32_t>{node.as<std::uint32_t>(), std::move(path), location_of(node)};
-    } catch (const YAML::BadConversion&) {
+    auto value = node.Scalar();
+    auto digits = std::string_view{value};
+    auto base = 10;
+    if (digits.starts_with('+')) {
+        digits.remove_prefix(1);
+    }
+    if (digits.starts_with("0o")) {
+        base = 8;
+        digits.remove_prefix(2);
+    } else if (digits.starts_with("0x")) {
+        base = 16;
+        digits.remove_prefix(2);
+    }
+    std::uint32_t parsed_value{};
+    const auto [end, error] = std::from_chars(digits.data(), digits.data() + digits.size(), parsed_value, base);
+    if (error != std::errc{} || end != digits.data() + digits.size()) {
         add_invalid(diagnostics, path, node, "expected an unsigned integer");
         return std::nullopt;
     }
+    return RawValue<std::uint32_t>{parsed_value, std::move(path), location_of(node)};
 }
 
 [[nodiscard]] std::optional<RawValue<bool>> parse_bool(const YAML::Node& node, std::string path,
