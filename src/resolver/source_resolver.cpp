@@ -135,7 +135,7 @@ Result<std::vector<ResolvedSource>> resolve_sources(const std::filesystem::path&
             continue;
         }
 
-        const auto options = std::filesystem::directory_options::skip_permission_denied;
+        constexpr auto options = std::filesystem::directory_options::none;
         const auto add_directory_file = [&](const std::filesystem::path& file) {
             const auto kind = extension_kind(file);
             if (kind == SourceKind::automatic) return;

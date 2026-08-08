@@ -86,6 +86,28 @@ TEST_CASE("source resolver reports missing paths as structured filesystem diagno
     CHECK(resolved.error().diagnostics()[0].path == "missing");
 }
 
+TEST_CASE("source resolver reports unreadable directories as filesystem diagnostics") {
+#if defined(_WIN32)
+    SKIP("POSIX directory permissions are unavailable on Windows");
+#else
+    FixtureDirectory fixture;
+    fixture.file("src/blocked/hidden.cpp");
+    std::error_code error;
+    std::filesystem::permissions(fixture.path() / "src/blocked", std::filesystem::perms::none,
+                                 std::filesystem::perm_options::replace, error);
+    if (error) SKIP("could not remove directory permissions on this platform");
+
+    const auto resolved = resolve_sources(fixture.path(), {{"src", true, {}, SourceKind::automatic}});
+    std::filesystem::permissions(fixture.path() / "src/blocked", std::filesystem::perms::owner_all,
+                                 std::filesystem::perm_options::add, error);
+    if (resolved) SKIP("test process can read directories without permissions");
+
+    REQUIRE(resolved.error().diagnostics().size() == 1);
+    CHECK(resolved.error().diagnostics()[0].code == diagnostic_codes::filesystem_error);
+    CHECK(resolved.error().diagnostics()[0].path == "src");
+#endif
+}
+
 TEST_CASE("source resolver does not traverse directory symlinks") {
     FixtureDirectory fixture;
     fixture.file("src/main.cpp");

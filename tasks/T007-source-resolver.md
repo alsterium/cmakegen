@@ -50,3 +50,14 @@ T006.
   T014.
 - Follow-ups: T008 consumes the resolved source lists during semantic
   validation.
+
+## Execution record — review follow-up
+
+- Date: 2026-08-09
+- Summary: Stopped silently skipping unreadable directories during source
+  traversal. Permission failures now produce the existing structured `CMG2001`
+  diagnostic instead of generating an incomplete source list.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure` (pass; 60/60 tests).
+- Generated files: unchanged.
+- Follow-ups: none.
