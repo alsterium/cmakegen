@@ -76,6 +76,17 @@ T004 and T005.
 - Generated files: unchanged.
 - Follow-ups: none.
 
+## Execution record — review follow-up 11
+
+- Date: 2026-08-09
+- Summary: Preserved unresolved CMake preset macro components when simplifying
+  parent traversal in explicit binary directories, and recognized the `UNC`
+  marker of extended UNC roots case-insensitively.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure && git diff --check` (pass; 52/52 tests).
+- Generated files: unchanged.
+- Follow-ups: none.
+
 ## Execution record — review follow-up 9
 
 - Date: 2026-08-09

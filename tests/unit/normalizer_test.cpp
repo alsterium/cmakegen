@@ -180,6 +180,35 @@ targets:
     CHECK(project.targets.at("App").sources[0].path == "//?/UNC/server/share/bar");
 }
 
+TEST_CASE("normalization preserves extended UNC roots with a lowercase marker") {
+    const auto project = normalize(R"(
+schemaVersion: 1
+name: example
+targets:
+  App:
+    type: executable
+    sources: ["\\\\?\\unc\\server\\share\\..\\..\\bar"]
+)");
+
+    CHECK(project.targets.at("App").sources[0].path == "//?/unc/server/share/bar");
+}
+
+TEST_CASE("normalization preserves preset macro boundaries during parent traversal") {
+    const auto project = normalize(R"(
+schemaVersion: 1
+name: example
+presets:
+  debug:
+    buildType: Debug
+    binaryDir: ${sourceDir}/../outside
+targets:
+  App:
+    type: executable
+)");
+
+    CHECK(project.presets.at("debug").binary_dir == "${sourceDir}/../outside");
+}
+
 TEST_CASE("normalization collapses repeated POSIX root separators") {
     const auto project = normalize(R"(
 schemaVersion: 1

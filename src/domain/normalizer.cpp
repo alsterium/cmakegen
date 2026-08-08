@@ -21,7 +21,11 @@ namespace {
                              slash_path[2] != '/' && unc_server_end != std::string::npos &&
                              unc_server_end + 1 < slash_path.size() &&
                              slash_path[unc_server_end + 1] != '/';
-    const auto is_extended_unc_root = slash_path.starts_with("//?/UNC/");
+    const auto is_extended_unc_root =
+        slash_path.size() >= 8 && slash_path.starts_with("//?/") && slash_path[7] == '/' &&
+        std::tolower(static_cast<unsigned char>(slash_path[4])) == 'u' &&
+        std::tolower(static_cast<unsigned char>(slash_path[5])) == 'n' &&
+        std::tolower(static_cast<unsigned char>(slash_path[6])) == 'c';
     const auto is_drive_root = slash_path.size() >= 3 &&
                                std::isalpha(static_cast<unsigned char>(slash_path[0])) &&
                                slash_path[1] == ':' && slash_path[2] == '/';
@@ -48,9 +52,11 @@ namespace {
         const auto component = std::string_view{slash_path}.substr(start, end - start);
         if (!component.empty() && component != ".") {
             if (component == "..") {
-                if (components.size() > protected_components && components.back() != "..") {
+                const auto is_macro = !components.empty() && components.back().find('$') != std::string_view::npos;
+                if (components.size() > protected_components && components.back() != ".." && !is_macro) {
                     components.pop_back();
-                } else if (prefix.empty() || drive_relative) {
+                } else if (prefix.empty() || drive_relative || is_macro ||
+                           (components.size() > protected_components && components.back() == "..")) {
                     components.push_back(component);
                 }
             } else {
