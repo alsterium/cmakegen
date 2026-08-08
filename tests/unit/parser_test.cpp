@@ -225,6 +225,34 @@ targets:
     CHECK(diagnostic.message == "expected a string");
 }
 
+TEST_CASE("out-of-range implicit numeric scalars are rejected for string fields") {
+    const auto result = parse_raw_spec(R"(
+schemaVersion: 1
+name: 1e9999
+targets:
+  hello:
+    type: executable
+)");
+
+    REQUIRE_FALSE(result);
+    const auto& diagnostic = result.error().diagnostics().front();
+    CHECK(diagnostic.path == "name");
+    CHECK(diagnostic.message == "expected a string");
+}
+
+TEST_CASE("quoted numeric-looking text remains valid for string fields") {
+    const auto result = parse_raw_spec(R"(
+schemaVersion: 1
+name: "1e9999"
+targets:
+  hello:
+    type: executable
+)");
+
+    REQUIRE(result);
+    CHECK(result->name.value == "1e9999");
+}
+
 TEST_CASE("target mapping keys must have string semantics") {
     const auto result = parse_raw_spec(R"(
 schemaVersion: 1

@@ -68,6 +68,21 @@ T003.
 - Generated files: unchanged.
 - Follow-ups: none.
 
+## Execution record — review follow-up 5
+
+- Date: 2026-08-08
+- Summary: Replaced conversion-based detection of implicit non-string scalars
+  with YAML core Boolean, null, integer, and floating-point literal syntax, so
+  range overflow cannot cause numeric input to be accepted as a string.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest
+  --test-dir build/bootstrap --output-on-failure && cmake -S bootstrap -B
+  build/bootstrap-gcc -DCMAKE_CXX_COMPILER=g++ && cmake --build
+  build/bootstrap-gcc --parallel 2 && ctest --test-dir build/bootstrap-gcc
+  --output-on-failure && git diff --check` (pass; 19/19 tests in each
+  configuration).
+- Generated files: unchanged.
+- Follow-ups: none.
+
 ## Execution record — review follow-up 4
 
 - Date: 2026-08-08

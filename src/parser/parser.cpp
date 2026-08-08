@@ -7,6 +7,7 @@
 #include <cctype>
 #include <cstdint>
 #include <optional>
+#include <regex>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -25,14 +26,10 @@ namespace {
                           static_cast<std::size_t>(mark.column) + 1};
 }
 
-template <typename T>
-[[nodiscard]] bool can_convert_to(const YAML::Node& node) {
-    try {
-        static_cast<void>(node.as<T>());
-        return true;
-    } catch (const YAML::BadConversion&) {
-        return false;
-    }
+[[nodiscard]] bool is_implicit_non_string(std::string_view value) {
+    static const std::regex implicit_non_string{
+        R"(^(?:null|Null|NULL|~|true|True|TRUE|false|False|FALSE|[-+]?(?:[0-9][0-9_]*|0o[0-7_]+|0x[0-9a-fA-F_]+)|[-+]?(?:(?:[0-9][0-9_]*\.[0-9_]*|\.[0-9_]+)(?:[eE][-+]?[0-9]+)?|[0-9][0-9_]*[eE][-+]?[0-9]+|\.(?:inf|Inf|INF|nan|NaN|NAN)))$)"};
+    return std::regex_match(value.begin(), value.end(), implicit_non_string);
 }
 
 [[nodiscard]] bool has_string_semantics(const YAML::Node& node) {
@@ -46,8 +43,7 @@ template <typename T>
     if (tag != "?") {
         return false;
     }
-    return !can_convert_to<bool>(node) && !can_convert_to<long long>(node) &&
-           !can_convert_to<double>(node);
+    return !is_implicit_non_string(node.Scalar());
 }
 
 void add_invalid(DiagnosticSet& diagnostics, std::string path, const YAML::Node& node,
