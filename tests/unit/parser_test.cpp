@@ -117,3 +117,43 @@ targets:
     CHECK(diagnostics[1].code == diagnostic_codes::unknown_key);
     CHECK(diagnostics[1].path == "targets.hello.unexpected");
 }
+
+TEST_CASE("multiple YAML documents are rejected instead of silently ignoring trailing input") {
+    const auto result = parse_raw_spec(R"(
+schemaVersion: 1
+name: hello
+targets:
+  hello:
+    type: executable
+---
+schemaVersion: 1
+name: ignored
+targets:
+  ignored:
+    type: executable
+)");
+
+    REQUIRE_FALSE(result);
+    const auto& diagnostic = result.error().diagnostics().front();
+    CHECK(diagnostic.message == "expected exactly one YAML document");
+}
+
+TEST_CASE("duplicate mapping keys are rejected at root and nested levels") {
+    const auto result = parse_raw_spec(R"(
+schemaVersion: 1
+name: hello
+name: ignored
+targets:
+  hello:
+    type: executable
+    type: staticLibrary
+)");
+
+    REQUIRE_FALSE(result);
+    const auto& diagnostics = result.error().diagnostics();
+    REQUIRE(diagnostics.size() == 2);
+    CHECK(diagnostics[0].path == "name");
+    CHECK(diagnostics[0].message == "duplicate key 'name'");
+    CHECK(diagnostics[1].path == "targets.hello.type");
+    CHECK(diagnostics[1].message == "duplicate key 'type'");
+}

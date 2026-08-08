@@ -9,7 +9,9 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace cmakegen {
 namespace {
@@ -45,16 +47,40 @@ void reject_unknown_keys(const YAML::Node& node, std::string_view path,
     if (!node.IsMap()) {
         return;
     }
+    std::unordered_set<std::string> seen_keys;
     for (const auto& item : node) {
         if (!item.first.IsScalar()) {
             add_invalid(diagnostics, std::string{path}, item.first, "mapping keys must be strings");
             continue;
         }
         const auto key = item.first.Scalar();
+        const auto key_path = path.empty() ? key : std::string{path} + "." + key;
+        if (!seen_keys.insert(key).second) {
+            add_invalid(diagnostics, key_path, item.first, "duplicate key '" + key + "'");
+            continue;
+        }
         if (!is_allowed(key, allowed)) {
-            const auto key_path = path.empty() ? key : std::string{path} + "." + key;
             diagnostics.add({std::string{diagnostic_codes::unknown_key}, DiagnosticSeverity::error,
                              "unknown key '" + key + "'", key_path, location_of(item.first)});
+        }
+    }
+}
+
+void reject_duplicate_keys(const YAML::Node& node, std::string_view path,
+                           DiagnosticSet& diagnostics) {
+    if (!node.IsMap()) {
+        return;
+    }
+    std::unordered_set<std::string> seen_keys;
+    for (const auto& item : node) {
+        if (!item.first.IsScalar()) {
+            add_invalid(diagnostics, std::string{path}, item.first, "mapping keys must be strings");
+            continue;
+        }
+        const auto key = item.first.Scalar();
+        if (!seen_keys.insert(key).second) {
+            const auto key_path = path.empty() ? key : std::string{path} + "." + key;
+            add_invalid(diagnostics, key_path, item.first, "duplicate key '" + key + "'");
         }
     }
 }
@@ -179,7 +205,14 @@ Result<RawSpec> parse_raw_spec(std::string_view yaml) {
     DiagnosticSet diagnostics;
     YAML::Node root;
     try {
-        root = YAML::Load(std::string{yaml});
+        auto documents = YAML::LoadAll(std::string{yaml});
+        if (documents.size() != 1) {
+            const auto location = documents.size() > 1 ? location_of(documents[1]) : std::nullopt;
+            diagnostics.add({std::string{diagnostic_codes::invalid_value}, DiagnosticSeverity::error,
+                             "expected exactly one YAML document", "", location});
+            return std::unexpected(std::move(diagnostics));
+        }
+        root = std::move(documents.front());
     } catch (const YAML::ParserException& error) {
         std::optional<SourceLocation> location;
         if (!error.mark.is_null()) {
@@ -243,6 +276,9 @@ Result<RawSpec> parse_raw_spec(std::string_view yaml) {
     if (targets_node) {
         require_map(targets_node, "targets", diagnostics);
         if (targets_node.IsMap() && targets_node.size() == 0) add_invalid(diagnostics, "targets", targets_node, "must not be empty");
+        if (targets_node.IsMap()) {
+            reject_duplicate_keys(targets_node, "targets", diagnostics);
+        }
         if (targets_node.IsMap()) for (const auto& item : targets_node) {
             if (!item.first.IsScalar()) {
                 add_invalid(diagnostics, "targets", item.first, "target names must be strings");

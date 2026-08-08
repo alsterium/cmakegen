@@ -52,3 +52,18 @@ T003.
   T014.
 - Follow-ups: T005 extends the raw parser for scoped properties, packages,
   platform overrides, presets, and custom CMake includes.
+
+## Execution record — review follow-up
+
+- Date: 2026-08-08
+- Summary: Rejected multi-document YAML streams so trailing configuration cannot
+  be silently ignored, and rejected duplicate keys in fixed-schema and
+  dynamically named target mappings.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest
+  --test-dir build/bootstrap --output-on-failure && cmake -S bootstrap -B
+  build/bootstrap-gcc -DCMAKE_CXX_COMPILER=g++ && cmake --build
+  build/bootstrap-gcc --parallel 2 && ctest --test-dir build/bootstrap-gcc
+  --output-on-failure && git diff --check` (pass; 12/12 tests in each
+  configuration).
+- Generated files: unchanged.
+- Follow-ups: none.
