@@ -23,6 +23,8 @@ include("${CMAKE_CURRENT_LIST_DIR}/../cmake/dependencies.cmake")
 
 add_library(cmakegen_core STATIC
     "${CMAKE_CURRENT_LIST_DIR}/../src/diagnostics/diagnostic.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/../src/domain/dump.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/../src/domain/normalizer.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/../src/parser/parser.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/../src/version.cpp"
 )
@@ -44,6 +46,7 @@ if(CMAKEGEN_BOOTSTRAP_TESTS AND BUILD_TESTING)
     include(Catch)
     add_executable(cmakegen_tests
         "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/diagnostic_test.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/normalizer_test.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/parser_test.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/version_test.cpp"
     )

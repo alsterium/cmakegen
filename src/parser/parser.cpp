@@ -186,6 +186,23 @@ void parse_string_sequence(const YAML::Node& node, std::string_view path,
     }
 }
 
+void parse_languages(const YAML::Node& node, std::vector<RawValue<std::string>>& destination,
+                     DiagnosticSet& diagnostics) {
+    std::vector<RawValue<std::string>> values;
+    parse_string_sequence(node, "cmake.languages", values, diagnostics);
+    if (node.IsSequence() && values.empty()) {
+        add_invalid(diagnostics, "cmake.languages", node, "must not be empty");
+    }
+    for (auto& value : values) {
+        if (value.value != "C" && value.value != "CXX") {
+            diagnostics.add({std::string{diagnostic_codes::invalid_value}, DiagnosticSeverity::error,
+                             "unsupported language '" + value.value + "'", value.path, value.location});
+        } else {
+            destination.push_back(std::move(value));
+        }
+    }
+}
+
 void parse_scoped_strings(const YAML::Node& node, std::string_view path,
                           RawScopedValues<std::string>& destination,
                           DiagnosticSet& diagnostics) {
@@ -304,6 +321,11 @@ void parse_sources(const YAML::Node& node, std::string_view path,
     });
 }
 
+[[nodiscard]] bool is_valid_preset_name(std::string_view name) {
+    return !name.empty() && name != "." && name != ".." &&
+           name.find_first_of("/\\\\$") == std::string_view::npos;
+}
+
 } // namespace
 
 Result<RawSpec> parse_raw_spec(std::string_view yaml) {
@@ -367,7 +389,7 @@ Result<RawSpec> parse_raw_spec(std::string_view yaml) {
             if (const auto node = cmake_node["minimumVersion"]) cmake.minimum_version = parse_string(node, "cmake.minimumVersion", diagnostics);
             if (const auto node = cmake_node["languages"]) {
                 cmake.languages.clear();
-                parse_string_sequence(node, "cmake.languages", cmake.languages, diagnostics);
+                parse_languages(node, cmake.languages, diagnostics);
             }
             if (const auto node = cmake_node["cStandard"]) cmake.c_standard = parse_uint32(node, "cmake.cStandard", diagnostics);
             if (const auto node = cmake_node["cxxStandard"]) cmake.cxx_standard = parse_uint32(node, "cmake.cxxStandard", diagnostics);
@@ -472,6 +494,11 @@ Result<RawSpec> parse_raw_spec(std::string_view yaml) {
             }
             const auto preset_name = item.first.Scalar();
             const auto preset_path = "presets." + preset_name;
+            if (!is_valid_preset_name(preset_name)) {
+                add_invalid(diagnostics, preset_path, item.first,
+                            "must not contain path separators or '$', or be '.' or '..'");
+                continue;
+            }
             require_map(item.second, preset_path, diagnostics);
             if (!item.second.IsMap()) continue;
             reject_unknown_keys(item.second, preset_path, {"buildType", "generator", "binaryDir", "cacheVariables"}, diagnostics);
