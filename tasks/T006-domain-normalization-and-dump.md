@@ -33,3 +33,23 @@ T004 and T005.
 - Run normalizer plus JSON/YAML golden tests.
 - Cover defaults, ordering, enums, scoped values, dependency classification,
   and paths on the available host platform.
+
+## Execution record
+
+- Date: 2026-08-09
+- Summary: Added a YAML-independent normalized domain model and conversion from
+  the raw schema. Normalization applies documented defaults, canonicalizes
+  logical paths with `/`, expands scoped values, classifies internal versus
+  imported dependencies, and stores keyed entities in canonical key order.
+  Added deterministic JSON and YAML dump APIs, including default versus
+  explicit-empty preset handling.
+- Verification: `cmake -S bootstrap -B build/bootstrap-gcc
+  -DCMAKE_CXX_COMPILER=g++ && cmake --build build/bootstrap --parallel 2 &&
+  ctest --test-dir build/bootstrap --output-on-failure && cmake --build
+  build/bootstrap-gcc --parallel 2 && ctest --test-dir build/bootstrap-gcc
+  --output-on-failure && git diff --check` (pass; 34/34 tests in each
+  configuration). Both `clang++` and `g++` resolve to Apple Clang 21.0.0
+  locally.
+- Generated files: unchanged; normal generated CMake does not exist until T014.
+- Follow-ups: T007 resolves normalized logical source paths relative to the
+  supplied project.yml directory; T012 exposes the dump APIs through the CLI.
