@@ -28,8 +28,14 @@ namespace {
 
 [[nodiscard]] bool is_implicit_non_string(std::string_view value) {
     static const std::regex implicit_non_string{
-        R"(^(?:null|Null|NULL|~|true|True|TRUE|false|False|FALSE|[-+]?(?:[0-9][0-9_]*|0o[0-7_]+|0x[0-9a-fA-F_]+)|[-+]?(?:(?:[0-9][0-9_]*\.[0-9_]*|\.[0-9_]+)(?:[eE][-+]?[0-9]+)?|[0-9][0-9_]*[eE][-+]?[0-9]+|\.(?:inf|Inf|INF|nan|NaN|NAN)))$)"};
+        R"(^(?:null|Null|NULL|~|true|True|TRUE|false|False|FALSE|[-+]?(?:[0-9][0-9]*|0o[0-7]+|0x[0-9a-fA-F]+)|[-+]?(?:(?:[0-9][0-9]*\.[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?|[0-9][0-9]*[eE][-+]?[0-9]+|\.(?:inf|Inf|INF|nan|NaN|NAN)))$)"};
     return std::regex_match(value.begin(), value.end(), implicit_non_string);
+}
+
+[[nodiscard]] bool is_unsigned_integer_literal(std::string_view value) {
+    static const std::regex unsigned_integer{
+        R"(^\+?(?:[0-9][0-9]*|0o[0-7]+|0x[0-9a-fA-F]+)$)"};
+    return std::regex_match(value.begin(), value.end(), unsigned_integer);
 }
 
 [[nodiscard]] bool has_string_semantics(const YAML::Node& node) {
@@ -118,7 +124,8 @@ void reject_duplicate_keys(const YAML::Node& node, std::string_view path,
 [[nodiscard]] std::optional<RawValue<std::uint32_t>> parse_uint32(const YAML::Node& node,
                                                                     std::string path,
                                                                     DiagnosticSet& diagnostics) {
-    if (!node.IsScalar() || (node.Tag() != "?" && node.Tag() != "tag:yaml.org,2002:int")) {
+    if (!node.IsScalar() || (node.Tag() != "?" && node.Tag() != "tag:yaml.org,2002:int") ||
+        !is_unsigned_integer_literal(node.Scalar())) {
         add_invalid(diagnostics, path, node, "expected an unsigned integer");
         return std::nullopt;
     }

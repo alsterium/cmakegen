@@ -240,6 +240,19 @@ targets:
     CHECK(diagnostic.message == "expected a string");
 }
 
+TEST_CASE("underscored project names remain string-valued YAML scalars") {
+    const auto result = parse_raw_spec(R"(
+schemaVersion: 1
+name: 1_2
+targets:
+  hello:
+    type: executable
+)");
+
+    REQUIRE(result);
+    CHECK(result->name.value == "1_2");
+}
+
 TEST_CASE("quoted numeric-looking text remains valid for string fields") {
     const auto result = parse_raw_spec(R"(
 schemaVersion: 1
@@ -251,6 +264,21 @@ targets:
 
     REQUIRE(result);
     CHECK(result->name.value == "1e9999");
+}
+
+TEST_CASE("negative integer values are rejected before unsigned conversion") {
+    const auto result = parse_raw_spec(R"(
+schemaVersion: -4294967295
+name: hello
+targets:
+  hello:
+    type: executable
+)");
+
+    REQUIRE_FALSE(result);
+    const auto& diagnostic = result.error().diagnostics().front();
+    CHECK(diagnostic.path == "schemaVersion");
+    CHECK(diagnostic.message == "expected an unsigned integer");
 }
 
 TEST_CASE("target mapping keys must have string semantics") {
