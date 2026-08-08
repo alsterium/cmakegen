@@ -32,7 +32,7 @@ namespace {
 [[nodiscard]] auto ordering_key(const Diagnostic& diagnostic) {
     const auto line = diagnostic.location ? diagnostic.location->line : 0;
     const auto column = diagnostic.location ? diagnostic.location->column : 0;
-    return std::tuple<std::string, std::size_t, std::size_t, std::string, std::string>{
+    return std::tuple<std::string_view, std::size_t, std::size_t, std::string_view, std::string_view>{
         diagnostic.path,
         line,
         column,
@@ -41,16 +41,18 @@ namespace {
     };
 }
 
+[[nodiscard]] bool diagnostic_less(const Diagnostic& left, const Diagnostic& right) {
+    if (ordering_key(left) != ordering_key(right)) {
+        return ordering_key(left) < ordering_key(right);
+    }
+    return severity_order(left.severity) < severity_order(right.severity);
+}
+
 } // namespace
 
 void DiagnosticSet::add(Diagnostic diagnostic) {
-    diagnostics_.push_back(std::move(diagnostic));
-    std::stable_sort(diagnostics_.begin(), diagnostics_.end(), [](const Diagnostic& left, const Diagnostic& right) {
-        if (ordering_key(left) != ordering_key(right)) {
-            return ordering_key(left) < ordering_key(right);
-        }
-        return severity_order(left.severity) < severity_order(right.severity);
-    });
+    const auto position = std::lower_bound(diagnostics_.begin(), diagnostics_.end(), diagnostic, diagnostic_less);
+    diagnostics_.insert(position, std::move(diagnostic));
 }
 
 bool DiagnosticSet::has_errors() const noexcept {

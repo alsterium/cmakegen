@@ -58,3 +58,15 @@ T002.
   build/bootstrap --output-on-failure && git diff --check` (pass; 4/4 tests).
 - Generated files: unchanged.
 - Follow-ups: none.
+
+## Execution record — review follow-up 2
+
+- Date: 2026-08-08
+- Summary: Replaced full-set sorting on every diagnostic insertion with sorted
+  insertion, and made comparator string fields non-owning views while retaining
+  location values. This preserves deterministic ordering without repeatedly
+  copying diagnostic strings or performing full re-sorts.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure && git diff --check` (pass; 4/4 tests).
+- Generated files: unchanged.
+- Follow-ups: none.
