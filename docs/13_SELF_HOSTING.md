@@ -102,6 +102,14 @@ Bootstrap must include only:
 - cmakegen executable source
 - third-party dependencies required for a functional generator
 
+The dependency acquisition rules live in the hand-maintained
+`cmake/dependencies.cmake`, which bootstrap and the generated normal project
+both include. It uses externally supplied packages when available, with a
+pinned `FetchContent` fallback for fresh checkouts. While T002 through T013
+use transitional bootstrap test wiring, it also conditionally supplies Catch2.
+T014 removes that wiring so the final minimal bootstrap does not acquire
+test-only dependencies.
+
 Bootstrap should not normally contain:
 
 - project tests
@@ -218,16 +226,19 @@ cmake:
 packages:
   yaml_cpp:
     name: yaml-cpp
+    version: "0.8.0"
 
   nlohmann_json:
     name: nlohmann_json
+    version: "3.12.0"
 
   CLI11:
     name: CLI11
+    version: "2.6.2"
 
   Catch2:
     name: Catch2
-    version: "3"
+    version: "3.15.3"
 
 targets:
   cmakegen_core:
@@ -271,7 +282,8 @@ presets:
     buildType: Release
 ```
 
-Exact package target names must be verified against the selected dependency strategy.
+The package names and imported targets above are fixed by the T001 dependency
+baseline. Their acquisition remains outside `project.yml`.
 
 ## 12. Future dogfooding target
 

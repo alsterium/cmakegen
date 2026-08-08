@@ -18,6 +18,8 @@ project(
 
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+include(cmake/dependencies.cmake OPTIONAL)
+
 find_package(fmt 11 REQUIRED)
 
 include(cmake/cmakegen.generated.cmake)
@@ -28,6 +30,11 @@ include(cmake/custom.cmake)
 `project(... VERSION ...)` is omitted if no version exists.
 
 Language order is stable: `C`, then `CXX`.
+
+`cmake/dependencies.cmake` is an optional, user-owned pre-package hook. It is
+included before every generated `find_package()` call so a project can provide
+targets through a package manager or `FetchContent`. cmakegen never creates,
+modifies, or deletes this file.
 
 ## 2. Generated target file
 

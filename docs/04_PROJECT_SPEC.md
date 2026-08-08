@@ -263,6 +263,12 @@ MVP does not automatically infer which imported targets a package exports.
 
 Users reference imported targets explicitly.
 
+Package acquisition is outside schema version 1. In particular, packages do
+not contain repository URLs, source revisions, hashes, or package-manager
+settings. Projects may supply dependencies through their CMake environment, or
+through a hand-maintained CMake dependency file that runs before the generated
+`find_package()` calls.
+
 ## 9. Platform overrides
 
 ```yaml

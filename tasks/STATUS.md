@@ -9,7 +9,7 @@ in parallel after their dependencies are complete.
 | ID | Task | Status | Difficulty | Uncertainty | Depends on | Wave |
 |---|---|---|---|---|---|---|
 | [T000](T000-decompose-mvp-work.md) | Decompose MVP implementation work | done | S | low | — | planning |
-| [T001](T001-toolchain-and-dependency-baseline.md) | Toolchain and dependency baseline | todo | M | high | — | 0 |
+| [T001](T001-toolchain-and-dependency-baseline.md) | Toolchain and dependency baseline | done | M | high | — | 0 |
 | [T002](T002-bootstrap-project-foundation.md) | Bootstrap project foundation | todo | M | medium | T001 | 1 |
 | [T003](T003-diagnostics-and-result-model.md) | Diagnostics and result model | todo | S | low | T002 | 2 |
 | [T004](T004-core-yaml-schema-parser.md) | Core YAML schema parser | todo | L | medium | T003 | 3 |
@@ -48,7 +48,8 @@ are:
 These remain outside the current task set until MVP acceptance or an explicit
 priority decision:
 
-- FetchContent convenience
+- schema-level FetchContent dependency declarations (the bootstrap fallback is
+  required in T002)
 - CTest/test-target schema abstraction
 - install/export and package workflow beyond basic release readiness
 - explicit internal/external dependency syntax

@@ -129,6 +129,18 @@ Targets may link project targets.
 
 Packages can be declared with `find_package` and imported targets linked explicitly.
 
+### MVP dependency resolution
+
+`project.yml` declares only CMake package metadata, not source repository URLs
+or package-manager-specific settings. The generator emits `find_package()` and
+links the explicitly named imported targets.
+
+For this repository, a hand-maintained `cmake/dependencies.cmake` first accepts
+packages supplied by the developer's CMake environment and otherwise fetches
+the pinned development dependencies. It is included before generated
+`find_package()` calls. This bootstrap convenience is not part of the
+`project.yml` schema and does not make cmakegen a dependency manager.
+
 ### Source expansion
 
 Directories are scanned by cmakegen and emitted as explicit paths.
