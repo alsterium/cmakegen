@@ -30,3 +30,20 @@ T002.
 
 - Run diagnostic/result unit tests.
 - Build with each locally available supported compiler.
+
+## Execution record
+
+- Date: 2026-08-08
+- Summary: Added the reusable diagnostics module with stable CMG code constants,
+  severities, logical YAML paths, optional 1-based locations, deterministic
+  ordering, and CLI-boundary human formatting with optional ANSI color. Added
+  the `Result<T>` alias for `std::expected<T, DiagnosticSet>` and focused unit
+  coverage for ordering, formatting, color suppression, and result propagation.
+- Verification: `cmake -S bootstrap -B build/bootstrap && cmake --build
+  build/bootstrap --parallel 2 && ctest --test-dir build/bootstrap
+  --output-on-failure && build/bootstrap/cmakegen --help && git diff --check`
+  (pass; 4/4 tests). Local `clang++` and `g++` both identify as Apple Clang
+  21.0.0; the bootstrap verification used that locally available compiler.
+- Generated files: unchanged; normal generated CMake does not exist until T014.
+- Follow-ups: T004 consumes the diagnostics and `Result<T>` interfaces for YAML
+  parsing and schema validation.

@@ -22,6 +22,7 @@ endif()
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/dependencies.cmake")
 
 add_library(cmakegen_core STATIC
+    "${CMAKE_CURRENT_LIST_DIR}/../src/diagnostics/diagnostic.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/../src/version.cpp"
 )
 target_compile_features(cmakegen_core PUBLIC cxx_std_23)
@@ -40,7 +41,10 @@ target_link_libraries(cmakegen PRIVATE cmakegen_core CLI11::CLI11)
 # in T014, after which bootstrap is limited to a functional generator build.
 if(CMAKEGEN_BOOTSTRAP_TESTS AND BUILD_TESTING)
     include(Catch)
-    add_executable(cmakegen_tests "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/version_test.cpp")
+    add_executable(cmakegen_tests
+        "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/diagnostic_test.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/version_test.cpp"
+    )
     target_link_libraries(cmakegen_tests PRIVATE cmakegen_core Catch2::Catch2WithMain)
     catch_discover_tests(cmakegen_tests)
 endif()

@@ -11,7 +11,7 @@ in parallel after their dependencies are complete.
 | [T000](T000-decompose-mvp-work.md) | Decompose MVP implementation work | done | S | low | — | planning |
 | [T001](T001-toolchain-and-dependency-baseline.md) | Toolchain and dependency baseline | done | M | high | — | 0 |
 | [T002](T002-bootstrap-project-foundation.md) | Bootstrap project foundation | done | M | medium | T001 | 1 |
-| [T003](T003-diagnostics-and-result-model.md) | Diagnostics and result model | todo | S | low | T002 | 2 |
+| [T003](T003-diagnostics-and-result-model.md) | Diagnostics and result model | done | S | low | T002 | 2 |
 | [T004](T004-core-yaml-schema-parser.md) | Core YAML schema parser | todo | L | medium | T003 | 3 |
 | [T005](T005-extended-yaml-schema-parser.md) | Extended YAML schema parser | todo | M | low | T004 | 4 |
 | [T006](T006-domain-normalization-and-dump.md) | Domain normalization and deterministic dump | todo | L | medium | T004, T005 | 5 |

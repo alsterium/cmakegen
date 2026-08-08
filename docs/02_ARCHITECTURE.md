@@ -191,6 +191,12 @@ If compiler support constraints make `std::expected` impractical, use a small pr
 
 Exceptions are acceptable for truly exceptional lower-level failures if translated at application boundaries.
 
+`Diagnostic` carries a stable `CMG` code, severity, message, logical YAML path,
+and an optional 1-based source location. `DiagnosticSet` sorts by logical path,
+source location, code, message, then severity; this makes multi-error reporting
+reproducible. Human formatting is intentionally performed at the CLI boundary,
+where ANSI color may be disabled with `--no-color`.
+
 ## 7. YAML layer
 
 Recommended library:
