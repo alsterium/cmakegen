@@ -62,6 +62,18 @@ T006.
 - Generated files: unchanged.
 - Follow-ups: none.
 
+## Execution record — review follow-up 3
+
+- Date: 2026-08-09
+- Summary: Made single-character glob wildcards path-component local, so `?`
+  cannot match `/`. The resolver now reports an invalid-value diagnostic when
+  overlapping entries give the same source path different kinds, eliminating
+  implementation-dependent duplicate selection.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure`.
+- Generated files: unchanged.
+- Follow-ups: none.
+
 ## Execution record — review follow-up 2
 
 - Date: 2026-08-09

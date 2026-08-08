@@ -66,6 +66,15 @@ TEST_CASE("source resolver supports non-recursive scans and logical glob exclusi
     CHECK(resolved->empty());
 }
 
+TEST_CASE("source resolver wildcards do not match path separators") {
+    FixtureDirectory fixture;
+    fixture.file("src/a/foo.cpp");
+
+    const auto resolved = resolve_sources(fixture.path(), {{"src", true, {"a?foo.cpp"}, SourceKind::automatic}});
+    REQUIRE(resolved);
+    CHECK(paths(*resolved) == std::vector<std::string>{"src/a/foo.cpp"});
+}
+
 TEST_CASE("source resolver preserves explicit files with unknown extensions") {
     FixtureDirectory fixture;
     fixture.file("assets/shader.metal");
@@ -85,6 +94,19 @@ TEST_CASE("source resolver applies an explicit kind to directory entries") {
     REQUIRE(resolved);
     REQUIRE(resolved->size() == 1);
     CHECK((*resolved)[0].kind == SourceKind::header);
+}
+
+TEST_CASE("source resolver rejects duplicate paths with conflicting kinds") {
+    FixtureDirectory fixture;
+    fixture.file("src/main.cpp");
+
+    const auto resolved = resolve_sources(fixture.path(),
+                                          {{"src/main.cpp", true, {}, SourceKind::source},
+                                           {"src/main.cpp", true, {}, SourceKind::header}});
+    REQUIRE_FALSE(resolved);
+    REQUIRE(resolved.error().diagnostics().size() == 1);
+    CHECK(resolved.error().diagnostics()[0].code == diagnostic_codes::invalid_value);
+    CHECK(resolved.error().diagnostics()[0].path == "src/main.cpp");
 }
 
 TEST_CASE("source resolver reports missing paths as structured filesystem diagnostics") {

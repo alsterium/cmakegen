@@ -49,7 +49,8 @@ namespace {
                    self(self, pattern_index, value_index + 1);
         }
         return value_index < value.size() &&
-               (pattern[pattern_index] == '?' || pattern[pattern_index] == value[value_index]) &&
+               (pattern[pattern_index] == '?' ? value[value_index] != '/'
+                                              : pattern[pattern_index] == value[value_index]) &&
                self(self, pattern_index + 1, value_index + 1);
     };
     return matches(matches, 0, 0);
@@ -177,11 +178,21 @@ Result<std::vector<ResolvedSource>> resolve_sources(const std::filesystem::path&
         }
     }
 
+    std::ranges::sort(resolved, [](const ResolvedSource& left, const ResolvedSource& right) {
+        return left.path == right.path ? left.kind < right.kind : left.path < right.path;
+    });
+    for (std::size_t index = 1; index < resolved.size(); ++index) {
+        if (resolved[index - 1].path == resolved[index].path &&
+            resolved[index - 1].kind != resolved[index].kind) {
+            diagnostics.add({std::string{diagnostic_codes::invalid_value}, DiagnosticSeverity::error,
+                             "source path resolves with conflicting kinds: " + resolved[index].path,
+                             resolved[index].path, std::nullopt});
+        }
+    }
     if (diagnostics.has_errors()) return std::unexpected{std::move(diagnostics)};
-    std::ranges::sort(resolved, {}, [](const ResolvedSource& source) { return source.path; });
     resolved.erase(std::unique(resolved.begin(), resolved.end(), [](const ResolvedSource& left,
                                                                      const ResolvedSource& right) {
-                       return left.path == right.path;
+                       return left.path == right.path && left.kind == right.kind;
                    }),
                    resolved.end());
     return resolved;
