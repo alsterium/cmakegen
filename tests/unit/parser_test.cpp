@@ -77,10 +77,11 @@ targets: []
 
     REQUIRE_FALSE(result);
     const auto& diagnostics = result.error().diagnostics();
-    REQUIRE(diagnostics.size() >= 2);
-    CHECK(diagnostics[0].code == diagnostic_codes::invalid_schema_version);
-    CHECK(diagnostics[0].path == "schemaVersion");
-    CHECK(diagnostics[1].path == "targets");
+    REQUIRE(diagnostics.size() == 3);
+    CHECK(diagnostics[0].path == "name");
+    CHECK(diagnostics[1].code == diagnostic_codes::invalid_schema_version);
+    CHECK(diagnostics[1].path == "schemaVersion");
+    CHECK(diagnostics[2].path == "targets");
 }
 
 TEST_CASE("project names must use the documented character set") {
@@ -207,4 +208,34 @@ targets:
     const auto& diagnostic = result.error().diagnostics().front();
     CHECK(diagnostic.path == "name");
     CHECK(diagnostic.message == "expected a string");
+}
+
+TEST_CASE("implicitly typed scalars are rejected for string fields") {
+    const auto result = parse_raw_spec(R"(
+schemaVersion: 1
+name: 42
+targets:
+  hello:
+    type: executable
+)");
+
+    REQUIRE_FALSE(result);
+    const auto& diagnostic = result.error().diagnostics().front();
+    CHECK(diagnostic.path == "name");
+    CHECK(diagnostic.message == "expected a string");
+}
+
+TEST_CASE("target mapping keys must have string semantics") {
+    const auto result = parse_raw_spec(R"(
+schemaVersion: 1
+name: hello
+targets:
+  !!bool true:
+    type: executable
+)");
+
+    REQUIRE_FALSE(result);
+    const auto& diagnostic = result.error().diagnostics().front();
+    CHECK(diagnostic.path == "targets");
+    CHECK(diagnostic.message == "target names must be strings");
 }

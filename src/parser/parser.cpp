@@ -25,6 +25,31 @@ namespace {
                           static_cast<std::size_t>(mark.column) + 1};
 }
 
+template <typename T>
+[[nodiscard]] bool can_convert_to(const YAML::Node& node) {
+    try {
+        static_cast<void>(node.as<T>());
+        return true;
+    } catch (const YAML::BadConversion&) {
+        return false;
+    }
+}
+
+[[nodiscard]] bool has_string_semantics(const YAML::Node& node) {
+    if (!node.IsScalar()) {
+        return false;
+    }
+    const auto& tag = node.Tag();
+    if (tag == "!" || tag == "tag:yaml.org,2002:str") {
+        return true;
+    }
+    if (tag != "?") {
+        return false;
+    }
+    return !can_convert_to<bool>(node) && !can_convert_to<long long>(node) &&
+           !can_convert_to<double>(node);
+}
+
 void add_invalid(DiagnosticSet& diagnostics, std::string path, const YAML::Node& node,
                  std::string message) {
     diagnostics.add({std::string{diagnostic_codes::invalid_value}, DiagnosticSeverity::error,
@@ -49,7 +74,7 @@ void reject_unknown_keys(const YAML::Node& node, std::string_view path,
     }
     std::unordered_set<std::string> seen_keys;
     for (const auto& item : node) {
-        if (!item.first.IsScalar()) {
+        if (!has_string_semantics(item.first)) {
             add_invalid(diagnostics, std::string{path}, item.first, "mapping keys must be strings");
             continue;
         }
@@ -73,8 +98,7 @@ void reject_duplicate_keys(const YAML::Node& node, std::string_view path,
     }
     std::unordered_set<std::string> seen_keys;
     for (const auto& item : node) {
-        if (!item.first.IsScalar()) {
-            add_invalid(diagnostics, std::string{path}, item.first, "mapping keys must be strings");
+        if (!has_string_semantics(item.first)) {
             continue;
         }
         const auto key = item.first.Scalar();
@@ -88,8 +112,7 @@ void reject_duplicate_keys(const YAML::Node& node, std::string_view path,
 [[nodiscard]] std::optional<RawValue<std::string>> parse_string(const YAML::Node& node,
                                                                   std::string path,
                                                                   DiagnosticSet& diagnostics) {
-    const auto& tag = node.Tag();
-    if (!node.IsScalar() || (tag != "?" && tag != "!" && tag != "tag:yaml.org,2002:str")) {
+    if (!has_string_semantics(node)) {
         add_invalid(diagnostics, path, node, "expected a string");
         return std::nullopt;
     }
@@ -281,7 +304,7 @@ Result<RawSpec> parse_raw_spec(std::string_view yaml) {
             reject_duplicate_keys(targets_node, "targets", diagnostics);
         }
         if (targets_node.IsMap()) for (const auto& item : targets_node) {
-            if (!item.first.IsScalar()) {
+            if (!has_string_semantics(item.first)) {
                 add_invalid(diagnostics, "targets", item.first, "target names must be strings");
                 continue;
             }
