@@ -67,3 +67,18 @@ T003.
   configuration).
 - Generated files: unchanged.
 - Follow-ups: none.
+
+## Execution record — review follow-up 2
+
+- Date: 2026-08-08
+- Summary: Rejected quoted YAML strings for schema integer and Boolean fields;
+  yaml-cpp now accepts conversions for those strings only when the scalar has
+  the plain-scalar tag used by YAML's implicit typed values.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest
+  --test-dir build/bootstrap --output-on-failure && cmake -S bootstrap -B
+  build/bootstrap-gcc -DCMAKE_CXX_COMPILER=g++ && cmake --build
+  build/bootstrap-gcc --parallel 2 && ctest --test-dir build/bootstrap-gcc
+  --output-on-failure && git diff --check` (pass; 13/13 tests in each
+  configuration).
+- Generated files: unchanged.
+- Follow-ups: none.

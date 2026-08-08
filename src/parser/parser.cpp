@@ -98,7 +98,7 @@ void reject_duplicate_keys(const YAML::Node& node, std::string_view path,
 [[nodiscard]] std::optional<RawValue<std::uint32_t>> parse_uint32(const YAML::Node& node,
                                                                     std::string path,
                                                                     DiagnosticSet& diagnostics) {
-    if (!node.IsScalar()) {
+    if (!node.IsScalar() || node.Tag() != "?") {
         add_invalid(diagnostics, path, node, "expected an unsigned integer");
         return std::nullopt;
     }
@@ -112,7 +112,7 @@ void reject_duplicate_keys(const YAML::Node& node, std::string_view path,
 
 [[nodiscard]] std::optional<RawValue<bool>> parse_bool(const YAML::Node& node, std::string path,
                                                         DiagnosticSet& diagnostics) {
-    if (!node.IsScalar()) {
+    if (!node.IsScalar() || node.Tag() != "?") {
         add_invalid(diagnostics, path, node, "expected a boolean");
         return std::nullopt;
     }

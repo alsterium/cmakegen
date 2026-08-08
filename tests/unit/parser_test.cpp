@@ -157,3 +157,23 @@ targets:
     CHECK(diagnostics[1].path == "targets.hello.type");
     CHECK(diagnostics[1].message == "duplicate key 'type'");
 }
+
+TEST_CASE("quoted strings are rejected for integer and boolean fields") {
+    const auto result = parse_raw_spec(R"(
+schemaVersion: "1"
+name: hello
+cmake:
+  extensions: "false"
+targets:
+  hello:
+    type: executable
+)");
+
+    REQUIRE_FALSE(result);
+    const auto& diagnostics = result.error().diagnostics();
+    REQUIRE(diagnostics.size() == 2);
+    CHECK(diagnostics[0].path == "cmake.extensions");
+    CHECK(diagnostics[0].message == "expected a boolean");
+    CHECK(diagnostics[1].path == "schemaVersion");
+    CHECK(diagnostics[1].message == "expected an unsigned integer");
+}
