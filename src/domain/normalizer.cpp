@@ -16,6 +16,11 @@ namespace {
     std::size_t start = 0;
     std::size_t protected_components = 0;
     bool drive_relative = false;
+    const auto unc_server_end = slash_path.find('/', 2);
+    const auto is_unc_root = slash_path.starts_with("//") && slash_path.size() > 2 &&
+                             slash_path[2] != '/' && unc_server_end != std::string::npos &&
+                             unc_server_end + 1 < slash_path.size() &&
+                             slash_path[unc_server_end + 1] != '/';
     const auto is_drive_root = slash_path.size() >= 3 &&
                                std::isalpha(static_cast<unsigned char>(slash_path[0])) &&
                                slash_path[1] == ':' && slash_path[2] == '/';
@@ -27,7 +32,7 @@ namespace {
         prefix = slash_path.substr(0, 2);
         start = 2;
         drive_relative = true;
-    } else if (slash_path.starts_with("//")) {
+    } else if (is_unc_root) {
         prefix = "//";
         start = 2;
         protected_components = 2;

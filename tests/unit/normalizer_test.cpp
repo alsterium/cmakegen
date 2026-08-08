@@ -145,10 +145,23 @@ name: example
 targets:
   App:
     type: executable
-    sources: [\\server\\share\\..\\..\\bar]
+    sources: [\\server\share\..\..\bar]
 )");
 
     CHECK(project.targets.at("App").sources[0].path == "//server/share/bar");
+}
+
+TEST_CASE("normalization collapses repeated POSIX root separators") {
+    const auto project = normalize(R"(
+schemaVersion: 1
+name: example
+targets:
+  App:
+    type: executable
+    sources: [///foo/../bar]
+)");
+
+    CHECK(project.targets.at("App").sources[0].path == "/bar");
 }
 
 TEST_CASE("normalized JSON and YAML dumps are deterministic") {

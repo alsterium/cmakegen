@@ -66,6 +66,16 @@ T004 and T005.
 - Generated files: unchanged.
 - Follow-ups: none.
 
+## Execution record — review follow-up 6
+
+- Date: 2026-08-09
+- Summary: Restricted UNC recognition to paths with nonempty server and share
+  components so repeated POSIX root separators are normalized as a single `/`.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure && git diff --check` (pass; 46/46 tests).
+- Generated files: unchanged.
+- Follow-ups: none.
+
 ## Execution record — review follow-up 5
 
 - Date: 2026-08-09
