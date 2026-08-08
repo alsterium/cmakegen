@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <string_view>
+#include <vector>
 
 namespace cmakegen {
 namespace {
@@ -37,24 +39,39 @@ namespace {
 }
 
 [[nodiscard]] bool glob_matches(std::string_view pattern, std::string_view value) {
+    std::vector<std::int8_t> memo((pattern.size() + 1) * (value.size() + 1), -1);
     const auto matches = [&](const auto& self, std::size_t pattern_index, std::size_t value_index) -> bool {
-        if (pattern_index == pattern.size()) return value_index == value.size();
-        if (pattern[pattern_index] == '*') {
+        auto& cached = memo[pattern_index * (value.size() + 1) + value_index];
+        if (cached != -1) return cached != 0;
+
+        bool result = false;
+        if (pattern_index == pattern.size()) {
+            result = value_index == value.size();
+        } else if (pattern[pattern_index] == '*') {
             const auto is_globstar = pattern_index + 1 < pattern.size() && pattern[pattern_index + 1] == '*';
             const auto next = pattern_index + (is_globstar ? 2 : 1);
-            if (is_globstar && next < pattern.size() && pattern[next] == '/' &&
-                self(self, next + 1, value_index)) return true;
-            if (self(self, next, value_index)) return true;
-            return value_index < value.size() && (is_globstar || value[value_index] != '/') &&
-                   self(self, pattern_index, value_index + 1);
+            result = (is_globstar && next < pattern.size() && pattern[next] == '/' &&
+                      self(self, next + 1, value_index)) ||
+                     self(self, next, value_index) ||
+                     (value_index < value.size() && (is_globstar || value[value_index] != '/') &&
+                      self(self, pattern_index, value_index + 1));
+        } else {
+            result = value_index < value.size() &&
+                     (pattern[pattern_index] == '?' ? value[value_index] != '/'
+                                                    : pattern[pattern_index] == value[value_index]) &&
+                     self(self, pattern_index + 1, value_index + 1);
         }
-        return value_index < value.size() &&
-               (pattern[pattern_index] == '?' ? value[value_index] != '/'
-                                              : pattern[pattern_index] == value[value_index]) &&
-               self(self, pattern_index + 1, value_index + 1);
+        cached = result ? 1 : 0;
+        return result;
     };
     return matches(matches, 0, 0);
 }
+
+struct ResolvedSourceCandidate {
+    ResolvedSource source;
+    std::string diagnostic_path;
+    std::optional<SourceLocation> diagnostic_location;
+};
 
 [[nodiscard]] bool excluded(const SourceEntry& entry, std::string_view project_relative,
                             std::string_view entry_relative) {
@@ -83,9 +100,9 @@ void add_filesystem_diagnostic(DiagnosticSet& diagnostics, const SourceEntry& en
     return normalized_path(relative.empty() ? file : relative);
 }
 
-void add_resolved(std::vector<ResolvedSource>& resolved, const std::filesystem::path& base,
-                  const std::filesystem::path& file, SourceKind kind) {
-    resolved.push_back({rendered_path(base, file), kind});
+void add_resolved(std::vector<ResolvedSourceCandidate>& resolved, const std::filesystem::path& base,
+                  const std::filesystem::path& file, SourceKind kind, const SourceEntry& entry) {
+    resolved.push_back({{rendered_path(base, file), kind}, entry.diagnostic_path, entry.diagnostic_location});
 }
 
 } // namespace
@@ -93,7 +110,7 @@ void add_resolved(std::vector<ResolvedSource>& resolved, const std::filesystem::
 Result<std::vector<ResolvedSource>> resolve_sources(const std::filesystem::path& project_directory,
                                                     const std::vector<SourceEntry>& entries) {
     DiagnosticSet diagnostics;
-    std::vector<ResolvedSource> resolved;
+    std::vector<ResolvedSourceCandidate> resolved;
     const auto base = project_directory.lexically_normal();
 
     for (const auto& entry : entries) {
@@ -114,7 +131,7 @@ Result<std::vector<ResolvedSource>> resolve_sources(const std::filesystem::path&
             } else if (!excluded(entry, rendered_path(base, input_path), input_path.filename().generic_string())) {
                 const auto detected_kind = extension_kind(input_path);
                 add_resolved(resolved, base, input_path,
-                             entry.kind == SourceKind::automatic ? detected_kind : entry.kind);
+                             entry.kind == SourceKind::automatic ? detected_kind : entry.kind, entry);
             }
             continue;
         }
@@ -145,7 +162,7 @@ Result<std::vector<ResolvedSource>> resolve_sources(const std::filesystem::path&
             const auto entry_relative = normalized_path(file.lexically_relative(input_path));
             if (!excluded(entry, project_relative, entry_relative)) {
                 add_resolved(resolved, base, file,
-                             entry.kind == SourceKind::automatic ? kind : entry.kind);
+                             entry.kind == SourceKind::automatic ? kind : entry.kind, entry);
             }
         };
 
@@ -179,24 +196,30 @@ Result<std::vector<ResolvedSource>> resolve_sources(const std::filesystem::path&
         }
     }
 
-    std::ranges::sort(resolved, [](const ResolvedSource& left, const ResolvedSource& right) {
-        return left.path == right.path ? left.kind < right.kind : left.path < right.path;
+    std::ranges::sort(resolved, [](const ResolvedSourceCandidate& left, const ResolvedSourceCandidate& right) {
+        return left.source.path == right.source.path ? left.source.kind < right.source.kind
+                                                      : left.source.path < right.source.path;
     });
     for (std::size_t index = 1; index < resolved.size(); ++index) {
-        if (resolved[index - 1].path == resolved[index].path &&
-            resolved[index - 1].kind != resolved[index].kind) {
+        if (resolved[index - 1].source.path == resolved[index].source.path &&
+            resolved[index - 1].source.kind != resolved[index].source.kind) {
             diagnostics.add({std::string{diagnostic_codes::invalid_value}, DiagnosticSeverity::error,
-                             "source path resolves with conflicting kinds: " + resolved[index].path,
-                             resolved[index].path, std::nullopt});
+                             "source path resolves with conflicting kinds: " + resolved[index].source.path,
+                             resolved[index].diagnostic_path.empty() ? resolved[index].source.path
+                                                                      : resolved[index].diagnostic_path,
+                             resolved[index].diagnostic_location});
         }
     }
     if (diagnostics.has_errors()) return std::unexpected{std::move(diagnostics)};
-    resolved.erase(std::unique(resolved.begin(), resolved.end(), [](const ResolvedSource& left,
-                                                                     const ResolvedSource& right) {
-                       return left.path == right.path && left.kind == right.kind;
+    resolved.erase(std::unique(resolved.begin(), resolved.end(), [](const ResolvedSourceCandidate& left,
+                                                                     const ResolvedSourceCandidate& right) {
+                       return left.source.path == right.source.path && left.source.kind == right.source.kind;
                    }),
                    resolved.end());
-    return resolved;
+    std::vector<ResolvedSource> result;
+    result.reserve(resolved.size());
+    for (auto& candidate : resolved) result.push_back(std::move(candidate.source));
+    return result;
 }
 
 } // namespace cmakegen

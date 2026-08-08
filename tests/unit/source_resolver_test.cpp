@@ -77,6 +77,16 @@ TEST_CASE("source resolver wildcards do not match path separators") {
     CHECK(paths(*resolved) == std::vector<std::string>{"src/a/foo.cpp"});
 }
 
+TEST_CASE("source resolver handles complex non-matching glob patterns") {
+    FixtureDirectory fixture;
+    const std::string filename(24, 'a');
+    fixture.file("src/" + filename + ".cpp");
+    const auto resolved = resolve_sources(
+        fixture.path(), {{"src", true, {"*a*a*a*a*a*a*a*a*a*b.cpp"}, SourceKind::automatic}});
+    REQUIRE(resolved);
+    CHECK(paths(*resolved) == std::vector<std::string>{"src/" + filename + ".cpp"});
+}
+
 TEST_CASE("source resolver preserves explicit files with unknown extensions") {
     FixtureDirectory fixture;
     fixture.file("assets/shader.metal");
@@ -102,13 +112,17 @@ TEST_CASE("source resolver rejects duplicate paths with conflicting kinds") {
     FixtureDirectory fixture;
     fixture.file("src/main.cpp");
 
-    const auto resolved = resolve_sources(fixture.path(),
-                                          {{"src/main.cpp", true, {}, SourceKind::source},
-                                           {"src/main.cpp", true, {}, SourceKind::header}});
+    const SourceEntry source{"src/main.cpp", true, {}, SourceKind::source,
+                             "targets.App.sources[0]", SourceLocation{7, 7}};
+    const SourceEntry header{"src/main.cpp", true, {}, SourceKind::header,
+                             "targets.App.sources[1]", SourceLocation{8, 7}};
+
+    const auto resolved = resolve_sources(fixture.path(), {source, header});
     REQUIRE_FALSE(resolved);
     REQUIRE(resolved.error().diagnostics().size() == 1);
     CHECK(resolved.error().diagnostics()[0].code == diagnostic_codes::invalid_value);
-    CHECK(resolved.error().diagnostics()[0].path == "src/main.cpp");
+    CHECK(resolved.error().diagnostics()[0].path == "targets.App.sources[1]");
+    CHECK(resolved.error().diagnostics()[0].location == SourceLocation{8, 7});
 }
 
 TEST_CASE("source resolver reports missing paths as structured filesystem diagnostics") {

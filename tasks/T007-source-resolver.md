@@ -62,6 +62,18 @@ T006.
 - Generated files: unchanged.
 - Follow-ups: none.
 
+## Execution record — review follow-up 5
+
+- Date: 2026-08-09
+- Summary: Memoized glob matcher states to prevent exponential backtracking on
+  complex exclusion patterns. Retained source-entry provenance until duplicate
+  kind conflicts are diagnosed, so those diagnostics also identify the YAML
+  source entry and location.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure`.
+- Generated files: unchanged.
+- Follow-ups: none.
+
 ## Execution record — review follow-up 4
 
 - Date: 2026-08-09
