@@ -23,6 +23,19 @@ enum class RawTargetType {
     interface_library,
 };
 
+enum class RawScope {
+    private_,
+    public_,
+    interface_,
+};
+
+template <typename T>
+struct RawScopedValues {
+    std::vector<RawValue<T>> private_values;
+    std::vector<RawValue<T>> public_values;
+    std::vector<RawValue<T>> interface_values;
+};
+
 struct RawSource {
     RawValue<std::string> path;
     RawValue<bool> recursive{true, {}, std::nullopt};
@@ -35,6 +48,36 @@ struct RawCmake {
     std::optional<RawValue<std::uint32_t>> c_standard;
     std::optional<RawValue<std::uint32_t>> cxx_standard;
     RawValue<bool> extensions{false, {}, std::nullopt};
+    std::vector<RawValue<std::string>> include_files;
+};
+
+struct RawPackage {
+    std::string alias;
+    std::string path;
+    std::optional<SourceLocation> location;
+    RawValue<std::string> name;
+    std::optional<RawValue<std::string>> version;
+    RawValue<bool> required{true, {}, std::nullopt};
+    std::vector<RawValue<std::string>> components;
+};
+
+struct RawPreset {
+    std::string name;
+    std::string path;
+    std::optional<SourceLocation> location;
+    RawValue<std::string> build_type;
+    std::optional<RawValue<std::string>> generator;
+    std::optional<RawValue<std::string>> binary_dir;
+    std::vector<RawValue<std::string>> cache_variable_names;
+    std::vector<RawValue<std::string>> cache_variable_values;
+};
+
+struct RawTargetOverride {
+    std::vector<RawSource> sources;
+    RawScopedValues<std::string> include_directories;
+    RawScopedValues<std::string> definitions;
+    RawScopedValues<std::string> compile_options;
+    RawScopedValues<std::string> dependencies;
 };
 
 struct RawTarget {
@@ -43,6 +86,13 @@ struct RawTarget {
     std::optional<SourceLocation> location;
     RawValue<RawTargetType> type;
     std::vector<RawSource> sources;
+    RawScopedValues<std::string> include_directories;
+    RawScopedValues<std::string> definitions;
+    RawScopedValues<std::string> compile_options;
+    RawScopedValues<std::string> dependencies;
+    std::optional<RawTargetOverride> macos;
+    std::optional<RawTargetOverride> linux;
+    std::optional<RawTargetOverride> windows;
 };
 
 struct RawSpec {
@@ -50,7 +100,9 @@ struct RawSpec {
     RawValue<std::string> name;
     std::optional<RawValue<std::string>> version;
     RawCmake cmake;
+    std::vector<RawPackage> packages;
     std::vector<RawTarget> targets;
+    std::optional<std::vector<RawPreset>> presets;
 };
 
 } // namespace cmakegen
