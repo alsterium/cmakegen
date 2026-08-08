@@ -87,6 +87,16 @@ T004 and T005.
 - Generated files: unchanged.
 - Follow-ups: none.
 
+## Execution record — review follow-up 12
+
+- Date: 2026-08-09
+- Summary: Recognized extended Windows drive roots such as `//?/C:/` as rooted
+  prefixes so lexical simplification retains their drive-root separator.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure && git diff --check` (pass; 53/53 tests).
+- Generated files: unchanged.
+- Follow-ups: none.
+
 ## Execution record — review follow-up 9
 
 - Date: 2026-08-09

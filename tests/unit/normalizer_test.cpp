@@ -193,6 +193,19 @@ targets:
     CHECK(project.targets.at("App").sources[0].path == "//?/unc/server/share/bar");
 }
 
+TEST_CASE("normalization preserves extended Windows drive roots") {
+    const auto project = normalize(R"(
+schemaVersion: 1
+name: example
+targets:
+  App:
+    type: executable
+    sources: ["\\\\?\\C:\\foo\\.."]
+)");
+
+    CHECK(project.targets.at("App").sources[0].path == "//?/C:/");
+}
+
 TEST_CASE("normalization preserves preset macro boundaries during parent traversal") {
     const auto project = normalize(R"(
 schemaVersion: 1

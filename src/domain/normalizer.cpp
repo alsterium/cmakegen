@@ -26,10 +26,17 @@ namespace {
         std::tolower(static_cast<unsigned char>(slash_path[4])) == 'u' &&
         std::tolower(static_cast<unsigned char>(slash_path[5])) == 'n' &&
         std::tolower(static_cast<unsigned char>(slash_path[6])) == 'c';
+    const auto is_extended_drive_root =
+        slash_path.size() >= 7 && slash_path.starts_with("//?/") &&
+        std::isalpha(static_cast<unsigned char>(slash_path[4])) && slash_path[5] == ':' &&
+        slash_path[6] == '/';
     const auto is_drive_root = slash_path.size() >= 3 &&
                                std::isalpha(static_cast<unsigned char>(slash_path[0])) &&
                                slash_path[1] == ':' && slash_path[2] == '/';
-    if (is_drive_root) {
+    if (is_extended_drive_root) {
+        prefix = slash_path.substr(0, 7);
+        start = 7;
+    } else if (is_drive_root) {
         prefix = slash_path.substr(0, 3);
         start = 3;
     } else if (slash_path.size() >= 2 && std::isalpha(static_cast<unsigned char>(slash_path[0])) &&
