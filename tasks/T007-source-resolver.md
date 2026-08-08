@@ -32,3 +32,21 @@ T006.
 - Run resolver tests for recursion, ordering, exclusions, missing paths,
   explicit extensions, symlinks, and Windows-style path normalization.
 - Ensure test fixtures require no network access.
+
+## Execution record
+
+- Date: 2026-08-09
+- Summary: Added a `std::filesystem`-based source resolver that expands
+  recursive and non-recursive directory entries into stable, slash-normalized
+  source lists. Directory expansion recognizes the MVP source/header extension
+  set; explicit files remain present regardless of extension. Exclusions match
+  normalized entry-relative and project-relative glob paths. Directory
+  symlinks are not traversed, and missing or unreadable paths return structured
+  `CMG2001` diagnostics.
+- Verification: `cmake -S bootstrap -B build/bootstrap && cmake --build
+  build/bootstrap --parallel 2 && ctest --test-dir build/bootstrap
+  --output-on-failure` (pass; 59/59 tests).
+- Generated files: unchanged; normal generated CMake does not exist until
+  T014.
+- Follow-ups: T008 consumes the resolved source lists during semantic
+  validation.

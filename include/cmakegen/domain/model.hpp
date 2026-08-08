@@ -26,6 +26,11 @@ struct SourceEntry {
     SourceKind kind = SourceKind::automatic;
 };
 
+struct ResolvedSource {
+    std::string path;
+    SourceKind kind;
+};
+
 struct LinkDependency {
     enum class Kind { project_target, imported_target };
 
