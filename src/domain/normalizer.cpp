@@ -21,6 +21,7 @@ namespace {
                              slash_path[2] != '/' && unc_server_end != std::string::npos &&
                              unc_server_end + 1 < slash_path.size() &&
                              slash_path[unc_server_end + 1] != '/';
+    const auto is_extended_unc_root = slash_path.starts_with("//?/UNC/");
     const auto is_drive_root = slash_path.size() >= 3 &&
                                std::isalpha(static_cast<unsigned char>(slash_path[0])) &&
                                slash_path[1] == ':' && slash_path[2] == '/';
@@ -35,7 +36,7 @@ namespace {
     } else if (is_unc_root) {
         prefix = "//";
         start = 2;
-        protected_components = 2;
+        protected_components = is_extended_unc_root ? 4 : 2;
     } else if (slash_path.starts_with('/')) {
         prefix = "/";
         start = 1;

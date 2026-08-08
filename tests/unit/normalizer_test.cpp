@@ -151,6 +151,19 @@ targets:
     CHECK(project.targets.at("App").sources[0].path == "//server/share/bar");
 }
 
+TEST_CASE("normalization preserves extended UNC server and share roots") {
+    const auto project = normalize(R"(
+schemaVersion: 1
+name: example
+targets:
+  App:
+    type: executable
+    sources: ["\\\\?\\UNC\\server\\share\\..\\..\\bar"]
+)");
+
+    CHECK(project.targets.at("App").sources[0].path == "//?/UNC/server/share/bar");
+}
+
 TEST_CASE("normalization collapses repeated POSIX root separators") {
     const auto project = normalize(R"(
 schemaVersion: 1

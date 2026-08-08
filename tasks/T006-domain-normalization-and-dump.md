@@ -66,6 +66,16 @@ T004 and T005.
 - Generated files: unchanged.
 - Follow-ups: none.
 
+## Execution record — review follow-up 7
+
+- Date: 2026-08-09
+- Summary: Preserved server/share components in extended UNC roots of the form
+  `//?/UNC/server/share` during logical-path normalization.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure && git diff --check` (pass; 47/47 tests).
+- Generated files: unchanged.
+- Follow-ups: none.
+
 ## Execution record — review follow-up 6
 
 - Date: 2026-08-09
