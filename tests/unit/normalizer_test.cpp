@@ -247,3 +247,18 @@ targets:
 
     CHECK(dump_project_yaml(project).find("C1\\x80") != std::string::npos);
 }
+
+TEST_CASE("YAML dump escapes line and paragraph separators") {
+    auto project = normalize(R"(
+schemaVersion: 1
+name: example
+targets:
+  App:
+    type: executable
+)");
+    project.targets.at("App").definitions.private_values.push_back(
+        std::string{"L\xE2\x80\xA8" "P\xE2\x80\xA9"});
+
+    const auto yaml = dump_project_yaml(project);
+    CHECK(yaml.find("L\\LP\\P") != std::string::npos);
+}

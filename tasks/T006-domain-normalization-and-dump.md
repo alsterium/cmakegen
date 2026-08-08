@@ -66,6 +66,16 @@ T004 and T005.
 - Generated files: unchanged.
 - Follow-ups: none.
 
+## Execution record — review follow-up 8
+
+- Date: 2026-08-09
+- Summary: Escaped YAML line and paragraph separator code points U+2028 and
+  U+2029 as `\\L` and `\\P` in deterministic YAML output.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure && git diff --check` (pass; 48/48 tests).
+- Generated files: unchanged.
+- Follow-ups: none.
+
 ## Execution record — review follow-up 7
 
 - Date: 2026-08-09

@@ -111,6 +111,15 @@ template <typename T, typename Dump>
     std::string quoted{"\""};
     for (std::size_t index = 0; index < value.size(); ++index) {
         const auto character = value[index];
+        if (static_cast<unsigned char>(character) == 0xE2 && index + 2 < value.size() &&
+            static_cast<unsigned char>(value[index + 1]) == 0x80) {
+            const auto separator = static_cast<unsigned char>(value[index + 2]);
+            if (separator == 0xA8 || separator == 0xA9) {
+                quoted += separator == 0xA8 ? "\\L" : "\\P";
+                index += 2;
+                continue;
+            }
+        }
         if (static_cast<unsigned char>(character) == 0xC2 && index + 1 < value.size()) {
             const auto c1_control = static_cast<unsigned char>(value[index + 1]);
             if (c1_control >= 0x80 && c1_control <= 0x9F) {
