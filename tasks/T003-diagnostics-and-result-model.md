@@ -47,3 +47,14 @@ T002.
 - Generated files: unchanged; normal generated CMake does not exist until T014.
 - Follow-ups: T004 consumes the diagnostics and `Result<T>` interfaces for YAML
   parsing and schema validation.
+
+## Execution record — review follow-up
+
+- Date: 2026-08-08
+- Summary: Changed diagnostic ordering keys to own their location values rather
+  than retain references to temporary local variables during sorting. Extended
+  ordering coverage with multiple source locations on the same logical path.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure && git diff --check` (pass; 4/4 tests).
+- Generated files: unchanged.
+- Follow-ups: none.

@@ -32,7 +32,13 @@ namespace {
 [[nodiscard]] auto ordering_key(const Diagnostic& diagnostic) {
     const auto line = diagnostic.location ? diagnostic.location->line : 0;
     const auto column = diagnostic.location ? diagnostic.location->column : 0;
-    return std::tie(diagnostic.path, line, column, diagnostic.code, diagnostic.message);
+    return std::tuple<std::string, std::size_t, std::size_t, std::string, std::string>{
+        diagnostic.path,
+        line,
+        column,
+        diagnostic.code,
+        diagnostic.message,
+    };
 }
 
 } // namespace

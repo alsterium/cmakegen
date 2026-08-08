@@ -12,13 +12,15 @@ TEST_CASE("diagnostics are sorted deterministically by their logical location") 
     diagnostics.add({"CMG1004", cmakegen::DiagnosticSeverity::error, "unknown key", "targets.App", cmakegen::SourceLocation{4, 3}});
     diagnostics.add({"CMG1003", cmakegen::DiagnosticSeverity::error, "unknown target type", "targets.Core.type", cmakegen::SourceLocation{2, 1}});
     diagnostics.add({"CMG1002", cmakegen::DiagnosticSeverity::warning, "value is deprecated", "targets.App", cmakegen::SourceLocation{1, 1}});
+    diagnostics.add({"CMG1001", cmakegen::DiagnosticSeverity::error, "invalid schema version", "targets.App", cmakegen::SourceLocation{1, 2}});
 
     const auto& ordered = diagnostics.diagnostics();
-    REQUIRE(ordered.size() == 3);
+    REQUIRE(ordered.size() == 4);
     CHECK(ordered[0].path == "targets.App");
     CHECK((ordered[0].location == cmakegen::SourceLocation{1, 1}));
     CHECK(ordered[1].path == "targets.App");
-    CHECK(ordered[2].path == "targets.Core.type");
+    CHECK((ordered[1].location == cmakegen::SourceLocation{1, 2}));
+    CHECK(ordered[3].path == "targets.Core.type");
     CHECK(diagnostics.has_errors());
 }
 
