@@ -59,6 +59,15 @@ decisions, is a long-term blocker, or needs tracking as a release-sized or
 larger improvement. Small work that can be completed in one context may proceed
 without an Issue.
 
+### GitHub CLI in Codex
+
+In this workspace, sandboxed `gh` commands may be unable to read the macOS
+Keychain credential even when GitHub CLI is correctly authenticated outside the
+sandbox. For any authenticated `gh` command, first run `gh auth status` with
+`require_escalated`; run subsequent `gh` API, PR, and review commands with the
+same permission when needed. Do not treat an authentication failure observed
+only inside the sandbox as a request for the user to log in again.
+
 ## Commits
 
 Use Conventional Commits with the task ID in the body or footer:
