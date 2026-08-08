@@ -169,3 +169,16 @@ targets:
 
     CHECK(dump_project_yaml(project).find("NUL\\0CR\\rTAB\\t") != std::string::npos);
 }
+
+TEST_CASE("YAML dump escapes the NEL line-break character") {
+    auto project = normalize(R"(
+schemaVersion: 1
+name: example
+targets:
+  App:
+    type: executable
+)");
+    project.targets.at("App").definitions.private_values.push_back(std::string{"NEL\xC2\x85"});
+
+    CHECK(dump_project_yaml(project).find("NEL\\N") != std::string::npos);
+}

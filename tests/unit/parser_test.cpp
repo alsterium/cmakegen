@@ -61,6 +61,24 @@ targets:
     CHECK(diagnostic.message == "must not be empty");
 }
 
+TEST_CASE("preset names cannot be used as path traversal components") {
+    const auto result = parse_raw_spec(R"(
+schemaVersion: 1
+name: hello
+presets:
+  "../../outside":
+    buildType: Debug
+targets:
+  hello:
+    type: executable
+)");
+
+    REQUIRE_FALSE(result);
+    const auto& diagnostic = result.error().diagnostics().front();
+    CHECK(diagnostic.path == "presets.../../outside");
+    CHECK(diagnostic.message == "must not contain path separators or be '.' or '..'");
+}
+
 TEST_CASE("source shorthand and expanded entries have equivalent raw semantics") {
     const auto result = parse_raw_spec(R"(
 schemaVersion: 1

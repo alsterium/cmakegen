@@ -109,7 +109,14 @@ template <typename T, typename Dump>
     constexpr std::array hex_digits{'0', '1', '2', '3', '4', '5', '6', '7',
                                     '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
     std::string quoted{"\""};
-    for (const auto character : value) {
+    for (std::size_t index = 0; index < value.size(); ++index) {
+        const auto character = value[index];
+        if (static_cast<unsigned char>(character) == 0xC2 && index + 1 < value.size() &&
+            static_cast<unsigned char>(value[index + 1]) == 0x85) {
+            quoted += "\\N";
+            ++index;
+            continue;
+        }
         switch (character) {
         case '\0': quoted += "\\0"; break;
         case '\a': quoted += "\\a"; break;

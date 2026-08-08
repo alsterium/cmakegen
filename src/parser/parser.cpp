@@ -321,6 +321,11 @@ void parse_sources(const YAML::Node& node, std::string_view path,
     });
 }
 
+[[nodiscard]] bool is_valid_preset_name(std::string_view name) {
+    return !name.empty() && name != "." && name != ".." &&
+           name.find_first_of("/\\\\") == std::string_view::npos;
+}
+
 } // namespace
 
 Result<RawSpec> parse_raw_spec(std::string_view yaml) {
@@ -489,6 +494,11 @@ Result<RawSpec> parse_raw_spec(std::string_view yaml) {
             }
             const auto preset_name = item.first.Scalar();
             const auto preset_path = "presets." + preset_name;
+            if (!is_valid_preset_name(preset_name)) {
+                add_invalid(diagnostics, preset_path, item.first,
+                            "must not contain path separators or be '.' or '..'");
+                continue;
+            }
             require_map(item.second, preset_path, diagnostics);
             if (!item.second.IsMap()) continue;
             reject_unknown_keys(item.second, preset_path, {"buildType", "generator", "binaryDir", "cacheVariables"}, diagnostics);

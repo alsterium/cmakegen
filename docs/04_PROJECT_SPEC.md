@@ -329,6 +329,9 @@ build/<preset-name>
 
 MVP preset name is the YAML key.
 
+Preset names must not contain `/` or `\\` and must not be `.` or `..`, because
+the default binary directory is derived as `build/<preset-name>`.
+
 ## 11. Reserved keys
 
 Unknown keys are errors by default.

@@ -66,6 +66,17 @@ T004 and T005.
 - Generated files: unchanged.
 - Follow-ups: none.
 
+## Execution record — review follow-up 3
+
+- Date: 2026-08-09
+- Summary: Rejected preset names that could become path traversal or separator
+  components in their derived binary directories. Added YAML NEL (U+0085)
+  escaping so emitted scalar values do not change when reparsed.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure && git diff --check` (pass; 42/42 tests).
+- Generated files: unchanged.
+- Follow-ups: none.
+
 ## Execution record — review follow-up 2
 
 - Date: 2026-08-09
