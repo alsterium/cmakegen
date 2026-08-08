@@ -409,12 +409,37 @@ presets:
     REQUIRE(core.macos);
     CHECK(core.macos->definitions.private_values[0].value == "CORE_MACOS=1");
     CHECK(result->targets[1].dependencies.private_values[0].value == "Core");
-    REQUIRE(result->presets.size() == 2);
-    CHECK(result->presets[0].build_type.value == "Debug");
-    REQUIRE(result->presets[0].generator);
-    CHECK(result->presets[0].generator->value == "Ninja");
-    CHECK(result->presets[0].cache_variable_names[0].value == "CMAKE_EXPORT_COMPILE_COMMANDS");
-    CHECK(result->presets[0].cache_variable_values[0].value == "ON");
+    REQUIRE(result->presets);
+    REQUIRE(result->presets->size() == 2);
+    CHECK((*result->presets)[0].build_type.value == "Debug");
+    REQUIRE((*result->presets)[0].generator);
+    CHECK((*result->presets)[0].generator->value == "Ninja");
+    CHECK((*result->presets)[0].cache_variable_names[0].value == "CMAKE_EXPORT_COMPILE_COMMANDS");
+    CHECK((*result->presets)[0].cache_variable_values[0].value == "ON");
+}
+
+TEST_CASE("omitted and explicitly empty preset mappings retain distinct raw semantics") {
+    const auto omitted = parse_raw_spec(R"(
+schemaVersion: 1
+name: omitted
+targets:
+  app:
+    type: executable
+)");
+    const auto empty = parse_raw_spec(R"(
+schemaVersion: 1
+name: empty
+targets:
+  app:
+    type: executable
+presets: {}
+)");
+
+    REQUIRE(omitted);
+    CHECK_FALSE(omitted->presets);
+    REQUIRE(empty);
+    REQUIRE(empty->presets);
+    CHECK(empty->presets->empty());
 }
 
 TEST_CASE("scoped values accept every documented scope and platform override") {

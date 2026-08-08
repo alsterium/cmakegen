@@ -65,3 +65,20 @@ T004.
   locally.
 - Generated files: unchanged.
 - Follow-ups: none.
+
+## Execution record — review follow-up 2
+
+- Date: 2026-08-09
+- Summary: Preserved whether the optional `presets` mapping was supplied by
+  representing it as an optional raw collection. Normalization can now emit
+  default presets only when the field was omitted, while respecting an explicit
+  empty mapping.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure && cmake -S bootstrap -B
+  build/bootstrap-gcc -DCMAKE_CXX_COMPILER=g++ && cmake --build
+  build/bootstrap-gcc --parallel 2 && ctest --test-dir build/bootstrap-gcc
+  --output-on-failure && git diff --check` (pass; 30/30 tests in each
+  configuration). Both `clang++` and `g++` resolve to Apple Clang 21.0.0
+  locally.
+- Generated files: unchanged.
+- Follow-ups: none.

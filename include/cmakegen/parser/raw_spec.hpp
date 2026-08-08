@@ -102,7 +102,7 @@ struct RawSpec {
     RawCmake cmake;
     std::vector<RawPackage> packages;
     std::vector<RawTarget> targets;
-    std::vector<RawPreset> presets;
+    std::optional<std::vector<RawPreset>> presets;
 };
 
 } // namespace cmakegen

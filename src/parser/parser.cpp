@@ -460,8 +460,9 @@ Result<RawSpec> parse_raw_spec(std::string_view yaml) {
         }
     }
 
-    std::vector<RawPreset> presets;
+    std::optional<std::vector<RawPreset>> presets;
     if (const auto presets_node = root["presets"]) {
+        presets.emplace();
         require_map(presets_node, "presets", diagnostics);
         if (presets_node.IsMap()) reject_duplicate_keys(presets_node, "presets", diagnostics);
         if (presets_node.IsMap()) for (const auto& item : presets_node) {
@@ -502,7 +503,7 @@ Result<RawSpec> parse_raw_spec(std::string_view yaml) {
                     }
                 }
             }
-            presets.push_back(std::move(preset));
+            presets->push_back(std::move(preset));
         }
     }
 
