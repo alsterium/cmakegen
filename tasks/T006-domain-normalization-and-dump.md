@@ -66,6 +66,16 @@ T004 and T005.
 - Generated files: unchanged.
 - Follow-ups: none.
 
+## Execution record — review follow-up 5
+
+- Date: 2026-08-09
+- Summary: Preserved UNC server/share roots while simplifying logical paths, and
+  escaped all C1 control code points in YAML output.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure && git diff --check` (pass; 45/45 tests).
+- Generated files: unchanged.
+- Follow-ups: none.
+
 ## Execution record — review follow-up 4
 
 - Date: 2026-08-09

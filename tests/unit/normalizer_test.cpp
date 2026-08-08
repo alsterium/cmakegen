@@ -138,6 +138,19 @@ targets:
     CHECK(project.targets.at("App").sources[0].path == "C:bar");
 }
 
+TEST_CASE("normalization preserves UNC server and share roots on every host platform") {
+    const auto project = normalize(R"(
+schemaVersion: 1
+name: example
+targets:
+  App:
+    type: executable
+    sources: [\\server\\share\\..\\..\\bar]
+)");
+
+    CHECK(project.targets.at("App").sources[0].path == "//server/share/bar");
+}
+
 TEST_CASE("normalized JSON and YAML dumps are deterministic") {
     const auto project = normalize(R"(
 schemaVersion: 1
@@ -194,4 +207,17 @@ targets:
     project.targets.at("App").definitions.private_values.push_back(std::string{"NEL\xC2\x85"});
 
     CHECK(dump_project_yaml(project).find("NEL\\N") != std::string::npos);
+}
+
+TEST_CASE("YAML dump escapes C1 control characters") {
+    auto project = normalize(R"(
+schemaVersion: 1
+name: example
+targets:
+  App:
+    type: executable
+)");
+    project.targets.at("App").definitions.private_values.push_back(std::string{"C1\xC2\x80"});
+
+    CHECK(dump_project_yaml(project).find("C1\\x80") != std::string::npos);
 }

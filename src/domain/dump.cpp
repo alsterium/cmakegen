@@ -111,11 +111,19 @@ template <typename T, typename Dump>
     std::string quoted{"\""};
     for (std::size_t index = 0; index < value.size(); ++index) {
         const auto character = value[index];
-        if (static_cast<unsigned char>(character) == 0xC2 && index + 1 < value.size() &&
-            static_cast<unsigned char>(value[index + 1]) == 0x85) {
-            quoted += "\\N";
-            ++index;
-            continue;
+        if (static_cast<unsigned char>(character) == 0xC2 && index + 1 < value.size()) {
+            const auto c1_control = static_cast<unsigned char>(value[index + 1]);
+            if (c1_control >= 0x80 && c1_control <= 0x9F) {
+                if (c1_control == 0x85) {
+                    quoted += "\\N";
+                } else {
+                    quoted += "\\x";
+                    quoted += hex_digits[c1_control >> 4];
+                    quoted += hex_digits[c1_control & 0x0F];
+                }
+                ++index;
+                continue;
+            }
         }
         switch (character) {
         case '\0': quoted += "\\0"; break;

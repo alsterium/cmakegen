@@ -14,6 +14,7 @@ namespace {
 
     std::string prefix;
     std::size_t start = 0;
+    std::size_t protected_components = 0;
     bool drive_relative = false;
     const auto is_drive_root = slash_path.size() >= 3 &&
                                std::isalpha(static_cast<unsigned char>(slash_path[0])) &&
@@ -29,6 +30,7 @@ namespace {
     } else if (slash_path.starts_with("//")) {
         prefix = "//";
         start = 2;
+        protected_components = 2;
     } else if (slash_path.starts_with('/')) {
         prefix = "/";
         start = 1;
@@ -40,7 +42,7 @@ namespace {
         const auto component = std::string_view{slash_path}.substr(start, end - start);
         if (!component.empty() && component != ".") {
             if (component == "..") {
-                if (!components.empty() && components.back() != "..") {
+                if (components.size() > protected_components && components.back() != "..") {
                     components.pop_back();
                 } else if (prefix.empty() || drive_relative) {
                     components.push_back(component);
