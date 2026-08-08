@@ -49,3 +49,21 @@ build/bootstrap/cmakegen --help
 ```
 
 Account for configuration-specific executable paths on multi-config generators.
+
+## Execution record
+
+- Date: 2026-08-08
+- Summary: Added the C++23 bootstrap skeleton, reusable `cmakegen_core`, thin
+  CLI11 executable, and one Catch2 smoke test. Added the hand-maintained
+  dependency hook, which prefers compatible CMake packages and otherwise uses
+  hash-pinned upstream release archives. CMake 4 compatibility for yaml-cpp
+  0.8.0 is explicitly retained in that hook. Bootstrap-only test wiring and
+  conditional Catch2 acquisition are marked for removal by T014.
+- Verification: `cmake -S bootstrap -B build/bootstrap && cmake --build
+  build/bootstrap --parallel 2 && ctest --test-dir build/bootstrap
+  --output-on-failure && build/bootstrap/cmakegen --help &&
+  build/bootstrap/cmakegen --version` (pass); exactly one discovered smoke test
+  passed after a clean test-discovery regeneration.
+- Generated files: unchanged; normal generated CMake does not exist until T014
+- Follow-ups: T003 adds the diagnostics and result model; T014 replaces the
+  transitional bootstrap test wiring with generated normal CMake.
