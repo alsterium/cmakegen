@@ -12,7 +12,7 @@ in parallel after their dependencies are complete.
 | [T001](T001-toolchain-and-dependency-baseline.md) | Toolchain and dependency baseline | done | M | high | — | 0 |
 | [T002](T002-bootstrap-project-foundation.md) | Bootstrap project foundation | done | M | medium | T001 | 1 |
 | [T003](T003-diagnostics-and-result-model.md) | Diagnostics and result model | done | S | low | T002 | 2 |
-| [T004](T004-core-yaml-schema-parser.md) | Core YAML schema parser | todo | L | medium | T003 | 3 |
+| [T004](T004-core-yaml-schema-parser.md) | Core YAML schema parser | done | L | medium | T003 | 3 |
 | [T005](T005-extended-yaml-schema-parser.md) | Extended YAML schema parser | todo | M | low | T004 | 4 |
 | [T006](T006-domain-normalization-and-dump.md) | Domain normalization and deterministic dump | todo | L | medium | T004, T005 | 5 |
 | [T007](T007-source-resolver.md) | Deterministic source resolver | todo | M | medium | T006 | 6 |

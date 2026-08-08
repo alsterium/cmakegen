@@ -31,3 +31,143 @@ T003.
 - Run parser unit tests using valid and invalid fixtures from
   `docs/04_PROJECT_SPEC.md`.
 - Confirm failed parses do not touch the filesystem.
+
+## Execution record
+
+- Date: 2026-08-08
+- Summary: Added a yaml-cpp-backed, in-memory schema-v1 raw parser with
+  YAML-independent raw structures for root, CMake, targets, and source
+  entries. The parser retains logical paths and 1-based locations, translates
+  YAML failures into structured diagnostics, and rejects unsupported versions,
+  invalid target types, type errors, missing fields, invalid project names,
+  and unknown keys in the implemented schema sections.
+- Verification: `cmake -S bootstrap -B build/bootstrap && cmake --build
+  build/bootstrap --parallel 2 && ctest --test-dir build/bootstrap
+  --output-on-failure && cmake -S bootstrap -B build/bootstrap-gcc
+  -DCMAKE_CXX_COMPILER=g++ && cmake --build build/bootstrap-gcc --parallel 2
+  && ctest --test-dir build/bootstrap-gcc --output-on-failure && git diff
+  --check` (pass; 10/10 tests in each configuration). Both `clang++` and
+  `g++` resolve to Apple Clang 21.0.0 locally.
+- Generated files: unchanged; normal generated CMake does not exist until
+  T014.
+- Follow-ups: T005 extends the raw parser for scoped properties, packages,
+  platform overrides, presets, and custom CMake includes.
+
+## Execution record — review follow-up
+
+- Date: 2026-08-08
+- Summary: Rejected multi-document YAML streams so trailing configuration cannot
+  be silently ignored, and rejected duplicate keys in fixed-schema and
+  dynamically named target mappings.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest
+  --test-dir build/bootstrap --output-on-failure && cmake -S bootstrap -B
+  build/bootstrap-gcc -DCMAKE_CXX_COMPILER=g++ && cmake --build
+  build/bootstrap-gcc --parallel 2 && ctest --test-dir build/bootstrap-gcc
+  --output-on-failure && git diff --check` (pass; 12/12 tests in each
+  configuration).
+- Generated files: unchanged.
+- Follow-ups: none.
+
+## Execution record — review follow-up 8
+
+- Date: 2026-08-08
+- Summary: Decoded YAML core octal and hexadecimal unsigned integer forms with
+  explicit base-aware parsing, and preserved signed NaN-like scalar names as
+  strings because only unsigned `.nan` is a YAML core numeric literal.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest
+  --test-dir build/bootstrap --output-on-failure && cmake -S bootstrap -B
+  build/bootstrap-gcc -DCMAKE_CXX_COMPILER=g++ && cmake --build
+  build/bootstrap-gcc --parallel 2 && ctest --test-dir build/bootstrap-gcc
+  --output-on-failure && git diff --check` (pass; 24/24 tests in each
+  configuration).
+- Generated files: unchanged.
+- Follow-ups: none.
+
+## Execution record — review follow-up 7
+
+- Date: 2026-08-08
+- Summary: Required schema Boolean literals to use the YAML core `true` or
+  `false` spellings (with supported casing), rejecting yaml-cpp's YAML 1.1
+  compatibility spellings.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest
+  --test-dir build/bootstrap --output-on-failure && cmake -S bootstrap -B
+  build/bootstrap-gcc -DCMAKE_CXX_COMPILER=g++ && cmake --build
+  build/bootstrap-gcc --parallel 2 && ctest --test-dir build/bootstrap-gcc
+  --output-on-failure && git diff --check` (pass; 22/22 tests in each
+  configuration).
+- Generated files: unchanged.
+- Follow-ups: none.
+
+## Execution record — review follow-up 6
+
+- Date: 2026-08-08
+- Summary: Validated unsigned integer literal syntax before yaml-cpp conversion
+  to prevent negative wraparound, and aligned implicit number recognition with
+  the YAML core grammar by retaining underscore-containing strings.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest
+  --test-dir build/bootstrap --output-on-failure && cmake -S bootstrap -B
+  build/bootstrap-gcc -DCMAKE_CXX_COMPILER=g++ && cmake --build
+  build/bootstrap-gcc --parallel 2 && ctest --test-dir build/bootstrap-gcc
+  --output-on-failure && git diff --check` (pass; 21/21 tests in each
+  configuration).
+- Generated files: unchanged.
+- Follow-ups: none.
+
+## Execution record — review follow-up 5
+
+- Date: 2026-08-08
+- Summary: Replaced conversion-based detection of implicit non-string scalars
+  with YAML core Boolean, null, integer, and floating-point literal syntax, so
+  range overflow cannot cause numeric input to be accepted as a string.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest
+  --test-dir build/bootstrap --output-on-failure && cmake -S bootstrap -B
+  build/bootstrap-gcc -DCMAKE_CXX_COMPILER=g++ && cmake --build
+  build/bootstrap-gcc --parallel 2 && ctest --test-dir build/bootstrap-gcc
+  --output-on-failure && git diff --check` (pass; 19/19 tests in each
+  configuration).
+- Generated files: unchanged.
+- Follow-ups: none.
+
+## Execution record — review follow-up 4
+
+- Date: 2026-08-08
+- Summary: Rejected implicit YAML Boolean and numeric scalars for string-valued
+  fields, and applied the same string-semantics validation to target mapping
+  keys.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest
+  --test-dir build/bootstrap --output-on-failure && cmake -S bootstrap -B
+  build/bootstrap-gcc -DCMAKE_CXX_COMPILER=g++ && cmake --build
+  build/bootstrap-gcc --parallel 2 && ctest --test-dir build/bootstrap-gcc
+  --output-on-failure && git diff --check` (pass; 17/17 tests in each
+  configuration).
+- Generated files: unchanged.
+- Follow-ups: none.
+
+## Execution record — review follow-up 3
+
+- Date: 2026-08-08
+- Summary: Accepted explicit YAML core integer and Boolean tags for typed
+  fields while rejecting explicit non-string tags for string-valued fields.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest
+  --test-dir build/bootstrap --output-on-failure && cmake -S bootstrap -B
+  build/bootstrap-gcc -DCMAKE_CXX_COMPILER=g++ && cmake --build
+  build/bootstrap-gcc --parallel 2 && ctest --test-dir build/bootstrap-gcc
+  --output-on-failure && git diff --check` (pass; 15/15 tests in each
+  configuration).
+- Generated files: unchanged.
+- Follow-ups: none.
+
+## Execution record — review follow-up 2
+
+- Date: 2026-08-08
+- Summary: Rejected quoted YAML strings for schema integer and Boolean fields;
+  yaml-cpp now accepts conversions for those strings only when the scalar has
+  the plain-scalar tag used by YAML's implicit typed values.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest
+  --test-dir build/bootstrap --output-on-failure && cmake -S bootstrap -B
+  build/bootstrap-gcc -DCMAKE_CXX_COMPILER=g++ && cmake --build
+  build/bootstrap-gcc --parallel 2 && ctest --test-dir build/bootstrap-gcc
+  --output-on-failure && git diff --check` (pass; 13/13 tests in each
+  configuration).
+- Generated files: unchanged.
+- Follow-ups: none.
