@@ -66,6 +66,16 @@ T004 and T005.
 - Generated files: unchanged.
 - Follow-ups: none.
 
+## Execution record — review follow-up 9
+
+- Date: 2026-08-09
+- Summary: Rejected `$` in preset names so CMake preset macros cannot be
+  injected into derived default binary directories.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure && git diff --check` (pass; 49/49 tests).
+- Generated files: unchanged.
+- Follow-ups: none.
+
 ## Execution record — review follow-up 8
 
 - Date: 2026-08-09

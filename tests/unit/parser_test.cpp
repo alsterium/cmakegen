@@ -76,7 +76,25 @@ targets:
     REQUIRE_FALSE(result);
     const auto& diagnostic = result.error().diagnostics().front();
     CHECK(diagnostic.path == "presets.../../outside");
-    CHECK(diagnostic.message == "must not contain path separators or be '.' or '..'");
+    CHECK(diagnostic.message == "must not contain path separators or '$', or be '.' or '..'");
+}
+
+TEST_CASE("preset names cannot inject CMake macros into default binary directories") {
+    const auto result = parse_raw_spec(R"(
+schemaVersion: 1
+name: hello
+presets:
+  "${sourceDir}":
+    buildType: Debug
+targets:
+  hello:
+    type: executable
+)");
+
+    REQUIRE_FALSE(result);
+    const auto& diagnostic = result.error().diagnostics().front();
+    CHECK(diagnostic.path == "presets.${sourceDir}");
+    CHECK(diagnostic.message == "must not contain path separators or '$', or be '.' or '..'");
 }
 
 TEST_CASE("source shorthand and expanded entries have equivalent raw semantics") {
