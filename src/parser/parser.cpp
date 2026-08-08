@@ -186,6 +186,33 @@ void parse_string_sequence(const YAML::Node& node, std::string_view path,
     }
 }
 
+void parse_scoped_strings(const YAML::Node& node, std::string_view path,
+                          RawScopedValues<std::string>& destination,
+                          DiagnosticSet& diagnostics) {
+    if (node.IsSequence()) {
+        parse_string_sequence(node, path, destination.private_values, diagnostics);
+        return;
+    }
+    if (!node.IsMap()) {
+        add_invalid(diagnostics, std::string{path}, node,
+                    "expected a sequence of strings or scoped mapping");
+        return;
+    }
+    reject_unknown_keys(node, path, {"private", "public", "interface"}, diagnostics);
+    if (const auto values = node["private"]) {
+        parse_string_sequence(values, std::string{path} + ".private", destination.private_values,
+                              diagnostics);
+    }
+    if (const auto values = node["public"]) {
+        parse_string_sequence(values, std::string{path} + ".public", destination.public_values,
+                              diagnostics);
+    }
+    if (const auto values = node["interface"]) {
+        parse_string_sequence(values, std::string{path} + ".interface", destination.interface_values,
+                              diagnostics);
+    }
+}
+
 [[nodiscard]] std::optional<RawSource> parse_source(const YAML::Node& node, std::string path,
                                                      DiagnosticSet& diagnostics) {
     if (node.IsScalar()) {
@@ -237,6 +264,36 @@ void parse_string_sequence(const YAML::Node& node, std::string_view path,
     return std::nullopt;
 }
 
+void parse_sources(const YAML::Node& node, std::string_view path,
+                   std::vector<RawSource>& destination, DiagnosticSet& diagnostics) {
+    if (!node.IsSequence()) {
+        add_invalid(diagnostics, std::string{path}, node, "expected a sequence");
+        return;
+    }
+    for (std::size_t index = 0; index < node.size(); ++index) {
+        if (auto source = parse_source(node[index], std::string{path} + "[" + std::to_string(index) + "]",
+                                       diagnostics)) {
+            destination.push_back(std::move(*source));
+        }
+    }
+}
+
+[[nodiscard]] RawTargetOverride parse_target_override(const YAML::Node& node, std::string_view path,
+                                                       DiagnosticSet& diagnostics) {
+    RawTargetOverride override;
+    require_map(node, path, diagnostics);
+    if (!node.IsMap()) return override;
+    reject_unknown_keys(node, path,
+                        {"sources", "includeDirectories", "definitions", "compileOptions", "dependencies"},
+                        diagnostics);
+    if (const auto values = node["sources"]) parse_sources(values, std::string{path} + ".sources", override.sources, diagnostics);
+    if (const auto values = node["includeDirectories"]) parse_scoped_strings(values, std::string{path} + ".includeDirectories", override.include_directories, diagnostics);
+    if (const auto values = node["definitions"]) parse_scoped_strings(values, std::string{path} + ".definitions", override.definitions, diagnostics);
+    if (const auto values = node["compileOptions"]) parse_scoped_strings(values, std::string{path} + ".compileOptions", override.compile_options, diagnostics);
+    if (const auto values = node["dependencies"]) parse_scoped_strings(values, std::string{path} + ".dependencies", override.dependencies, diagnostics);
+    return override;
+}
+
 [[nodiscard]] bool is_valid_project_name(std::string_view name) {
     if (name.empty()) {
         return false;
@@ -276,7 +333,7 @@ Result<RawSpec> parse_raw_spec(std::string_view yaml) {
     if (!root.IsMap()) {
         return std::unexpected(std::move(diagnostics));
     }
-    reject_unknown_keys(root, "", {"schemaVersion", "name", "version", "cmake", "targets"}, diagnostics);
+    reject_unknown_keys(root, "", {"schemaVersion", "name", "version", "cmake", "packages", "targets", "presets"}, diagnostics);
 
     const auto schema_node = root["schemaVersion"];
     const auto name_node = root["name"];
@@ -306,7 +363,7 @@ Result<RawSpec> parse_raw_spec(std::string_view yaml) {
     if (const auto cmake_node = root["cmake"]) {
         require_map(cmake_node, "cmake", diagnostics);
         if (cmake_node.IsMap()) {
-            reject_unknown_keys(cmake_node, "cmake", {"minimumVersion", "languages", "cStandard", "cxxStandard", "extensions"}, diagnostics);
+            reject_unknown_keys(cmake_node, "cmake", {"minimumVersion", "languages", "cStandard", "cxxStandard", "extensions", "include"}, diagnostics);
             if (const auto node = cmake_node["minimumVersion"]) cmake.minimum_version = parse_string(node, "cmake.minimumVersion", diagnostics);
             if (const auto node = cmake_node["languages"]) {
                 cmake.languages.clear();
@@ -317,6 +374,39 @@ Result<RawSpec> parse_raw_spec(std::string_view yaml) {
             if (const auto node = cmake_node["extensions"]) {
                 if (auto value = parse_bool(node, "cmake.extensions", diagnostics)) cmake.extensions = std::move(*value);
             }
+            if (const auto node = cmake_node["include"]) parse_string_sequence(node, "cmake.include", cmake.include_files, diagnostics);
+        }
+    }
+
+    std::vector<RawPackage> packages;
+    if (const auto packages_node = root["packages"]) {
+        require_map(packages_node, "packages", diagnostics);
+        if (packages_node.IsMap()) reject_duplicate_keys(packages_node, "packages", diagnostics);
+        if (packages_node.IsMap()) for (const auto& item : packages_node) {
+            if (!has_string_semantics(item.first)) {
+                add_invalid(diagnostics, "packages", item.first, "package aliases must be strings");
+                continue;
+            }
+            const auto alias = item.first.Scalar();
+            const auto package_path = "packages." + alias;
+            require_map(item.second, package_path, diagnostics);
+            if (!item.second.IsMap()) continue;
+            reject_unknown_keys(item.second, package_path, {"name", "version", "required", "components"}, diagnostics);
+            const auto name_node = item.second["name"];
+            if (!name_node) {
+                add_invalid(diagnostics, package_path + ".name", item.second, "missing required field 'name'");
+                continue;
+            }
+            auto package_name = parse_string(name_node, package_path + ".name", diagnostics);
+            if (!package_name) continue;
+            RawPackage package{alias, package_path, location_of(item.first), std::move(*package_name), std::nullopt,
+                               RawValue<bool>{false, package_path + ".required", location_of(item.second)}, {}};
+            if (const auto node = item.second["version"]) package.version = parse_string(node, package_path + ".version", diagnostics);
+            if (const auto node = item.second["required"]) {
+                if (auto value = parse_bool(node, package_path + ".required", diagnostics)) package.required = std::move(*value);
+            }
+            if (const auto node = item.second["components"]) parse_string_sequence(node, package_path + ".components", package.components, diagnostics);
+            packages.push_back(std::move(package));
         }
     }
 
@@ -338,7 +428,8 @@ Result<RawSpec> parse_raw_spec(std::string_view yaml) {
             if (!item.second.IsMap()) {
                 continue;
             }
-            reject_unknown_keys(item.second, target_path, {"type", "sources"}, diagnostics);
+            reject_unknown_keys(item.second, target_path,
+                                {"type", "sources", "includeDirectories", "definitions", "compileOptions", "dependencies", "platform"}, diagnostics);
             const auto type_node = item.second["type"];
             if (!type_node) {
                 add_invalid(diagnostics, target_path + ".type", item.second, "missing required field 'type'");
@@ -347,19 +438,76 @@ Result<RawSpec> parse_raw_spec(std::string_view yaml) {
             const auto type = parse_target_type(type_node, target_path + ".type", diagnostics);
             if (!type) continue;
             RawTarget target{target_name, target_path, location_of(item.first),
-                             RawValue<RawTargetType>{*type, target_path + ".type", location_of(type_node)}, {}};
+                             RawValue<RawTargetType>{*type, target_path + ".type", location_of(type_node)}, {}, {}, {}, {}, {}, std::nullopt, std::nullopt, std::nullopt};
             if (const auto sources = item.second["sources"]) {
-                if (!sources.IsSequence()) add_invalid(diagnostics, target_path + ".sources", sources, "expected a sequence");
-                else for (std::size_t index = 0; index < sources.size(); ++index) {
-                    if (auto source = parse_source(sources[index], target_path + ".sources[" + std::to_string(index) + "]", diagnostics)) target.sources.push_back(std::move(*source));
+                parse_sources(sources, target_path + ".sources", target.sources, diagnostics);
+            }
+            if (const auto values = item.second["includeDirectories"]) parse_scoped_strings(values, target_path + ".includeDirectories", target.include_directories, diagnostics);
+            if (const auto values = item.second["definitions"]) parse_scoped_strings(values, target_path + ".definitions", target.definitions, diagnostics);
+            if (const auto values = item.second["compileOptions"]) parse_scoped_strings(values, target_path + ".compileOptions", target.compile_options, diagnostics);
+            if (const auto values = item.second["dependencies"]) parse_scoped_strings(values, target_path + ".dependencies", target.dependencies, diagnostics);
+            if (const auto platform = item.second["platform"]) {
+                const auto platform_path = target_path + ".platform";
+                require_map(platform, platform_path, diagnostics);
+                if (platform.IsMap()) {
+                    reject_unknown_keys(platform, platform_path, {"macos", "linux", "windows"}, diagnostics);
+                    if (const auto values = platform["macos"]) target.macos = parse_target_override(values, platform_path + ".macos", diagnostics);
+                    if (const auto values = platform["linux"]) target.linux = parse_target_override(values, platform_path + ".linux", diagnostics);
+                    if (const auto values = platform["windows"]) target.windows = parse_target_override(values, platform_path + ".windows", diagnostics);
                 }
             }
             targets.push_back(std::move(target));
         }
     }
 
+    std::vector<RawPreset> presets;
+    if (const auto presets_node = root["presets"]) {
+        require_map(presets_node, "presets", diagnostics);
+        if (presets_node.IsMap()) reject_duplicate_keys(presets_node, "presets", diagnostics);
+        if (presets_node.IsMap()) for (const auto& item : presets_node) {
+            if (!has_string_semantics(item.first)) {
+                add_invalid(diagnostics, "presets", item.first, "preset names must be strings");
+                continue;
+            }
+            const auto preset_name = item.first.Scalar();
+            const auto preset_path = "presets." + preset_name;
+            require_map(item.second, preset_path, diagnostics);
+            if (!item.second.IsMap()) continue;
+            reject_unknown_keys(item.second, preset_path, {"buildType", "generator", "binaryDir", "cacheVariables"}, diagnostics);
+            const auto build_type_node = item.second["buildType"];
+            if (!build_type_node) {
+                add_invalid(diagnostics, preset_path + ".buildType", item.second, "missing required field 'buildType'");
+                continue;
+            }
+            auto build_type = parse_string(build_type_node, preset_path + ".buildType", diagnostics);
+            if (!build_type) continue;
+            RawPreset preset{preset_name, preset_path, location_of(item.first), std::move(*build_type), std::nullopt, std::nullopt, {}, {}};
+            if (const auto node = item.second["generator"]) preset.generator = parse_string(node, preset_path + ".generator", diagnostics);
+            if (const auto node = item.second["binaryDir"]) preset.binary_dir = parse_string(node, preset_path + ".binaryDir", diagnostics);
+            if (const auto variables = item.second["cacheVariables"]) {
+                require_map(variables, preset_path + ".cacheVariables", diagnostics);
+                if (variables.IsMap()) {
+                    reject_duplicate_keys(variables, preset_path + ".cacheVariables", diagnostics);
+                    for (const auto& variable : variables) {
+                        if (!has_string_semantics(variable.first)) {
+                            add_invalid(diagnostics, preset_path + ".cacheVariables", variable.first, "cache variable names must be strings");
+                            continue;
+                        }
+                        const auto variable_name = variable.first.Scalar();
+                        const auto variable_path = preset_path + ".cacheVariables." + variable_name;
+                        auto value = parse_string(variable.second, variable_path, diagnostics);
+                        if (!value) continue;
+                        preset.cache_variable_names.push_back({variable_name, variable_path, location_of(variable.first)});
+                        preset.cache_variable_values.push_back(std::move(*value));
+                    }
+                }
+            }
+            presets.push_back(std::move(preset));
+        }
+    }
+
     if (diagnostics.has_errors() || !schema_version || !name) return std::unexpected(std::move(diagnostics));
-    return RawSpec{std::move(*schema_version), std::move(*name), std::move(version), std::move(cmake), std::move(targets)};
+    return RawSpec{std::move(*schema_version), std::move(*name), std::move(version), std::move(cmake), std::move(packages), std::move(targets), std::move(presets)};
 }
 
 } // namespace cmakegen

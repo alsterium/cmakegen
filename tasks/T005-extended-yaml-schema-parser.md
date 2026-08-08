@@ -28,3 +28,24 @@ T004.
 
 - Run the complete parser fixture suite.
 - Map every schema-v1 field in `docs/04_PROJECT_SPEC.md` to at least one test.
+
+## Execution record
+
+- Date: 2026-08-08
+- Summary: Extended the YAML-independent raw schema with scoped target values,
+  platform overrides, packages, CMake include files, and presets (including
+  cache variables). The parser now accepts shorthand and all documented scoped
+  forms, preserves source locations and logical paths, and rejects unknown keys
+  at every newly supported mapping level. Added parser coverage for the full
+  schema-v1 example, all scopes and platform overrides, malformed mappings, and
+  nested unknown keys.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure && cmake -S bootstrap -B
+  build/bootstrap-gcc -DCMAKE_CXX_COMPILER=g++ && cmake --build
+  build/bootstrap-gcc --parallel 2 && ctest --test-dir build/bootstrap-gcc
+  --output-on-failure && git diff --check` (pass; 28/28 tests in each
+  configuration). Both `clang++` and `g++` resolve to Apple Clang 21.0.0
+  locally.
+- Generated files: unchanged; normal generated CMake does not exist until T014.
+- Follow-ups: T006 consumes the complete raw schema for normalization and
+  deterministic dumping.

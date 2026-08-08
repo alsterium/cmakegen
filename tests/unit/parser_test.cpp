@@ -338,3 +338,178 @@ targets:
     CHECK(diagnostic.path == "targets");
     CHECK(diagnostic.message == "target names must be strings");
 }
+
+TEST_CASE("the complete schema-version-1 example parses into extended raw values") {
+    const auto result = parse_raw_spec(R"(
+schemaVersion: 1
+name: MyApp
+version: 0.1.0
+cmake:
+  minimumVersion: "3.28"
+  languages: [CXX]
+  cxxStandard: 23
+  extensions: false
+  include: [cmake/custom.cmake]
+packages:
+  fmt:
+    name: fmt
+    version: "11"
+    required: true
+    components: []
+targets:
+  Core:
+    type: staticLibrary
+    sources:
+      - path: Sources/Core
+        exclude: ["**/*_test.cpp"]
+    includeDirectories:
+      public: [include]
+      private: [Sources/Core]
+    definitions:
+      private: [CORE_INTERNAL=1]
+    compileOptions:
+      private: [-Wall]
+    dependencies:
+      public: [fmt::fmt]
+    platform:
+      macos:
+        definitions:
+          private: [CORE_MACOS=1]
+  App:
+    type: executable
+    sources: [Sources/App]
+    dependencies: [Core]
+presets:
+  debug:
+    buildType: Debug
+    generator: Ninja
+    binaryDir: build/debug-custom
+    cacheVariables:
+      CMAKE_EXPORT_COMPILE_COMMANDS: "ON"
+  release:
+    buildType: Release
+)");
+
+    REQUIRE(result);
+    REQUIRE(result->cmake.include_files.size() == 1);
+    CHECK(result->cmake.include_files[0].value == "cmake/custom.cmake");
+    REQUIRE(result->packages.size() == 1);
+    CHECK(result->packages[0].alias == "fmt");
+    CHECK(result->packages[0].name.value == "fmt");
+    REQUIRE(result->packages[0].version);
+    CHECK(result->packages[0].version->value == "11");
+    CHECK(result->packages[0].required.value);
+    REQUIRE(result->targets.size() == 2);
+    const auto& core = result->targets[0];
+    CHECK(core.include_directories.public_values[0].value == "include");
+    CHECK(core.include_directories.private_values[0].path == "targets.Core.includeDirectories.private[0]");
+    CHECK(core.definitions.private_values[0].value == "CORE_INTERNAL=1");
+    CHECK(core.compile_options.private_values[0].value == "-Wall");
+    CHECK(core.dependencies.public_values[0].value == "fmt::fmt");
+    REQUIRE(core.macos);
+    CHECK(core.macos->definitions.private_values[0].value == "CORE_MACOS=1");
+    CHECK(result->targets[1].dependencies.private_values[0].value == "Core");
+    REQUIRE(result->presets.size() == 2);
+    CHECK(result->presets[0].build_type.value == "Debug");
+    REQUIRE(result->presets[0].generator);
+    CHECK(result->presets[0].generator->value == "Ninja");
+    CHECK(result->presets[0].cache_variable_names[0].value == "CMAKE_EXPORT_COMPILE_COMMANDS");
+    CHECK(result->presets[0].cache_variable_values[0].value == "ON");
+}
+
+TEST_CASE("scoped values accept every documented scope and platform override") {
+    const auto result = parse_raw_spec(R"(
+schemaVersion: 1
+name: scoped
+targets:
+  library:
+    type: staticLibrary
+    includeDirectories: {private: [private], public: [public], interface: [interface]}
+    definitions: {private: [PRIVATE], public: [PUBLIC], interface: [INTERFACE]}
+    compileOptions: {private: [-private], public: [-public], interface: [-interface]}
+    dependencies: {private: [Private], public: [Public], interface: [Interface]}
+    platform:
+      linux:
+        sources: [linux]
+        includeDirectories: [linux/include]
+        definitions: [LINUX]
+        compileOptions: [-pthread]
+        dependencies: [Threads::Threads]
+      windows: {}
+)");
+
+    REQUIRE(result);
+    const auto& target = result->targets.front();
+    CHECK(target.include_directories.private_values[0].value == "private");
+    CHECK(target.include_directories.public_values[0].value == "public");
+    CHECK(target.include_directories.interface_values[0].value == "interface");
+    REQUIRE(target.linux);
+    CHECK(target.linux->sources[0].path.value == "linux");
+    CHECK(target.linux->include_directories.private_values[0].value == "linux/include");
+    REQUIRE(target.windows);
+}
+
+TEST_CASE("unknown keys are rejected at every extended mapping level") {
+    const auto result = parse_raw_spec(R"(
+schemaVersion: 1
+name: invalid
+cmake:
+  unknown: value
+packages:
+  pkg:
+    name: pkg
+    unknown: value
+targets:
+  app:
+    type: executable
+    dependencies:
+      protected: [value]
+    platform:
+      freebsd: {}
+      linux:
+        unknown: value
+presets:
+  debug:
+    buildType: Debug
+    unknown: value
+)");
+
+    REQUIRE_FALSE(result);
+    const auto& diagnostics = result.error().diagnostics();
+    REQUIRE(diagnostics.size() == 6);
+    CHECK(diagnostics[0].path == "cmake.unknown");
+    CHECK(diagnostics[1].path == "packages.pkg.unknown");
+    CHECK(diagnostics[2].path == "presets.debug.unknown");
+    CHECK(diagnostics[3].path == "targets.app.dependencies.protected");
+    CHECK(diagnostics[4].path == "targets.app.platform.freebsd");
+    CHECK(diagnostics[5].path == "targets.app.platform.linux.unknown");
+}
+
+TEST_CASE("extended mappings report malformed values and required fields") {
+    const auto result = parse_raw_spec(R"(
+schemaVersion: 1
+name: invalid
+packages:
+  missingName: {}
+targets:
+  app:
+    type: executable
+    includeDirectories: text
+    platform:
+      macos: text
+presets:
+  missingBuildType: {}
+  badCacheVariables:
+    buildType: Debug
+    cacheVariables: [not-a-map]
+)");
+
+    REQUIRE_FALSE(result);
+    const auto& diagnostics = result.error().diagnostics();
+    REQUIRE(diagnostics.size() == 5);
+    CHECK(diagnostics[0].path == "packages.missingName.name");
+    CHECK(diagnostics[1].path == "presets.badCacheVariables.cacheVariables");
+    CHECK(diagnostics[2].path == "presets.missingBuildType.buildType");
+    CHECK(diagnostics[3].path == "targets.app.includeDirectories");
+    CHECK(diagnostics[4].path == "targets.app.platform.macos");
+}
