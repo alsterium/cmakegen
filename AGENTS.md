@@ -81,6 +81,11 @@ chore     Tooling, configuration, or maintenance
 
 Commit rules:
 
+- After completing and verifying requested work, create the appropriate
+  commit or commits automatically unless the user explicitly asks to leave the
+  changes uncommitted.
+- Commit only files within the completed work's scope. Preserve unrelated user
+  changes and leave them uncommitted.
 - Each commit should represent one meaningful change.
 - Separate behavior changes, refactors, tests, and documentation when
   practical.
