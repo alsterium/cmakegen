@@ -67,3 +67,16 @@ Account for configuration-specific executable paths on multi-config generators.
 - Generated files: unchanged; normal generated CMake does not exist until T014
 - Follow-ups: T003 adds the diagnostics and result model; T014 replaces the
   transitional bootstrap test wiring with generated normal CMake.
+
+## Execution record — review follow-up
+
+- Date: 2026-08-08
+- Summary: Propagated Catch2's CMake module path after an externally supplied
+  compatible package is found, keeping `include(Catch)` available outside the
+  dependency helper function.
+- Verification: `cmake -S bootstrap -B build/bootstrap && cmake --build
+  build/bootstrap --parallel 2 && ctest --test-dir build/bootstrap
+  --output-on-failure && build/bootstrap/cmakegen --help &&
+  build/bootstrap/cmakegen --version` (pass)
+- Generated files: unchanged
+- Follow-ups: none

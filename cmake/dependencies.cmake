@@ -12,6 +12,11 @@ set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING
 function(cmakegen_require_package package version target url sha256)
     find_package(${package} ${version} CONFIG QUIET)
     if(TARGET ${target})
+        if(package STREQUAL "Catch2")
+            # Catch2Config.cmake adds its discovery module in this function's
+            # scope. Keep it available to bootstrap's later include(Catch).
+            set(CMAKE_MODULE_PATH "${CMAKE_MODULE_PATH}" PARENT_SCOPE)
+        endif()
         return()
     endif()
 
