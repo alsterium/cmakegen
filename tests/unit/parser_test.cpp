@@ -26,6 +26,24 @@ targets:
     CHECK(result->targets[0].sources[0].path.location == SourceLocation{8, 9});
 }
 
+TEST_CASE("unsupported CMake languages are rejected before normalization") {
+    const auto result = parse_raw_spec(R"(
+schemaVersion: 1
+name: hello
+cmake:
+  languages: [CXX, CUDA]
+targets:
+  hello:
+    type: executable
+)");
+
+    REQUIRE_FALSE(result);
+    const auto& diagnostic = result.error().diagnostics().front();
+    CHECK(diagnostic.code == diagnostic_codes::invalid_value);
+    CHECK(diagnostic.path == "cmake.languages[1]");
+    CHECK(diagnostic.message == "unsupported language 'CUDA'");
+}
+
 TEST_CASE("source shorthand and expanded entries have equivalent raw semantics") {
     const auto result = parse_raw_spec(R"(
 schemaVersion: 1

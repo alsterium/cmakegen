@@ -121,7 +121,7 @@ void write_yaml(const json& value, std::ostringstream& output, int indent) {
     const std::string padding(static_cast<std::size_t>(indent), ' ');
     if (value.is_object()) {
         for (auto iterator = value.begin(); iterator != value.end(); ++iterator) {
-            output << padding << iterator.key() << ':';
+            output << padding << quote_yaml(iterator.key()) << ':';
             if (iterator.value().is_object() && iterator.value().empty()) {
                 output << " {}\n";
             } else if (iterator.value().is_array() && iterator.value().empty()) {

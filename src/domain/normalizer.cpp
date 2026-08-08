@@ -9,7 +9,9 @@ namespace cmakegen {
 namespace {
 
 [[nodiscard]] std::string normalize_path(const std::string& path) {
-    std::filesystem::path value{path};
+    auto slash_path = path;
+    std::ranges::replace(slash_path, '\\', '/');
+    std::filesystem::path value{slash_path};
     return value.lexically_normal().generic_string();
 }
 

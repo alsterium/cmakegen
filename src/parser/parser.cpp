@@ -186,6 +186,20 @@ void parse_string_sequence(const YAML::Node& node, std::string_view path,
     }
 }
 
+void parse_languages(const YAML::Node& node, std::vector<RawValue<std::string>>& destination,
+                     DiagnosticSet& diagnostics) {
+    std::vector<RawValue<std::string>> values;
+    parse_string_sequence(node, "cmake.languages", values, diagnostics);
+    for (auto& value : values) {
+        if (value.value != "C" && value.value != "CXX") {
+            diagnostics.add({std::string{diagnostic_codes::invalid_value}, DiagnosticSeverity::error,
+                             "unsupported language '" + value.value + "'", value.path, value.location});
+        } else {
+            destination.push_back(std::move(value));
+        }
+    }
+}
+
 void parse_scoped_strings(const YAML::Node& node, std::string_view path,
                           RawScopedValues<std::string>& destination,
                           DiagnosticSet& diagnostics) {
@@ -367,7 +381,7 @@ Result<RawSpec> parse_raw_spec(std::string_view yaml) {
             if (const auto node = cmake_node["minimumVersion"]) cmake.minimum_version = parse_string(node, "cmake.minimumVersion", diagnostics);
             if (const auto node = cmake_node["languages"]) {
                 cmake.languages.clear();
-                parse_string_sequence(node, "cmake.languages", cmake.languages, diagnostics);
+                parse_languages(node, cmake.languages, diagnostics);
             }
             if (const auto node = cmake_node["cStandard"]) cmake.c_standard = parse_uint32(node, "cmake.cStandard", diagnostics);
             if (const auto node = cmake_node["cxxStandard"]) cmake.cxx_standard = parse_uint32(node, "cmake.cxxStandard", diagnostics);

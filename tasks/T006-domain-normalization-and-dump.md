@@ -53,3 +53,15 @@ T004 and T005.
 - Generated files: unchanged; normal generated CMake does not exist until T014.
 - Follow-ups: T007 resolves normalized logical source paths relative to the
   supplied project.yml directory; T012 exposes the dump APIs through the CLI.
+
+## Execution record — review follow-up
+
+- Date: 2026-08-09
+- Summary: Rejected unsupported CMake language names during parsing so
+  normalization cannot silently coerce them to CXX. Normalized `\\` to `/`
+  before lexical path processing, and quoted every YAML dump mapping key to
+  ensure user-controlled keys remain valid YAML.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure && git diff --check` (pass; 37/37 tests).
+- Generated files: unchanged.
+- Follow-ups: none.

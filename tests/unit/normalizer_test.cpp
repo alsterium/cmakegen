@@ -99,6 +99,19 @@ targets:
     CHECK(project.targets.at("App").sources[0].path == "src");
 }
 
+TEST_CASE("normalization converts Windows path separators on every host platform") {
+    const auto project = normalize(R"(
+schemaVersion: 1
+name: example
+targets:
+  App:
+    type: executable
+    sources: [src\\platform\\..\\main.cpp]
+)");
+
+    CHECK(project.targets.at("App").sources[0].path == "src/main.cpp");
+}
+
 TEST_CASE("normalized JSON and YAML dumps are deterministic") {
     const auto project = normalize(R"(
 schemaVersion: 1
@@ -115,6 +128,18 @@ targets:
     CHECK(yaml == dump_project_yaml(project));
     CHECK(json.find("\"schemaVersion\": 1") != std::string::npos);
     CHECK(json.find("\"src\"") != std::string::npos);
-    CHECK(yaml.find("schemaVersion: 1") != std::string::npos);
-    CHECK(yaml.find("path: \"src\"") != std::string::npos);
+    CHECK(yaml.find("\"schemaVersion\": 1") != std::string::npos);
+    CHECK(yaml.find("\"path\": \"src\"") != std::string::npos);
+}
+
+TEST_CASE("YAML dump quotes user-controlled mapping keys") {
+    const auto project = normalize(R"(
+schemaVersion: 1
+name: example
+targets:
+  "foo: bar":
+    type: executable
+)");
+
+    CHECK(dump_project_yaml(project).find("\"foo: bar\":") != std::string::npos);
 }
