@@ -51,3 +51,13 @@ None.
 - Generated files: unchanged; no generated CMake exists before T014
 - Follow-ups: T002 implements `cmake/dependencies.cmake` and bootstrap checks;
   T011 selects and licenses the embedded SHA-256 source
+
+## Execution record — review follow-up
+
+- Date: 2026-08-08
+- Summary: Distinguished the MVP bootstrap dependency fallback from deferred
+  schema-level FetchContent declarations, and made the T002 fallback
+  implementation and acceptance criterion explicit.
+- Verification: `git diff --check` (pass)
+- Generated files: unchanged
+- Follow-ups: T002 implements and verifies the documented fallback

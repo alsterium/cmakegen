@@ -245,7 +245,7 @@ Add:
 
 ## Recommended post-MVP order
 
-1. FetchContent support
+1. schema-level FetchContent dependency declarations
 2. CTest/test target abstraction
 3. install/export
 4. explicit internal/external dependency syntax

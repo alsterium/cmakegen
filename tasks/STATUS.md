@@ -48,7 +48,8 @@ are:
 These remain outside the current task set until MVP acceptance or an explicit
 priority decision:
 
-- FetchContent convenience
+- schema-level FetchContent dependency declarations (the bootstrap fallback is
+  required in T002)
 - CTest/test-target schema abstraction
 - install/export and package workflow beyond basic release readiness
 - explicit internal/external dependency syntax
