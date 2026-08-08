@@ -61,3 +61,13 @@ T006.
   build/bootstrap --output-on-failure` (pass; 60/60 tests).
 - Generated files: unchanged.
 - Follow-ups: none.
+
+## Execution record — review follow-up 2
+
+- Date: 2026-08-09
+- Summary: Applied an explicit source kind consistently to files expanded from
+  directories, matching explicit-file resolution semantics.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure`.
+- Generated files: unchanged.
+- Follow-ups: none.

@@ -77,6 +77,16 @@ TEST_CASE("source resolver preserves explicit files with unknown extensions") {
     CHECK((*resolved)[0].kind == SourceKind::automatic);
 }
 
+TEST_CASE("source resolver applies an explicit kind to directory entries") {
+    FixtureDirectory fixture;
+    fixture.file("include/implementation.cpp");
+
+    const auto resolved = resolve_sources(fixture.path(), {{"include", true, {}, SourceKind::header}});
+    REQUIRE(resolved);
+    REQUIRE(resolved->size() == 1);
+    CHECK((*resolved)[0].kind == SourceKind::header);
+}
+
 TEST_CASE("source resolver reports missing paths as structured filesystem diagnostics") {
     FixtureDirectory fixture;
     const auto resolved = resolve_sources(fixture.path(), {{"missing", true, {}, SourceKind::automatic}});

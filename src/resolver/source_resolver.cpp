@@ -141,7 +141,10 @@ Result<std::vector<ResolvedSource>> resolve_sources(const std::filesystem::path&
             if (kind == SourceKind::automatic) return;
             const auto project_relative = rendered_path(base, file);
             const auto entry_relative = normalized_path(file.lexically_relative(input_path));
-            if (!excluded(entry, project_relative, entry_relative)) add_resolved(resolved, base, file, kind);
+            if (!excluded(entry, project_relative, entry_relative)) {
+                add_resolved(resolved, base, file,
+                             entry.kind == SourceKind::automatic ? kind : entry.kind);
+            }
         };
 
         if (entry.recursive) {
