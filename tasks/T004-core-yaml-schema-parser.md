@@ -31,3 +31,24 @@ T003.
 - Run parser unit tests using valid and invalid fixtures from
   `docs/04_PROJECT_SPEC.md`.
 - Confirm failed parses do not touch the filesystem.
+
+## Execution record
+
+- Date: 2026-08-08
+- Summary: Added a yaml-cpp-backed, in-memory schema-v1 raw parser with
+  YAML-independent raw structures for root, CMake, targets, and source
+  entries. The parser retains logical paths and 1-based locations, translates
+  YAML failures into structured diagnostics, and rejects unsupported versions,
+  invalid target types, type errors, missing fields, invalid project names,
+  and unknown keys in the implemented schema sections.
+- Verification: `cmake -S bootstrap -B build/bootstrap && cmake --build
+  build/bootstrap --parallel 2 && ctest --test-dir build/bootstrap
+  --output-on-failure && cmake -S bootstrap -B build/bootstrap-gcc
+  -DCMAKE_CXX_COMPILER=g++ && cmake --build build/bootstrap-gcc --parallel 2
+  && ctest --test-dir build/bootstrap-gcc --output-on-failure && git diff
+  --check` (pass; 10/10 tests in each configuration). Both `clang++` and
+  `g++` resolve to Apple Clang 21.0.0 locally.
+- Generated files: unchanged; normal generated CMake does not exist until
+  T014.
+- Follow-ups: T005 extends the raw parser for scoped properties, packages,
+  platform overrides, presets, and custom CMake includes.
