@@ -112,6 +112,22 @@ targets:
     CHECK(project.targets.at("App").sources[0].path == "src/main.cpp");
 }
 
+TEST_CASE("normalization converts Windows separators in source exclusion globs") {
+    const auto project = normalize(R"(
+schemaVersion: 1
+name: example
+targets:
+  App:
+    type: executable
+    sources:
+      - path: src
+        exclude: [src\generated\*.cpp]
+)");
+
+    CHECK(project.targets.at("App").sources[0].exclude ==
+          std::vector<std::string>{"src/generated/*.cpp"});
+}
+
 TEST_CASE("normalization preserves Windows drive roots on every host platform") {
     const auto project = normalize(R"(
 schemaVersion: 1

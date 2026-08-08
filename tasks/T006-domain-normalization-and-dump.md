@@ -66,6 +66,16 @@ T004 and T005.
 - Generated files: unchanged.
 - Follow-ups: none.
 
+## Execution record — review follow-up 10
+
+- Date: 2026-08-09
+- Summary: Normalized Windows separators in source exclusion globs to `/` so
+  they match normalized logical source paths consistently.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure && git diff --check` (pass; 50/50 tests).
+- Generated files: unchanged.
+- Follow-ups: none.
+
 ## Execution record — review follow-up 9
 
 - Date: 2026-08-09

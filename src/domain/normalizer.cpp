@@ -73,6 +73,11 @@ namespace {
     return normalized;
 }
 
+[[nodiscard]] std::string normalize_glob(std::string value) {
+    std::ranges::replace(value, '\\', '/');
+    return value;
+}
+
 [[nodiscard]] Language normalize_language(std::string_view language) {
     return language == "C" ? Language::c : Language::cxx;
 }
@@ -90,7 +95,7 @@ namespace {
 [[nodiscard]] SourceEntry normalize_source(const RawSource& raw) {
     SourceEntry source{normalize_path(raw.path.value), raw.recursive.value, {}, SourceKind::automatic};
     source.exclude.reserve(raw.exclude.size());
-    for (const auto& exclude : raw.exclude) source.exclude.push_back(exclude.value);
+    for (const auto& exclude : raw.exclude) source.exclude.push_back(normalize_glob(exclude.value));
     return source;
 }
 
