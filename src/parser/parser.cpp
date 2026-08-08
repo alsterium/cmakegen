@@ -38,6 +38,11 @@ namespace {
     return std::regex_match(value.begin(), value.end(), unsigned_integer);
 }
 
+[[nodiscard]] bool is_boolean_literal(std::string_view value) {
+    return value == "true" || value == "True" || value == "TRUE" ||
+           value == "false" || value == "False" || value == "FALSE";
+}
+
 [[nodiscard]] bool has_string_semantics(const YAML::Node& node) {
     if (!node.IsScalar()) {
         return false;
@@ -139,7 +144,8 @@ void reject_duplicate_keys(const YAML::Node& node, std::string_view path,
 
 [[nodiscard]] std::optional<RawValue<bool>> parse_bool(const YAML::Node& node, std::string path,
                                                         DiagnosticSet& diagnostics) {
-    if (!node.IsScalar() || (node.Tag() != "?" && node.Tag() != "tag:yaml.org,2002:bool")) {
+    if (!node.IsScalar() || (node.Tag() != "?" && node.Tag() != "tag:yaml.org,2002:bool") ||
+        !is_boolean_literal(node.Scalar())) {
         add_invalid(diagnostics, path, node, "expected a boolean");
         return std::nullopt;
     }

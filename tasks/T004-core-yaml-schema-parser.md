@@ -68,6 +68,21 @@ T003.
 - Generated files: unchanged.
 - Follow-ups: none.
 
+## Execution record — review follow-up 7
+
+- Date: 2026-08-08
+- Summary: Required schema Boolean literals to use the YAML core `true` or
+  `false` spellings (with supported casing), rejecting yaml-cpp's YAML 1.1
+  compatibility spellings.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest
+  --test-dir build/bootstrap --output-on-failure && cmake -S bootstrap -B
+  build/bootstrap-gcc -DCMAKE_CXX_COMPILER=g++ && cmake --build
+  build/bootstrap-gcc --parallel 2 && ctest --test-dir build/bootstrap-gcc
+  --output-on-failure && git diff --check` (pass; 22/22 tests in each
+  configuration).
+- Generated files: unchanged.
+- Follow-ups: none.
+
 ## Execution record — review follow-up 6
 
 - Date: 2026-08-08

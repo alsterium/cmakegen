@@ -281,6 +281,23 @@ targets:
     CHECK(diagnostic.message == "expected an unsigned integer");
 }
 
+TEST_CASE("legacy YAML boolean spellings are rejected") {
+    const auto result = parse_raw_spec(R"(
+schemaVersion: 1
+name: hello
+cmake:
+  extensions: yes
+targets:
+  hello:
+    type: executable
+)");
+
+    REQUIRE_FALSE(result);
+    const auto& diagnostic = result.error().diagnostics().front();
+    CHECK(diagnostic.path == "cmake.extensions");
+    CHECK(diagnostic.message == "expected a boolean");
+}
+
 TEST_CASE("target mapping keys must have string semantics") {
     const auto result = parse_raw_spec(R"(
 schemaVersion: 1
