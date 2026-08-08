@@ -177,3 +177,34 @@ targets:
     CHECK(diagnostics[1].path == "schemaVersion");
     CHECK(diagnostics[1].message == "expected an unsigned integer");
 }
+
+TEST_CASE("explicit YAML integer and boolean tags are accepted for typed fields") {
+    const auto result = parse_raw_spec(R"(
+schemaVersion: !!int 1
+name: hello
+cmake:
+  extensions: !!bool false
+targets:
+  hello:
+    type: executable
+)");
+
+    REQUIRE(result);
+    CHECK(result->schema_version.value == 1);
+    CHECK(result->cmake.extensions.value == false);
+}
+
+TEST_CASE("explicit non-string tags are rejected for string fields") {
+    const auto result = parse_raw_spec(R"(
+schemaVersion: 1
+name: !!bool true
+targets:
+  hello:
+    type: executable
+)");
+
+    REQUIRE_FALSE(result);
+    const auto& diagnostic = result.error().diagnostics().front();
+    CHECK(diagnostic.path == "name");
+    CHECK(diagnostic.message == "expected a string");
+}

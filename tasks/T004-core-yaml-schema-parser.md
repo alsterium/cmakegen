@@ -68,6 +68,20 @@ T003.
 - Generated files: unchanged.
 - Follow-ups: none.
 
+## Execution record — review follow-up 3
+
+- Date: 2026-08-08
+- Summary: Accepted explicit YAML core integer and Boolean tags for typed
+  fields while rejecting explicit non-string tags for string-valued fields.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest
+  --test-dir build/bootstrap --output-on-failure && cmake -S bootstrap -B
+  build/bootstrap-gcc -DCMAKE_CXX_COMPILER=g++ && cmake --build
+  build/bootstrap-gcc --parallel 2 && ctest --test-dir build/bootstrap-gcc
+  --output-on-failure && git diff --check` (pass; 15/15 tests in each
+  configuration).
+- Generated files: unchanged.
+- Follow-ups: none.
+
 ## Execution record — review follow-up 2
 
 - Date: 2026-08-08
