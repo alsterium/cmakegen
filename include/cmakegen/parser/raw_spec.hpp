@@ -57,7 +57,7 @@ struct RawPackage {
     std::optional<SourceLocation> location;
     RawValue<std::string> name;
     std::optional<RawValue<std::string>> version;
-    RawValue<bool> required{false, {}, std::nullopt};
+    RawValue<bool> required{true, {}, std::nullopt};
     std::vector<RawValue<std::string>> components;
 };
 

@@ -400,7 +400,7 @@ Result<RawSpec> parse_raw_spec(std::string_view yaml) {
             auto package_name = parse_string(name_node, package_path + ".name", diagnostics);
             if (!package_name) continue;
             RawPackage package{alias, package_path, location_of(item.first), std::move(*package_name), std::nullopt,
-                               RawValue<bool>{false, package_path + ".required", location_of(item.second)}, {}};
+                               RawValue<bool>{true, package_path + ".required", location_of(item.second)}, {}};
             if (const auto node = item.second["version"]) package.version = parse_string(node, package_path + ".version", diagnostics);
             if (const auto node = item.second["required"]) {
                 if (auto value = parse_bool(node, package_path + ".required", diagnostics)) package.required = std::move(*value);

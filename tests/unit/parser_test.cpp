@@ -449,6 +449,29 @@ targets:
     REQUIRE(target.windows);
 }
 
+TEST_CASE("packages are required unless explicitly marked optional") {
+    const auto result = parse_raw_spec(R"(
+schemaVersion: 1
+name: packages
+packages:
+  Qt:
+    name: Qt6
+    version: "6.8"
+    components: [Core, Widgets]
+  optional:
+    name: OptionalPackage
+    required: false
+targets:
+  app:
+    type: executable
+)");
+
+    REQUIRE(result);
+    REQUIRE(result->packages.size() == 2);
+    CHECK(result->packages[0].required.value);
+    CHECK(result->packages[1].required.value == false);
+}
+
 TEST_CASE("unknown keys are rejected at every extended mapping level") {
     const auto result = parse_raw_spec(R"(
 schemaVersion: 1

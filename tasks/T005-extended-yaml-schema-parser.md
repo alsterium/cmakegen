@@ -49,3 +49,19 @@ T004.
 - Generated files: unchanged; normal generated CMake does not exist until T014.
 - Follow-ups: T006 consumes the complete raw schema for normalization and
   deterministic dumping.
+
+## Execution record — review follow-up
+
+- Date: 2026-08-09
+- Summary: Corrected the default package requirement to `true`, preserving an
+  explicit `required: false`. This matches the documented Qt package example,
+  which omits `required` yet generates a required `find_package` call.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure && cmake -S bootstrap -B
+  build/bootstrap-gcc -DCMAKE_CXX_COMPILER=g++ && cmake --build
+  build/bootstrap-gcc --parallel 2 && ctest --test-dir build/bootstrap-gcc
+  --output-on-failure && git diff --check` (pass; 29/29 tests in each
+  configuration). Both `clang++` and `g++` resolve to Apple Clang 21.0.0
+  locally.
+- Generated files: unchanged.
+- Follow-ups: none.
