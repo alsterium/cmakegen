@@ -44,6 +44,23 @@ targets:
     CHECK(diagnostic.message == "unsupported language 'CUDA'");
 }
 
+TEST_CASE("an explicitly empty CMake language list is rejected") {
+    const auto result = parse_raw_spec(R"(
+schemaVersion: 1
+name: hello
+cmake:
+  languages: []
+targets:
+  hello:
+    type: executable
+)");
+
+    REQUIRE_FALSE(result);
+    const auto& diagnostic = result.error().diagnostics().front();
+    CHECK(diagnostic.path == "cmake.languages");
+    CHECK(diagnostic.message == "must not be empty");
+}
+
 TEST_CASE("source shorthand and expanded entries have equivalent raw semantics") {
     const auto result = parse_raw_spec(R"(
 schemaVersion: 1

@@ -1,7 +1,7 @@
 #include "cmakegen/domain/normalizer.hpp"
 
 #include <algorithm>
-#include <filesystem>
+#include <cctype>
 #include <string_view>
 #include <utility>
 
@@ -11,8 +11,49 @@ namespace {
 [[nodiscard]] std::string normalize_path(const std::string& path) {
     auto slash_path = path;
     std::ranges::replace(slash_path, '\\', '/');
-    std::filesystem::path value{slash_path};
-    return value.lexically_normal().generic_string();
+
+    std::string prefix;
+    std::size_t start = 0;
+    const auto is_drive_root = slash_path.size() >= 3 &&
+                               std::isalpha(static_cast<unsigned char>(slash_path[0])) &&
+                               slash_path[1] == ':' && slash_path[2] == '/';
+    if (is_drive_root) {
+        prefix = slash_path.substr(0, 3);
+        start = 3;
+    } else if (slash_path.starts_with("//")) {
+        prefix = "//";
+        start = 2;
+    } else if (slash_path.starts_with('/')) {
+        prefix = "/";
+        start = 1;
+    }
+
+    std::vector<std::string_view> components;
+    while (start <= slash_path.size()) {
+        const auto end = slash_path.find('/', start);
+        const auto component = std::string_view{slash_path}.substr(start, end - start);
+        if (!component.empty() && component != ".") {
+            if (component == "..") {
+                if (!components.empty() && components.back() != "..") {
+                    components.pop_back();
+                } else if (prefix.empty()) {
+                    components.push_back(component);
+                }
+            } else {
+                components.push_back(component);
+            }
+        }
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+
+    std::string normalized = prefix;
+    for (const auto component : components) {
+        if (!normalized.empty() && !normalized.ends_with('/')) normalized += '/';
+        normalized += component;
+    }
+    if (normalized.empty() && !slash_path.empty()) return ".";
+    return normalized;
 }
 
 [[nodiscard]] Language normalize_language(std::string_view language) {

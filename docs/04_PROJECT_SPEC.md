@@ -146,6 +146,7 @@ Rules:
 
 - `languages` default: `[CXX]`
 - supported language values: `C`, `CXX`
+- an explicit `languages: []` is invalid
 - `extensions` default: false
 - paths are relative to project.yml directory
 - included files must not be generated or modified by cmakegen

@@ -112,6 +112,19 @@ targets:
     CHECK(project.targets.at("App").sources[0].path == "src/main.cpp");
 }
 
+TEST_CASE("normalization preserves Windows drive roots on every host platform") {
+    const auto project = normalize(R"(
+schemaVersion: 1
+name: example
+targets:
+  App:
+    type: executable
+    sources: [C:\\foo\\..\\..\\bar]
+)");
+
+    CHECK(project.targets.at("App").sources[0].path == "C:/bar");
+}
+
 TEST_CASE("normalized JSON and YAML dumps are deterministic") {
     const auto project = normalize(R"(
 schemaVersion: 1
@@ -142,4 +155,17 @@ targets:
 )");
 
     CHECK(dump_project_yaml(project).find("\"foo: bar\":") != std::string::npos);
+}
+
+TEST_CASE("YAML dump escapes control characters in user-controlled values") {
+    const auto project = normalize(R"(
+schemaVersion: 1
+name: example
+targets:
+  App:
+    type: executable
+    definitions: ["NUL\0CR\rTAB\t"]
+)");
+
+    CHECK(dump_project_yaml(project).find("NUL\\0CR\\rTAB\\t") != std::string::npos);
 }

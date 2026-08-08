@@ -65,3 +65,16 @@ T004 and T005.
   build/bootstrap --output-on-failure && git diff --check` (pass; 37/37 tests).
 - Generated files: unchanged.
 - Follow-ups: none.
+
+## Execution record — review follow-up 2
+
+- Date: 2026-08-09
+- Summary: Made an explicit empty CMake language sequence invalid instead of
+  applying the omission default. Replaced host-native path normalization with
+  host-independent logical-path normalization that preserves Windows drive
+  roots. Extended YAML double-quoted scalar escaping to cover all control
+  bytes.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure && git diff --check` (pass; 40/40 tests).
+- Generated files: unchanged.
+- Follow-ups: none.

@@ -2,6 +2,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <array>
 #include <sstream>
 #include <string_view>
 #include <utility>
@@ -105,13 +106,32 @@ template <typename T, typename Dump>
 }
 
 [[nodiscard]] std::string quote_yaml(std::string_view value) {
+    constexpr std::array hex_digits{'0', '1', '2', '3', '4', '5', '6', '7',
+                                    '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
     std::string quoted{"\""};
     for (const auto character : value) {
-        if (character == '\n') {
-            quoted += "\\n";
-        } else {
-            if (character == '\\' || character == '\"') quoted += '\\';
-            quoted += character;
+        switch (character) {
+        case '\0': quoted += "\\0"; break;
+        case '\a': quoted += "\\a"; break;
+        case '\b': quoted += "\\b"; break;
+        case '\t': quoted += "\\t"; break;
+        case '\n': quoted += "\\n"; break;
+        case '\v': quoted += "\\v"; break;
+        case '\f': quoted += "\\f"; break;
+        case '\r': quoted += "\\r"; break;
+        case '\x1B': quoted += "\\e"; break;
+        case '\\': quoted += "\\\\"; break;
+        case '\"': quoted += "\\\""; break;
+        default:
+            if (static_cast<unsigned char>(character) < 0x20 ||
+                static_cast<unsigned char>(character) == 0x7F) {
+                const auto byte = static_cast<unsigned char>(character);
+                quoted += "\\x";
+                quoted += hex_digits[byte >> 4];
+                quoted += hex_digits[byte & 0x0F];
+            } else {
+                quoted += character;
+            }
         }
     }
     return quoted + '\"';

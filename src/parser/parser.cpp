@@ -190,6 +190,9 @@ void parse_languages(const YAML::Node& node, std::vector<RawValue<std::string>>&
                      DiagnosticSet& diagnostics) {
     std::vector<RawValue<std::string>> values;
     parse_string_sequence(node, "cmake.languages", values, diagnostics);
+    if (node.IsSequence() && values.empty()) {
+        add_invalid(diagnostics, "cmake.languages", node, "must not be empty");
+    }
     for (auto& value : values) {
         if (value.value != "C" && value.value != "CXX") {
             diagnostics.add({std::string{diagnostic_codes::invalid_value}, DiagnosticSeverity::error,
