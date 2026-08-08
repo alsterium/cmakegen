@@ -147,8 +147,10 @@ CMake uses `find_package()`.
 The repository keeps one user-owned `cmake/dependencies.cmake`. It first uses
 externally supplied CMake packages and otherwise uses `FetchContent` with
 pinned upstream release archives and `URL_HASH` values. It is included before
-generated package lookup. The bootstrap build includes the same file; Catch2
-is excluded there because bootstrap builds only the functional generator.
+generated package lookup. The bootstrap build includes the same file. While
+T002 through T013 retain transitional bootstrap test wiring, it conditionally
+acquires Catch2; T014 removes that wiring and the final minimal bootstrap does
+not acquire test-only dependencies.
 
 Why:
 

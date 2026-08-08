@@ -105,8 +105,10 @@ Bootstrap must include only:
 The dependency acquisition rules live in the hand-maintained
 `cmake/dependencies.cmake`, which bootstrap and the generated normal project
 both include. It uses externally supplied packages when available, with a
-pinned `FetchContent` fallback for fresh checkouts. Test-only Catch2 is not
-fetched by bootstrap.
+pinned `FetchContent` fallback for fresh checkouts. While T002 through T013
+use transitional bootstrap test wiring, it also conditionally supplies Catch2.
+T014 removes that wiring so the final minimal bootstrap does not acquire
+test-only dependencies.
 
 Bootstrap should not normally contain:
 

@@ -61,3 +61,13 @@ None.
 - Verification: `git diff --check` (pass)
 - Generated files: unchanged
 - Follow-ups: T002 implements and verifies the documented fallback
+
+## Execution record — review follow-up 2
+
+- Date: 2026-08-08
+- Summary: Corrected the transitional bootstrap policy: T002 through T013
+  acquire Catch2 when bootstrap test wiring is enabled; T014 removes that
+  acquisition when it minimizes bootstrap to the functional generator.
+- Verification: `git diff --check` (pass)
+- Generated files: unchanged
+- Follow-ups: T002 conditionally acquires Catch2 and T014 removes it
