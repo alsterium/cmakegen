@@ -27,6 +27,7 @@ add_library(cmakegen_core STATIC
     "${CMAKE_CURRENT_LIST_DIR}/../src/domain/normalizer.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/../src/generator/presets_compatibility.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/../src/generator/presets_renderer.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/../src/fs/safe_writer.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/../src/parser/parser.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/../src/renderer/cmake_renderer.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/../src/resolver/source_resolver.cpp"
@@ -57,6 +58,7 @@ if(CMAKEGEN_BOOTSTRAP_TESTS AND BUILD_TESTING)
         "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/presets_renderer_test.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/source_resolver_test.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/semantic_validator_test.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/safe_writer_test.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/version_test.cpp"
     )
     target_link_libraries(cmakegen_tests PRIVATE cmakegen_core Catch2::Catch2WithMain)
