@@ -2,10 +2,6 @@ cmake_minimum_required(VERSION 3.28)
 
 project(cmakegen_bootstrap LANGUAGES CXX)
 
-include(CTest)
-option(CMAKEGEN_BOOTSTRAP_TESTS
-    "Enable transitional bootstrap-only test wiring (removed in T014)" ON)
-
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -19,6 +15,9 @@ if(NOT CMAKEGEN_HAS_STD_EXPECTED)
     message(FATAL_ERROR "cmakegen requires C++23 std::expected support")
 endif()
 
+# The shared dependency hook honors this mode by avoiding normal-build-only
+# test dependencies. Bootstrap must remain able to build a generator alone.
+set(CMAKEGEN_BOOTSTRAP_MINIMAL ON)
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/dependencies.cmake")
 
 add_library(cmakegen_core STATIC
@@ -46,28 +45,3 @@ target_link_libraries(cmakegen_core PUBLIC
 
 add_executable(cmakegen "${CMAKE_CURRENT_LIST_DIR}/../src/main.cpp")
 target_link_libraries(cmakegen PRIVATE cmakegen_core CLI11::CLI11)
-
-# Transitional bootstrap-only test wiring. Generated normal CMake replaces this
-# in T014, after which bootstrap is limited to a functional generator build.
-if(CMAKEGEN_BOOTSTRAP_TESTS AND BUILD_TESTING)
-    include(Catch)
-    add_executable(cmakegen_tests
-        "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/diagnostic_test.cpp"
-        "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/normalizer_test.cpp"
-        "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/parser_test.cpp"
-        "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/cmake_renderer_test.cpp"
-        "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/cli_application_test.cpp"
-        "${CMAKE_CURRENT_LIST_DIR}/../tests/integration/generator_integration_test.cpp"
-        "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/presets_renderer_test.cpp"
-        "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/source_resolver_test.cpp"
-        "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/semantic_validator_test.cpp"
-        "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/safe_writer_test.cpp"
-        "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/version_test.cpp"
-    )
-    target_link_libraries(cmakegen_tests PRIVATE cmakegen_core Catch2::Catch2WithMain)
-    target_compile_definitions(cmakegen_tests PRIVATE
-        CMAKEGEN_CMAKE_COMMAND="${CMAKE_COMMAND}"
-        CMAKEGEN_SOURCE_DIR="${CMAKE_CURRENT_LIST_DIR}/.."
-    )
-    catch_discover_tests(cmakegen_tests)
-endif()

@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "files": [
+    {"path": "CMakeLists.txt", "sha256": "d71a221a951dc1cb604ed80e69dccca0021077d6481be87fe01fda3329b7545b"},
+    {"path": "CMakePresets.json", "sha256": "d744bdd2bb6ee8e3765c9b7f0c1b2c5e43a319555f479011b349501a8055a34f"},
+    {"path": "cmake/cmakegen.generated.cmake", "sha256": "e8337e0beff69d6b7959fe516131751547f9d61e068180e8e8cfdc4fbbf295aa"}
+  ]
+}

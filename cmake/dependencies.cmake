@@ -49,6 +49,15 @@ set(JSON_BuildTests OFF CACHE INTERNAL "" FORCE)
 set(CATCH_BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(CATCH_INSTALL_DOCS OFF CACHE BOOL "" FORCE)
 
+# Catch2 is built before schema-generated targets can apply cxx_std_23. Its
+# string_view support must use the same language level as cmakegen's tests.
+# Bootstrap already sets this; normal builds need it before FetchContent.
+if(NOT CMAKEGEN_BOOTSTRAP_MINIMAL)
+    set(CMAKE_CXX_STANDARD 23)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+    set(CMAKE_CXX_EXTENSIONS OFF)
+endif()
+
 cmakegen_require_package(
     yaml-cpp 0.8.0 yaml-cpp::yaml-cpp
     "https://github.com/jbeder/yaml-cpp/archive/refs/tags/0.8.0.tar.gz"
@@ -62,8 +71,9 @@ cmakegen_require_package(
     "https://github.com/CLIUtils/CLI11/archive/refs/tags/v2.6.2.tar.gz"
     "c6ea6b2e5608b3ea8617999bd5f47420c71b2ebdb8dc4767c1034d1da5785711")
 
-# T002--T013 retain bootstrap-only test wiring. T014 removes this dependency.
-if(CMAKEGEN_BOOTSTRAP_TESTS AND BUILD_TESTING)
+# The normal build has a test target. Bootstrap deliberately sets
+# CMAKEGEN_BOOTSTRAP_MINIMAL, so it does not acquire test-only dependencies.
+if(NOT CMAKEGEN_BOOTSTRAP_MINIMAL)
     cmakegen_require_package(
         Catch2 3.15.3 Catch2::Catch2WithMain
         "https://github.com/catchorg/Catch2/archive/refs/tags/v3.15.3.tar.gz"
