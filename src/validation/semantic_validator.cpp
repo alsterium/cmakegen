@@ -161,6 +161,13 @@ struct InternalDependencyEdge {
     std::optional<SourceLocation> provenance_location;
 };
 
+struct ReportedCycle {
+    std::string sequence;
+    std::optional<std::string> platform;
+
+    auto operator<=>(const ReportedCycle&) const = default;
+};
+
 [[nodiscard]] std::vector<InternalDependencyEdge> effective_internal_dependencies(
     const std::string& target_name, const Target& target, const Project& project,
     const TargetOverride* platform_override = nullptr,
@@ -193,7 +200,8 @@ struct InternalDependencyEdge {
 
 void detect_dependency_cycles(DiagnosticSet& diagnostics,
                               const std::map<std::string, std::vector<InternalDependencyEdge>>& adjacency,
-                              std::set<std::string>& reported_cycles) {
+                              std::set<ReportedCycle>& reported_cycles,
+                              const std::optional<std::string_view> platform = std::nullopt) {
     std::map<std::string, int> state;
     std::vector<std::string> stack;
     std::function<void(const std::string&)> visit = [&](const std::string& node) {
@@ -210,7 +218,14 @@ void detect_dependency_cycles(DiagnosticSet& diagnostics,
                     cycle += *iterator;
                 }
                 cycle += " -> " + dependency.name;
-                if (reported_cycles.insert(cycle).second) {
+                const ReportedCycle reported_cycle{
+                    cycle, platform ? std::optional{std::string(*platform)} : std::nullopt};
+                // A common cycle is present in every platform graph and has
+                // already been reported by the common pass. Platform-only
+                // cycles with the same target sequence, however, are distinct
+                // errors because they are independently realizable builds.
+                if ((!platform || !reported_cycles.contains({cycle, std::nullopt})) &&
+                    reported_cycles.insert(reported_cycle).second) {
                     diagnostics.add({std::string{diagnostic_codes::dependency_cycle},
                                      DiagnosticSeverity::error, "internal dependency cycle: " + cycle,
                                      dependency.provenance_path,
@@ -266,7 +281,7 @@ Result<TargetGraph> validate_project(const Project& project,
     // platform overrides are mutually exclusive. Validate each effective
     // platform graph independently so macOS-only and Windows-only edges cannot
     // invent a cycle that no build can realize.
-    std::set<std::string> reported_cycles;
+    std::set<ReportedCycle> reported_cycles;
     constexpr std::array<std::string_view, 3> platform_names{"macos", "linux", "windows"};
     for (const auto platform_index : std::array<std::optional<std::size_t>, 4>{
              std::nullopt, 0, 1, 2}) {
@@ -282,7 +297,9 @@ Result<TargetGraph> validate_project(const Project& project,
                 name, target, project, override,
                 platform_index ? std::optional{platform_names[*platform_index]} : std::nullopt);
         }
-        detect_dependency_cycles(diagnostics, effective_adjacency, reported_cycles);
+        detect_dependency_cycles(
+            diagnostics, effective_adjacency, reported_cycles,
+            platform_index ? std::optional{platform_names[*platform_index]} : std::nullopt);
     }
 
     if (diagnostics.has_errors()) return std::unexpected{std::move(diagnostics)};

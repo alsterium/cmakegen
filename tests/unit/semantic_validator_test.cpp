@@ -119,6 +119,25 @@ TEST_CASE("semantic validation detects cycles in a common or single platform gra
     }
 }
 
+TEST_CASE("semantic validation reports independent platform cycles with the same targets") {
+    auto app = target("App");
+    auto core = target("Core");
+    for (auto* dependencies : {&app.platform.macos.dependencies, &app.platform.windows.dependencies}) {
+        dependencies->private_values.push_back({LinkDependency::Kind::imported_target, "Core"});
+    }
+    for (auto* dependencies : {&core.platform.macos.dependencies, &core.platform.windows.dependencies}) {
+        dependencies->private_values.push_back({LinkDependency::Kind::imported_target, "App"});
+    }
+
+    const auto result = validate_project(project_with_targets({app, core}));
+    REQUIRE_FALSE(result);
+    REQUIRE(result.error().diagnostics().size() == 2);
+    CHECK(result.error().diagnostics()[0].message == "internal dependency cycle: App -> Core -> App");
+    CHECK(result.error().diagnostics()[0].path == "targets.Core.platform.macos.dependencies");
+    CHECK(result.error().diagnostics()[1].message == "internal dependency cycle: App -> Core -> App");
+    CHECK(result.error().diagnostics()[1].path == "targets.Core.platform.windows.dependencies");
+}
+
 TEST_CASE("semantic validation reports the closing edge provenance in a mixed cycle") {
     auto app = target("App");
     app.platform.macos.dependencies.private_values.push_back(
