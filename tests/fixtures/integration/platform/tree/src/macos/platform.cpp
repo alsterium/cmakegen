@@ -1,1 +1,1 @@
-int macos_value() { return 0; }
+int macos_value() { return 1; }

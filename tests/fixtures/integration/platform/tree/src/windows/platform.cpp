@@ -1,1 +1,1 @@
-int windows_value() { return 0; }
+int windows_value() { return 1; }

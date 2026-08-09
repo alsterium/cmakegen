@@ -1,1 +1,1 @@
-int linux_value() { return 0; }
+int linux_value() { return 1; }
