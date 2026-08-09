@@ -33,3 +33,14 @@ T006 through T011, inclusive.
   no-write guarantees.
 - Exercise help/version and every option combination that changes safety
   behavior.
+
+## Execution record
+
+- 2026-08-09: Added a testable CLI application boundary and made `main.cpp`
+  delegate to it. Implemented global project/root/output options and the
+  `generate`, `validate`, `dump`, `graph`, and `clean` commands, including
+  rendering-before-writing, check/force, resolved validation, graph formats,
+  external dependency inclusion, and clean dry-run behavior.
+- Verification: `cmake -S bootstrap -B build/t012 -DCMAKEGEN_BOOTSTRAP_TESTS=ON`,
+  `cmake --build build/t012 --parallel 4`, and
+  `ctest --test-dir build/t012 --output-on-failure` (90/90 passed).

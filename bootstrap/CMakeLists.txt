@@ -22,6 +22,7 @@ endif()
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/dependencies.cmake")
 
 add_library(cmakegen_core STATIC
+    "${CMAKE_CURRENT_LIST_DIR}/../src/cli/application.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/../src/diagnostics/diagnostic.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/../src/domain/dump.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/../src/domain/normalizer.cpp"
@@ -55,6 +56,7 @@ if(CMAKEGEN_BOOTSTRAP_TESTS AND BUILD_TESTING)
         "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/normalizer_test.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/parser_test.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/cmake_renderer_test.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/cli_application_test.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/presets_renderer_test.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/source_resolver_test.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/semantic_validator_test.cpp"

@@ -20,7 +20,7 @@ in parallel after their dependencies are complete.
 | [T009](T009-cmake-renderer.md) | Deterministic CMake renderer | done | L | medium | T006, T007, T008 | 8 |
 | [T010](T010-presets-renderer.md) | CMake Presets renderer | done | M | high | T001, T006 | 8 |
 | [T011](T011-safe-writer-and-manifest.md) | Safe writer and ownership manifest | done | L | medium | T003 | 6 |
-| [T012](T012-cli-commands.md) | Complete MVP CLI | todo | L | medium | T006–T011 | 9 |
+| [T012](T012-cli-commands.md) | Complete MVP CLI | done | L | medium | T006–T011 | 9 |
 | [T013](T013-integration-and-determinism-tests.md) | Integration and determinism test suite | todo | L | medium | T009, T010, T011, T012 | 10 |
 | [T014](T014-self-host-project-definition.md) | Self-hosted project definition and generated files | todo | L | high | T012, T013 | 11 |
 | [T015](T015-self-host-ci-matrix.md) | Cross-platform self-host CI matrix | todo | M | medium | T014 | 12 |

@@ -1,14 +1,12 @@
-#include "cmakegen/version.hpp"
-
-#include <CLI/CLI.hpp>
+#include "cmakegen/cli/application.hpp"
 
 #include <iostream>
+#include <string>
+#include <vector>
 
 int main(int argc, char** argv) {
-    CLI::App app{"Generate reproducible CMake projects from project.yml."};
-    app.set_version_flag("--version", std::string{cmakegen::version()});
-
-    CLI11_PARSE(app, argc, argv);
-    std::cout << "cmakegen " << cmakegen::version() << '\n';
-    return 0;
+    std::vector<std::string> arguments;
+    arguments.reserve(static_cast<std::size_t>(argc - 1));
+    for (int index = 1; index < argc; ++index) arguments.emplace_back(argv[index]);
+    return cmakegen::run_cli(arguments, std::cout, std::cerr);
 }
