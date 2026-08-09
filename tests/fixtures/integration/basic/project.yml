@@ -1,0 +1,12 @@
+schemaVersion: 1
+name: hello
+cmake:
+  cxxStandard: 23
+targets:
+  hello:
+    type: executable
+    sources: [src]
+presets:
+  debug:
+    buildType: Debug
+    binaryDir: build/debug

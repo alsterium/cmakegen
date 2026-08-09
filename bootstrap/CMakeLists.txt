@@ -57,6 +57,7 @@ if(CMAKEGEN_BOOTSTRAP_TESTS AND BUILD_TESTING)
         "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/parser_test.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/cmake_renderer_test.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/cli_application_test.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/../tests/integration/generator_integration_test.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/presets_renderer_test.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/source_resolver_test.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/semantic_validator_test.cpp"
@@ -64,6 +65,9 @@ if(CMAKEGEN_BOOTSTRAP_TESTS AND BUILD_TESTING)
         "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/version_test.cpp"
     )
     target_link_libraries(cmakegen_tests PRIVATE cmakegen_core Catch2::Catch2WithMain)
-    target_compile_definitions(cmakegen_tests PRIVATE CMAKEGEN_CMAKE_COMMAND="${CMAKE_COMMAND}")
+    target_compile_definitions(cmakegen_tests PRIVATE
+        CMAKEGEN_CMAKE_COMMAND="${CMAKE_COMMAND}"
+        CMAKEGEN_SOURCE_DIR="${CMAKE_CURRENT_LIST_DIR}/.."
+    )
     catch_discover_tests(cmakegen_tests)
 endif()

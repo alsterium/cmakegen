@@ -34,3 +34,23 @@ ctest --test-dir <build-dir> --output-on-failure
 
 - Run the integration suite twice from clean temporary output directories.
 - Inspect fixtures to confirm they do not fetch network dependencies.
+
+## Execution record
+
+- 2026-08-09: Added basic, internal-library, package, platform, and exclusion
+  fixtures with byte-for-byte golden generated output. Added full-pipeline
+  tests for deterministic regeneration, check-mode no-write behavior,
+  validation-before-write, manifest stability, and slash-normalized paths.
+  Every fixture, including the package fixture, configures and builds with
+  CMake in isolated temporary directories. The package fixture provides a
+  local `fmt` config-package stub through `CMAKE_PREFIX_PATH`, so no fixture
+  or integration test fetches dependencies from the network.
+- Verification: `cmake -S bootstrap -B build/t013 -DCMAKEGEN_BOOTSTRAP_TESTS=ON`,
+  `cmake --build build/t013 --parallel 4`, and
+  `ctest --test-dir build/t013 --output-on-failure` (95/95 passed).
+- 2026-08-09: Extended the offline configure/build acceptance test to include
+  the package fixture. It supplies a minimal local `fmt` config package and
+  version file under the copied fixture tree, passed only through
+  `CMAKE_PREFIX_PATH` during configuration.
+- Verification: `cmake --build build/t013-review --parallel 2` and
+  `ctest --test-dir build/t013-review --output-on-failure` (125/125 passed).

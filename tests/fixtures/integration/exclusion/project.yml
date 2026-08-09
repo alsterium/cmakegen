@@ -1,0 +1,12 @@
+schemaVersion: 1
+name: Engine
+targets:
+  Engine:
+    type: staticLibrary
+    sources:
+      - path: src
+        exclude: ["**/*_test.cpp", "**/bench/**"]
+  app:
+    type: executable
+    sources: [app]
+    dependencies: [Engine]
