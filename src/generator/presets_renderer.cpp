@@ -13,7 +13,7 @@ namespace {
 using Json = nlohmann::ordered_json;
 
 [[nodiscard]] bool is_absolute_or_macro_path(const std::string_view path) {
-    if (path.starts_with("${") || path.starts_with("$env{") || path.starts_with("$penv{") ||
+    if (path.starts_with("${") || path.starts_with("$env{") || path.starts_with("$penv{") || path.starts_with("$vendor{") ||
         path.starts_with('/') || path.starts_with('\\')) return true;
     return path.size() >= 3 && std::isalpha(static_cast<unsigned char>(path[0])) && path[1] == ':' && path[2] == '/';
 }

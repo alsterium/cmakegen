@@ -19,6 +19,8 @@ struct Version {
     // Semantic validation permits numeric components with leading zeroes.  Trim
     // them before converting so an otherwise small component does not overflow
     // solely because its textual representation is wide.
+    if (value.empty())
+        throw std::invalid_argument("CMake minimum version must contain numeric components");
     const auto first_non_zero = value.find_first_not_of('0');
     value = first_non_zero == std::string_view::npos ? std::string_view{"0"}
                                                       : value.substr(first_non_zero);
@@ -29,12 +31,7 @@ struct Version {
     return component;
 }
 
-[[nodiscard]] Version parse_version(std::string_view value) {
-    // CMake policy ranges use the lower endpoint to select the required
-    // executable version.  The upper endpoint only controls policy settings.
-    if (const auto range = value.find("..."); range != std::string_view::npos) {
-        value = value.substr(0, range);
-    }
+[[nodiscard]] Version parse_numeric_version(std::string_view value) {
     const auto first_dot = value.find('.');
     if (first_dot == std::string_view::npos)
         throw std::invalid_argument("CMake minimum version must use major.minor[.patch] form");
@@ -51,6 +48,18 @@ struct Version {
     const auto tweak = third_dot == std::string_view::npos ? 0 :
         parse_component(value.substr(third_dot + 1));
     return {major, minor, patch, tweak};
+}
+
+[[nodiscard]] Version parse_version(std::string_view value) {
+    const auto range = value.find("...");
+    if (range == std::string_view::npos) return parse_numeric_version(value);
+    if (value.find("...", range + 3) != std::string_view::npos)
+        throw std::invalid_argument("CMake policy range must contain one separator");
+    const auto lower = value.substr(0, range);
+    const auto upper = value.substr(range + 3);
+    const auto minimum = parse_numeric_version(lower);
+    (void)parse_numeric_version(upper);
+    return minimum;
 }
 
 } // namespace

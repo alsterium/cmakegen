@@ -147,6 +147,25 @@ targets:
     CHECK(json["testPresets"][1]["configuration"] == "RelWithDebInfo");
 }
 
+TEST_CASE("presets renderer preserves vendor roots and rejects malformed policy ranges") {
+    const auto project = normalize(R"(
+schemaVersion: 1
+name: example
+presets:
+  ide:
+    buildType: Debug
+    binaryDir: $vendor{xide.buildRoot}/debug
+targets:
+  App:
+    type: executable
+)");
+    const auto json = nlohmann::json::parse(render_presets(project));
+    CHECK(json["configurePresets"][0]["binaryDir"] == "$vendor{xide.buildRoot}/debug");
+    CHECK_THROWS(cmake_version_components("3.28..."));
+    CHECK_THROWS(preset_schema_version_for("3.28...garbage"));
+    CHECK_THROWS(cmake_version_components("3.28....3.31"));
+}
+
 TEST_CASE("presets renderer supports an explicitly empty preset set") {
     const auto project = normalize(R"(
 schemaVersion: 1
