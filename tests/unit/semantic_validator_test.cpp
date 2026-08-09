@@ -67,7 +67,7 @@ TEST_CASE("semantic validation includes platform dependencies in the effective g
     CHECK(result->dependencies.at("Core").front().name == "Threads::Threads");
 }
 
-TEST_CASE("semantic validation detects cycles formed by platform dependencies") {
+TEST_CASE("semantic validation does not combine mutually exclusive platform dependencies") {
     auto app = target("App");
     app.platform.macos.dependencies.private_values.push_back(
         {LinkDependency::Kind::imported_target, "Core"});
@@ -76,10 +76,37 @@ TEST_CASE("semantic validation detects cycles formed by platform dependencies") 
         {LinkDependency::Kind::imported_target, "App"});
 
     const auto result = validate_project(project_with_targets({app, core}));
-    REQUIRE_FALSE(result);
-    REQUIRE(result.error().diagnostics().size() == 1);
-    CHECK(result.error().diagnostics().front().code == diagnostic_codes::dependency_cycle);
-    CHECK(result.error().diagnostics().front().message == "internal dependency cycle: App -> Core -> App");
+    REQUIRE(result);
+}
+
+TEST_CASE("semantic validation detects cycles in a common or single platform graph") {
+    SECTION("common dependencies") {
+        auto app = target("App");
+        add_dependency(app, "Core");
+        auto core = target("Core");
+        add_dependency(core, "App");
+
+        const auto result = validate_project(project_with_targets({app, core}));
+        REQUIRE_FALSE(result);
+        REQUIRE(result.error().diagnostics().size() == 1);
+        CHECK(result.error().diagnostics().front().code == diagnostic_codes::dependency_cycle);
+        CHECK(result.error().diagnostics().front().message == "internal dependency cycle: App -> Core -> App");
+    }
+
+    SECTION("same platform dependencies") {
+        auto app = target("App");
+        app.platform.macos.dependencies.private_values.push_back(
+            {LinkDependency::Kind::imported_target, "Core"});
+        auto core = target("Core");
+        core.platform.macos.dependencies.private_values.push_back(
+            {LinkDependency::Kind::imported_target, "App"});
+
+        const auto result = validate_project(project_with_targets({app, core}));
+        REQUIRE_FALSE(result);
+        REQUIRE(result.error().diagnostics().size() == 1);
+        CHECK(result.error().diagnostics().front().code == diagnostic_codes::dependency_cycle);
+        CHECK(result.error().diagnostics().front().message == "internal dependency cycle: App -> Core -> App");
+    }
 }
 
 TEST_CASE("semantic validation accepts an acyclic dependency diamond") {
