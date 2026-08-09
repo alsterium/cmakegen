@@ -210,6 +210,25 @@ TEST_CASE("safe writer recognizes manifest ownership through portable path alias
     CHECK_FALSE(std::filesystem::exists(fixture.path() / "Foo.txt"));
 }
 
+TEST_CASE("safe writer rejects ambiguous portable aliases before ownership lookup") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo.txt", "generated\n"}})));
+    write_file(fixture.path() / "foo.txt", "user file\n");
+
+    // Case-insensitive filesystems cannot represent both names.  The safety
+    // condition only applies where the second physical alias exists.
+    if (!std::filesystem::exists(fixture.path() / "Foo.txt") ||
+        !std::filesystem::exists(fixture.path() / "foo.txt") ||
+        read_file(fixture.path() / "Foo.txt") == read_file(fixture.path() / "foo.txt")) {
+        SKIP("filesystem does not support distinct case-only aliases");
+    }
+
+    CHECK_FALSE(writer.write(file_set({{"Foo.txt", "updated\n"}})));
+    CHECK(read_file(fixture.path() / "Foo.txt") == "generated\n");
+    CHECK(read_file(fixture.path() / "foo.txt") == "user file\n");
+}
+
 TEST_CASE("safe writer rejects an existing file ancestor before writing") {
     TemporaryDirectory fixture;
     write_file(fixture.path() / "directory", "user file\n");

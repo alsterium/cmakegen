@@ -149,6 +149,7 @@ struct Manifest {
     for (const auto& component : relative.parent_path()) {
         const auto exact = current / component;
         const auto exact_status = std::filesystem::symlink_status(exact, ec);
+        (void)exact_status;
         if (!ec && exact_status.type() != std::filesystem::file_type::not_found) {
             current = exact;
         } else {
@@ -191,10 +192,6 @@ struct Manifest {
     for (const auto& component : relative) {
         const auto exact = current / component;
         const auto exact_status = std::filesystem::symlink_status(exact, ec);
-        if (!ec && exact_status.type() != std::filesystem::file_type::not_found) {
-            current = exact;
-            continue;
-        }
         if (ec && ec != std::errc::no_such_file_or_directory) {
             return std::unexpected{error("cannot inspect destination: " + ec.message(), exact.generic_string())};
         }
@@ -215,6 +212,10 @@ struct Manifest {
                 matched = entry.path();
             }
         }
+        // Do not short-circuit on an exact spelling: a case-sensitive host can
+        // contain both Foo.txt (manifest-owned) and foo.txt (unowned).  Either
+        // spelling would collide on macOS/Windows, so ownership lookup must not
+        // select the exact entry and overwrite it before this ambiguity is seen.
         current = matched ? *matched : exact;
     }
     return current;
