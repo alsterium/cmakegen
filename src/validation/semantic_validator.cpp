@@ -347,7 +347,7 @@ void validate_dependencies(DiagnosticSet& diagnostics, const ScopedValues<LinkDe
     static constexpr std::array keywords{"EXACT", "QUIET", "MODULE", "REQUIRED", "COMPONENTS",
                                          "OPTIONAL_COMPONENTS", "CONFIG", "NO_MODULE", "NAMES", "CONFIGS",
                                          "HINTS", "PATHS", "PATH_SUFFIXES", "REGISTRY_VIEW", "GLOBAL",
-                                         "BYPASS_PROVIDER", "UNWIND_INCLUDE", "NO_POLICY_SCOPE",
+                                         "BYPASS_PROVIDER", "NO_POLICY_SCOPE",
                                          "NO_DEFAULT_PATH", "NO_PACKAGE_ROOT_PATH",
                                          "NO_CMAKE_PATH", "NO_CMAKE_ENVIRONMENT_PATH",
                                          "NO_SYSTEM_ENVIRONMENT_PATH", "NO_CMAKE_PACKAGE_REGISTRY",
