@@ -74,6 +74,9 @@ struct Manifest {
 }
 
 [[nodiscard]] Result<std::string> normalize_relative_path(const std::filesystem::path& path) {
+    if (path.native().find('\0') != std::filesystem::path::string_type::npos) {
+        return std::unexpected{error("generated path must not contain NUL bytes", path.generic_string())};
+    }
     if (path.empty() || path.is_absolute() || path.has_root_name() || path.has_root_directory()) {
         return std::unexpected{error("generated path must be a non-empty relative path", path.generic_string())};
     }
