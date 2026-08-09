@@ -225,17 +225,11 @@ void validate_source_entries(DiagnosticSet& diagnostics, const std::vector<Sourc
 
 [[nodiscard]] std::optional<Language> source_language(std::string_view path) {
     const auto extension = std::filesystem::path{path}.extension().string();
-    std::string lowercase_extension;
-    lowercase_extension.reserve(extension.size());
-    for (const auto character : extension) {
-        lowercase_extension += static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
-    }
-    // CMake distinguishes `.c` (C) from `.C` (C++). The resolver has already
-    // classified both as implementation sources, so retain that distinction
-    // while deciding which enabled project language can compile the file.
+    // CMake determines languages from case-sensitive suffixes: `.c` is C,
+    // while `.C` is C++. Do not lowercase these before validating the model.
     if (extension == ".c") return Language::c;
-    if (lowercase_extension == ".cc" || lowercase_extension == ".cpp" ||
-        lowercase_extension == ".cxx") {
+    if (extension == ".C" || extension == ".c++" || extension == ".cc" ||
+        extension == ".cpp" || extension == ".cxx") {
         return Language::cxx;
     }
     return std::nullopt;
@@ -281,6 +275,11 @@ void validate_sources(DiagnosticSet& diagnostics, const Target& target, const st
     }();
     validate_source_languages(diagnostics, project, all_sources, path + ".sources");
     for (const auto& source : all_sources) {
+        if (source.path.contains(';')) {
+            add_resolved_source_semantic_error(
+                diagnostics, source, path + ".sources",
+                "source paths must not contain semicolons because CMake cannot render them portably");
+        }
         validate_literal_cmake_argument(diagnostics,
                                         source.diagnostic_path.empty() ? path + ".sources"
                                                                        : source.diagnostic_path,

@@ -478,4 +478,24 @@ TEST_CASE("semantic validation requires implementation languages enabled by CMak
     REQUIRE(unknown_language.error().diagnostics().size() == 1);
     CHECK(unknown_language.error().diagnostics().front().message ==
           "implementation source has no supported CMake language: src/shader.metal");
+
+    resolved.at("Core").common = {{"src/main.C", SourceKind::source}};
+    REQUIRE(validate_project(project, resolved));
+
+    resolved.at("Core").common = {{"src/main.CC", SourceKind::source}};
+    const auto invalid_case = validate_project(project, resolved);
+    REQUIRE_FALSE(invalid_case);
+    CHECK(invalid_case.error().diagnostics().front().message ==
+          "implementation source has no supported CMake language: src/main.CC");
+}
+
+TEST_CASE("semantic validation rejects semicolons in source paths") {
+    auto core = target("Core");
+    auto project = project_with_targets({core});
+    ResolvedSourcesByTarget resolved{{"Core", {{{"src/main;part.cpp", SourceKind::source}}, {}, {}, {}}}};
+
+    const auto result = validate_project(project, resolved);
+    REQUIRE_FALSE(result);
+    CHECK(result.error().diagnostics().front().message ==
+          "source paths must not contain semicolons because CMake cannot render them portably");
 }
