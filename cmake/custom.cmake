@@ -3,13 +3,13 @@
 # schema-v1 model.
 include(CTest)
 
+target_compile_definitions(cmakegen_tests PRIVATE
+  CMAKEGEN_CMAKE_COMMAND="${CMAKE_COMMAND}"
+  CMAKEGEN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+
 if(BUILD_TESTING)
   include(Catch)
-
-  target_compile_definitions(cmakegen_tests PRIVATE
-    CMAKEGEN_CMAKE_COMMAND="${CMAKE_COMMAND}"
-    CMAKEGEN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
-  )
   catch_discover_tests(cmakegen_tests)
 
   add_test(
