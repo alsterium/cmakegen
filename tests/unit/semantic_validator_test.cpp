@@ -32,7 +32,11 @@ TEST_CASE("semantic validation builds a deterministic graph and retains imported
     auto app = target("App", TargetType::executable);
     add_dependency(app, "fmt::fmt");
     add_dependency(app, "Core");
-    add_dependency(app, "Core");
+    // Semantic validation must classify before deduplicating: a manually
+    // constructed value can carry a stale kind while naming a project target.
+    app.dependencies.public_values.push_back({LinkDependency::Kind::project_target, "Core"});
+    app.platform.linux.dependencies.interface_values.push_back(
+        {LinkDependency::Kind::imported_target, "fmt::fmt"});
     auto core = target("Core");
     add_dependency(core, "Threads::Threads");
 
@@ -45,6 +49,37 @@ TEST_CASE("semantic validation builds a deterministic graph and retains imported
     CHECK(result->dependencies.at("App")[0].kind == LinkDependency::Kind::project_target);
     CHECK(result->dependencies.at("App")[1].name == "fmt::fmt");
     CHECK(result->dependencies.at("App")[1].kind == LinkDependency::Kind::imported_target);
+}
+
+TEST_CASE("semantic validation includes platform dependencies in the effective graph") {
+    auto app = target("App", TargetType::executable);
+    app.platform.linux.dependencies.private_values.push_back(
+        {LinkDependency::Kind::imported_target, "Core"});
+    auto core = target("Core");
+    core.platform.windows.dependencies.public_values.push_back(
+        {LinkDependency::Kind::imported_target, "Threads::Threads"});
+
+    const auto result = validate_project(project_with_targets({app, core}));
+    REQUIRE(result);
+    CHECK(result->internal_adjacency ==
+          std::map<std::string, std::vector<std::string>>{{"App", {"Core"}}, {"Core", {}}});
+    REQUIRE(result->dependencies.at("Core").size() == 1);
+    CHECK(result->dependencies.at("Core").front().name == "Threads::Threads");
+}
+
+TEST_CASE("semantic validation detects cycles formed by platform dependencies") {
+    auto app = target("App");
+    app.platform.macos.dependencies.private_values.push_back(
+        {LinkDependency::Kind::imported_target, "Core"});
+    auto core = target("Core");
+    core.platform.windows.dependencies.private_values.push_back(
+        {LinkDependency::Kind::imported_target, "App"});
+
+    const auto result = validate_project(project_with_targets({app, core}));
+    REQUIRE_FALSE(result);
+    REQUIRE(result.error().diagnostics().size() == 1);
+    CHECK(result.error().diagnostics().front().code == diagnostic_codes::dependency_cycle);
+    CHECK(result.error().diagnostics().front().message == "internal dependency cycle: App -> Core -> App");
 }
 
 TEST_CASE("semantic validation accepts an acyclic dependency diamond") {

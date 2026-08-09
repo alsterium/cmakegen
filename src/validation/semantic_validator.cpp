@@ -88,14 +88,32 @@ void validate_sources(DiagnosticSet& diagnostics, const Target& target, const st
     }
 }
 
-[[nodiscard]] std::vector<LinkDependency> sorted_dependencies(const Target& target) {
+[[nodiscard]] std::vector<LinkDependency> effective_dependencies(const Target& target,
+                                                                  const Project& project) {
     std::vector<LinkDependency> dependencies;
     const auto append = [&dependencies](const auto& values) {
         dependencies.insert(dependencies.end(), values.begin(), values.end());
     };
-    append(target.dependencies.private_values);
-    append(target.dependencies.public_values);
-    append(target.dependencies.interface_values);
+    const auto append_scopes = [&append](const auto& scoped_values) {
+        append(scoped_values.private_values);
+        append(scoped_values.public_values);
+        append(scoped_values.interface_values);
+    };
+
+    append_scopes(target.dependencies);
+    append_scopes(target.platform.macos.dependencies);
+    append_scopes(target.platform.linux.dependencies);
+    append_scopes(target.platform.windows.dependencies);
+
+    // Normalization usually classifies these already, but semantic validation
+    // accepts manually assembled Project values too. Classify before removing
+    // duplicates so a dependency mentioned with different provisional kinds is
+    // still represented exactly once in the effective graph.
+    for (auto& dependency : dependencies) {
+        dependency.kind = project.targets.contains(dependency.name)
+                              ? LinkDependency::Kind::project_target
+                              : LinkDependency::Kind::imported_target;
+    }
     std::ranges::sort(dependencies, {}, [](const LinkDependency& dependency) {
         return std::pair{dependency.name, dependency.kind};
     });
@@ -134,12 +152,7 @@ Result<TargetGraph> validate_project(const Project& project,
             validate_interface_scopes(diagnostics, target, path);
         }
 
-        auto dependencies = sorted_dependencies(target);
-        for (auto& dependency : dependencies) {
-            dependency.kind = project.targets.contains(dependency.name)
-                                  ? LinkDependency::Kind::project_target
-                                  : LinkDependency::Kind::imported_target;
-        }
+        auto dependencies = effective_dependencies(target, project);
         graph.dependencies.emplace(key, dependencies);
         auto& internal = graph.internal_adjacency[key];
         for (const auto& dependency : dependencies) {
