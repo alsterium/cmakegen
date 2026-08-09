@@ -138,9 +138,9 @@ void validate_literal_cmake_argument(DiagnosticSet& diagnostics, const std::stri
     // it as one of its own variables. There is no portable literal encoding for
     // this value across CMake generators, so reject the ambiguous syntax rather
     // than producing a build file with a changed compiler argument.
-    if (value.contains("${")) {
+    if (value.contains("${") || value.contains("$<") || value.contains("$(")) {
         add_semantic_error(diagnostics, path,
-                           "literal CMake arguments must not contain braced variable syntax");
+                           "literal CMake arguments must not contain evaluated dollar syntax");
     }
 }
 
@@ -149,10 +149,16 @@ void validate_scoped_literal_cmake_arguments(DiagnosticSet& diagnostics, const S
                                              const std::string& path, Value value) {
     const auto validate_scope = [&](const std::vector<T>& scope_values, std::string_view scope) {
         for (std::size_t index = 0; index < scope_values.size(); ++index) {
+            const auto item = value(scope_values[index]);
             validate_literal_cmake_argument(diagnostics,
                                             path + "." + std::string{scope} + "[" +
                                                 std::to_string(index) + "]",
-                                            value(scope_values[index]));
+                                            item);
+            if (item == "PUBLIC" || item == "PRIVATE" || item == "INTERFACE") {
+                add_semantic_error(diagnostics, path + "." + std::string{scope} + "[" +
+                                                   std::to_string(index) + "]",
+                                   "literal CMake arguments must not equal a scope keyword");
+            }
         }
     };
     validate_scope(values.private_values, "private");
@@ -315,7 +321,9 @@ void validate_sources(DiagnosticSet& diagnostics, const Target& target, const st
 
 [[nodiscard]] bool is_link_mode_keyword(std::string_view value) {
     return value == "debug" || value == "optimized" || value == "general" ||
-           value == "PUBLIC" || value == "PRIVATE" || value == "INTERFACE";
+           value == "PUBLIC" || value == "PRIVATE" || value == "INTERFACE" ||
+           value == "LINK_PUBLIC" || value == "LINK_PRIVATE" ||
+           value == "LINK_INTERFACE_LIBRARIES";
 }
 
 void validate_dependencies(DiagnosticSet& diagnostics, const ScopedValues<LinkDependency>& dependencies,

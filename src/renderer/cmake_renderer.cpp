@@ -95,7 +95,10 @@ void render_sources(Text& text, const Target& target, const std::vector<Resolved
         // Quoting does not stop target_sources() from recognizing FILE_SET as
         // syntax. A harmless explicit relative prefix keeps a root-level file
         // path an ordinary source argument.
-        const auto path = source.path == "FILE_SET" ? "./FILE_SET" : source.path;
+        const auto path = source.path == "FILE_SET" || source.path == "PUBLIC" ||
+                                  source.path == "PRIVATE" || source.path == "INTERFACE"
+                              ? "./" + source.path
+                              : source.path;
         text.line("    " + cmake_argument(path));
     }
     text.line(")");
