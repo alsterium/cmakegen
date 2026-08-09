@@ -115,6 +115,34 @@ targets:
     CHECK(json["configurePresets"][1]["cacheVariables"]["Z_VALUE"] == "last");
 }
 
+TEST_CASE("presets renderer sets build and test configurations for multi-config generators") {
+    const auto project = normalize(R"(
+schemaVersion: 1
+name: example
+presets:
+  multi:
+    buildType: RelWithDebInfo
+    generator: Ninja Multi-Config
+    binaryDir: $env{CMAKEGEN_BUILD_ROOT}/multi
+  inherited:
+    buildType: Debug
+    generator: Visual Studio 17 2022
+    binaryDir: $penv{CMAKEGEN_BUILD_ROOT}/inherited
+targets:
+  App:
+    type: executable
+)");
+
+    const auto json = nlohmann::json::parse(render_presets(project));
+    REQUIRE(json["configurePresets"].size() == 2);
+    CHECK(json["configurePresets"][0]["binaryDir"] == "$penv{CMAKEGEN_BUILD_ROOT}/inherited");
+    CHECK(json["configurePresets"][1]["binaryDir"] == "$env{CMAKEGEN_BUILD_ROOT}/multi");
+    CHECK(json["buildPresets"][0]["configuration"] == "Debug");
+    CHECK(json["buildPresets"][1]["configuration"] == "RelWithDebInfo");
+    CHECK(json["testPresets"][0]["configuration"] == "Debug");
+    CHECK(json["testPresets"][1]["configuration"] == "RelWithDebInfo");
+}
+
 TEST_CASE("presets renderer supports an explicitly empty preset set") {
     const auto project = normalize(R"(
 schemaVersion: 1

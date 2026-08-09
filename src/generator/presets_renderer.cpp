@@ -13,8 +13,15 @@ namespace {
 using Json = nlohmann::ordered_json;
 
 [[nodiscard]] bool is_absolute_or_macro_path(const std::string_view path) {
-    if (path.starts_with("${") || path.starts_with('/') || path.starts_with('\\')) return true;
+    if (path.starts_with("${") || path.starts_with("$env{") || path.starts_with("$penv{") ||
+        path.starts_with('/') || path.starts_with('\\')) return true;
     return path.size() >= 3 && std::isalpha(static_cast<unsigned char>(path[0])) && path[1] == ':' && path[2] == '/';
+}
+
+[[nodiscard]] bool is_multi_config_generator(const std::optional<std::string>& generator) {
+    if (!generator) return false;
+    return *generator == "Ninja Multi-Config" || *generator == "Xcode" ||
+           generator->starts_with("Visual Studio ");
 }
 
 [[nodiscard]] std::string preset_binary_directory(const Preset& preset) {
@@ -38,8 +45,10 @@ using Json = nlohmann::ordered_json;
     return result;
 }
 
-[[nodiscard]] Json render_named_preset(const std::string& name) {
-    return {{"name", name}, {"configurePreset", name}};
+[[nodiscard]] Json render_named_preset(const Preset& preset) {
+    Json result = {{"name", preset.name}, {"configurePreset", preset.name}};
+    if (is_multi_config_generator(preset.generator)) result["configuration"] = preset.build_type;
+    return result;
 }
 
 } // namespace
@@ -54,10 +63,11 @@ std::string render_presets(const Project& project) {
     Json configure_presets = Json::array();
     Json build_presets = Json::array();
     Json test_presets = Json::array();
-    for (const auto& [name, preset] : project.presets) {
+    for (const auto& entry : project.presets) {
+        const auto& preset = entry.second;
         configure_presets.push_back(render_configure_preset(preset));
-        build_presets.push_back(render_named_preset(name));
-        test_presets.push_back(render_named_preset(name));
+        build_presets.push_back(render_named_preset(preset));
+        test_presets.push_back(render_named_preset(preset));
     }
     document["configurePresets"] = std::move(configure_presets);
     document["buildPresets"] = std::move(build_presets);
