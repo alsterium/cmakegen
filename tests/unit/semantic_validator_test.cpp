@@ -417,3 +417,65 @@ TEST_CASE("semantic validation rejects CMake command keywords in model values") 
     CHECK(reserved.error().diagnostics().front().message ==
           "target name is reserved by CMake: edit_cache");
 }
+
+TEST_CASE("semantic validation rejects all find_package option keywords as components") {
+    auto project = project_with_targets({target("Core")});
+    project.packages.emplace("pkg", Package{"Pkg", std::nullopt, true,
+                                            {"NO_POLICY_SCOPE", "NO_DEFAULT_PATH",
+                                             "NO_CMAKE_PACKAGE_REGISTRY", "Core"}});
+
+    const auto result = validate_project(project);
+    REQUIRE_FALSE(result);
+    const auto& diagnostics = result.error().diagnostics();
+    REQUIRE(diagnostics.size() == 3);
+    CHECK(diagnostics[0].path == "packages.pkg.components[0]");
+    CHECK(diagnostics[1].path == "packages.pkg.components[1]");
+    CHECK(diagnostics[2].path == "packages.pkg.components[2]");
+}
+
+TEST_CASE("semantic validation rejects generator-reserved target names") {
+    auto project = project_with_targets(
+        {target("preinstall"), target("ALL_BUILD"), target("INSTALL"), target("RUN_TESTS"),
+         target("ZERO_CHECK")});
+
+    const auto result = validate_project(project);
+    REQUIRE_FALSE(result);
+    REQUIRE(result.error().diagnostics().size() == 5);
+    for (const auto& diagnostic : result.error().diagnostics()) {
+        CHECK(diagnostic.message.starts_with("target name is reserved by CMake: "));
+    }
+}
+
+TEST_CASE("semantic validation rejects braced variables in literal build arguments") {
+    auto app = target("App");
+    app.definitions.private_values = {"VALUE=${FOO}"};
+    app.platform.linux.compile_options.private_values = {"-DOTHER=${BAR}"};
+
+    const auto result = validate_project(project_with_targets({app}));
+    REQUIRE_FALSE(result);
+    const auto& diagnostics = result.error().diagnostics();
+    REQUIRE(diagnostics.size() == 2);
+    CHECK(diagnostics[0].path == "targets.App.definitions.private[0]");
+    CHECK(diagnostics[1].path == "targets.App.platform.linux.compileOptions.private[0]");
+}
+
+TEST_CASE("semantic validation requires implementation languages enabled by CMake") {
+    auto core = target("Core");
+    auto project = project_with_targets({core});
+    project.cmake.languages = {Language::cxx};
+    ResolvedSourcesByTarget resolved{{"Core", {{{"src/main.c", SourceKind::source}}, {}, {}, {}}}};
+
+    const auto disabled_language = validate_project(project, resolved);
+    REQUIRE_FALSE(disabled_language);
+    REQUIRE(disabled_language.error().diagnostics().size() == 1);
+    CHECK(disabled_language.error().diagnostics().front().path == "targets.Core.sources");
+    CHECK(disabled_language.error().diagnostics().front().message ==
+          "implementation source language is not enabled by cmake.languages: src/main.c");
+
+    resolved.at("Core").common = {{"src/shader.metal", SourceKind::source}};
+    const auto unknown_language = validate_project(project, resolved);
+    REQUIRE_FALSE(unknown_language);
+    REQUIRE(unknown_language.error().diagnostics().size() == 1);
+    CHECK(unknown_language.error().diagnostics().front().message ==
+          "implementation source has no supported CMake language: src/shader.metal");
+}

@@ -66,3 +66,13 @@ T006, T007, and T008.
   diff --check` (pass). A bootstrap configure was attempted but could not
   complete in this isolated worktree because its FetchContent dependencies are
   unavailable in the sandbox.
+
+- Date: 2026-08-09
+- Summary: Completed `find_package()` component keyword rejection, rejected
+  generator-reserved target names, rejected braced literal variables that
+  cannot survive Ninja build-file evaluation, and checked resolved
+  implementation source extensions against enabled CMake languages.
+- Verification: `clang++ -std=c++23 -Iinclude -fsyntax-only
+  src/validation/semantic_validator.cpp src/renderer/cmake_renderer.cpp && git
+  diff --check` (pass). The focused bootstrap build could not be configured in
+  this isolated worktree because FetchContent dependencies are unavailable.
