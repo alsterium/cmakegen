@@ -135,6 +135,9 @@ TEST_CASE("CLI resolves sources relative to the specification, not the output ro
                "generate"}, output, error) == 0);
     CHECK(std::filesystem::exists(output_root / "CMakeLists.txt"));
     CHECK_FALSE(std::filesystem::exists(fixture.path() / "spec/CMakeLists.txt"));
+    std::ifstream generated{output_root / "cmake/cmakegen.generated.cmake"};
+    const std::string contents{std::istreambuf_iterator<char>{generated}, std::istreambuf_iterator<char>{}};
+    CHECK(contents.find("../spec/src/main.cpp") != std::string::npos);
 }
 
 TEST_CASE("CLI graph escapes DOT strings and prints platform-union cycle components") {

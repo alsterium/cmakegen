@@ -128,13 +128,19 @@ struct ResolvedProject {
 };
 
 [[nodiscard]] Result<ResolvedProject> resolve_project_sources(const Project& project,
-                                                                const std::filesystem::path& root) {
+                                                                const std::filesystem::path& source_root,
+                                                                const std::filesystem::path& output_root) {
     ResolvedProject result;
     auto resolve = [&](const std::vector<SourceEntry>& entries,
                        std::vector<ResolvedSource>& destination) -> Result<void> {
-        auto sources = resolve_sources(root, entries);
+        auto sources = resolve_sources(source_root, entries);
         if (!sources) return std::unexpected{sources.error()};
         destination = std::move(*sources);
+        for (auto& source : destination) {
+            const auto source_path = std::filesystem::path{source.path};
+            const auto absolute_path = source_path.is_absolute() ? source_path : source_root / source_path;
+            source.path = std::filesystem::relative(absolute_path, output_root).lexically_normal().generic_string();
+        }
         return {};
     };
     for (const auto& [name, target] : project.targets) {
@@ -188,8 +194,9 @@ void print_graph_text(const TargetGraph& graph, bool include_external, std::ostr
     for (const auto& [target, unused] : graph.internal_adjacency)
         if (!visited.contains(target)) remaining.push_back(target);
     std::ranges::sort(remaining);
-    for (std::size_t index = 0; index < remaining.size(); ++index) {
-        std::set<std::string> ancestors; visit(remaining[index], {}, index + 1 == remaining.size(), ancestors);
+    for (const auto& target : remaining) {
+        if (visited.contains(target)) continue;
+        std::set<std::string> ancestors; visit(target, {}, true, ancestors);
     }
 }
 
@@ -250,7 +257,7 @@ int run_cli(const std::vector<std::string>& arguments, std::ostream& output, std
             // Sources are part of the specification and therefore are always
             // resolved relative to that specification.  --root only controls
             // where generated output and its ownership manifest are written.
-            auto result = resolve_project_sources(*project, spec.parent_path());
+            auto result = resolve_project_sources(*project, spec.parent_path(), root);
             if (!result) { print_diagnostics(result.error(), !options.no_color, error); return diagnostic_exit(result.error()); }
             resolved = std::move(*result);
             if (options.verbose) {
