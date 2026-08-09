@@ -33,6 +33,11 @@ struct SourceEntry {
 struct ResolvedSource {
     std::string path;
     SourceKind kind;
+    // Keep the declaration provenance while expanding a source entry. Semantic
+    // checks run after expansion, so this lets their diagnostics point back to
+    // a platform override (rather than the target's common sources list).
+    std::string diagnostic_path;
+    std::optional<SourceLocation> diagnostic_location;
 };
 
 struct LinkDependency {
@@ -40,6 +45,10 @@ struct LinkDependency {
 
     Kind kind;
     std::string name;
+    // Retain the parsed declaration so diagnostics produced from the effective
+    // dependency graph identify the exact dependency that closes a cycle.
+    std::string diagnostic_path;
+    std::optional<SourceLocation> diagnostic_location;
 };
 
 struct TargetOverride {
@@ -58,6 +67,8 @@ struct PlatformOverrides {
 
 struct Target {
     std::string name;
+    std::string diagnostic_path;
+    std::optional<SourceLocation> diagnostic_location;
     TargetType type;
     std::vector<SourceEntry> sources;
     ScopedValues<std::string> include_directories;

@@ -27,6 +27,7 @@ add_library(cmakegen_core STATIC
     "${CMAKE_CURRENT_LIST_DIR}/../src/domain/normalizer.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/../src/parser/parser.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/../src/resolver/source_resolver.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/../src/validation/semantic_validator.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/../src/version.cpp"
 )
 target_compile_features(cmakegen_core PUBLIC cxx_std_23)
@@ -50,6 +51,7 @@ if(CMAKEGEN_BOOTSTRAP_TESTS AND BUILD_TESTING)
         "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/normalizer_test.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/parser_test.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/source_resolver_test.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/semantic_validator_test.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/../tests/unit/version_test.cpp"
     )
     target_link_libraries(cmakegen_tests PRIVATE cmakegen_core Catch2::Catch2WithMain)

@@ -121,19 +121,19 @@ template <typename T, typename Transform>
     auto normalize_values = [&transform](const auto& values) {
         std::vector<T> normalized;
         normalized.reserve(values.size());
-        for (const auto& value : values) normalized.push_back(transform(value.value));
+        for (const auto& value : values) normalized.push_back(transform(value));
         return normalized;
     };
     return {normalize_values(raw.private_values), normalize_values(raw.public_values),
             normalize_values(raw.interface_values)};
 }
 
-[[nodiscard]] LinkDependency normalize_dependency(const std::string& value,
+[[nodiscard]] LinkDependency normalize_dependency(const RawValue<std::string>& value,
                                                   const RawSpec& raw) {
     const auto is_project_target = std::ranges::any_of(
-        raw.targets, [&value](const RawTarget& target) { return target.name == value; });
+        raw.targets, [&value](const RawTarget& target) { return target.name == value.value; });
     return {is_project_target ? LinkDependency::Kind::project_target : LinkDependency::Kind::imported_target,
-            value};
+            value.value, value.path, value.location};
 }
 
 [[nodiscard]] TargetOverride normalize_override(const RawTargetOverride& raw, const RawSpec& spec) {
@@ -141,26 +141,28 @@ template <typename T, typename Transform>
     result.sources.reserve(raw.sources.size());
     for (const auto& source : raw.sources) result.sources.push_back(normalize_source(source));
     result.include_directories = normalize_scoped<std::string>(
-        raw.include_directories, [](const std::string& value) { return normalize_path(value); });
-    result.definitions = normalize_scoped<std::string>(raw.definitions, [](const std::string& value) { return value; });
-    result.compile_options = normalize_scoped<std::string>(raw.compile_options, [](const std::string& value) { return value; });
+        raw.include_directories, [](const auto& value) { return normalize_path(value.value); });
+    result.definitions = normalize_scoped<std::string>(raw.definitions, [](const auto& value) { return value.value; });
+    result.compile_options = normalize_scoped<std::string>(raw.compile_options, [](const auto& value) { return value.value; });
     result.dependencies = normalize_scoped<LinkDependency>(
-        raw.dependencies, [&spec](const std::string& value) { return normalize_dependency(value, spec); });
+        raw.dependencies, [&spec](const auto& value) { return normalize_dependency(value, spec); });
     return result;
 }
 
 [[nodiscard]] Target normalize_target(const RawTarget& raw, const RawSpec& spec) {
     Target result;
     result.name = raw.name;
+    result.diagnostic_path = raw.path;
+    result.diagnostic_location = raw.location;
     result.type = normalize_target_type(raw.type.value);
     result.sources.reserve(raw.sources.size());
     for (const auto& source : raw.sources) result.sources.push_back(normalize_source(source));
     result.include_directories = normalize_scoped<std::string>(
-        raw.include_directories, [](const std::string& value) { return normalize_path(value); });
-    result.definitions = normalize_scoped<std::string>(raw.definitions, [](const std::string& value) { return value; });
-    result.compile_options = normalize_scoped<std::string>(raw.compile_options, [](const std::string& value) { return value; });
+        raw.include_directories, [](const auto& value) { return normalize_path(value.value); });
+    result.definitions = normalize_scoped<std::string>(raw.definitions, [](const auto& value) { return value.value; });
+    result.compile_options = normalize_scoped<std::string>(raw.compile_options, [](const auto& value) { return value.value; });
     result.dependencies = normalize_scoped<LinkDependency>(
-        raw.dependencies, [&spec](const std::string& value) { return normalize_dependency(value, spec); });
+        raw.dependencies, [&spec](const auto& value) { return normalize_dependency(value, spec); });
     if (raw.macos) result.platform.macos = normalize_override(*raw.macos, spec);
     if (raw.linux) result.platform.linux = normalize_override(*raw.linux, spec);
     if (raw.windows) result.platform.windows = normalize_override(*raw.windows, spec);

@@ -63,6 +63,8 @@ inline constexpr std::string_view invalid_value = "CMG1002";
 inline constexpr std::string_view unknown_target_type = "CMG1003";
 inline constexpr std::string_view unknown_key = "CMG1004";
 inline constexpr std::string_view filesystem_error = "CMG2001";
+inline constexpr std::string_view semantic_error = "CMG3001";
+inline constexpr std::string_view dependency_cycle = "CMG3002";
 
 } // namespace diagnostic_codes
 

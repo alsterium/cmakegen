@@ -81,6 +81,8 @@ targets:
     REQUIRE(app.dependencies.private_values.size() == 2);
     CHECK(app.dependencies.private_values[0].kind == LinkDependency::Kind::project_target);
     CHECK(app.dependencies.private_values[1].kind == LinkDependency::Kind::imported_target);
+    CHECK(app.dependencies.private_values[0].diagnostic_path == "targets.App.dependencies[0]");
+    CHECK(app.dependencies.private_values[0].diagnostic_location == SourceLocation{17, 9});
     CHECK(project.targets.at("Core").platform.linux.definitions.private_values == std::vector<std::string>{"LINUX"});
 }
 
