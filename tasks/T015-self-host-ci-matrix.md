@@ -30,3 +30,20 @@ T014.
 - Validate workflow syntax locally where tooling exists.
 - Record links/results for successful matrix runs in the execution record.
 - Deliberately exercise the stale-generation failure in a branch or fixture.
+
+## Execution record
+
+- 2026-08-09: Added `.github/workflows/self-host.yml`. The explicit matrix
+  runs the complete A–E self-host invariant on GCC/Linux, AppleClang/macOS,
+  and MSVC/Windows, with a second Clang/Linux job for compiler diversity.
+  The normal configuration receives the located stage-0 executable, so its
+  CTest run covers both bootstrap source drift and stage-binary equivalence.
+  The FetchContent cache is optional and keyed by OS, compiler, and
+  `cmake/dependencies.cmake`; every configure command works on a cold cache.
+- Verification: local workflow YAML structural parse passed. The T014 stage-0
+  and stage-1 binaries both reported `No changes.` against this exact source
+  tree; the source-drift and direct stage-binary-equivalence CMake scripts also
+  passed. Hosted matrix-run URLs are pending the PR workflow run. A deliberately
+  stale generated-file fixture is rejected by `generate --check`; both CI
+  checks then use `git diff --exit-code` to verify that they did not modify the
+  checkout.

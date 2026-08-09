@@ -1,0 +1,122 @@
+name: Self-host
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  self-host:
+    name: ${{ matrix.os }} / ${{ matrix.compiler }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The required platform coverage.
+          - os: ubuntu-latest
+            compiler: GCC
+            cc: gcc
+            cxx: g++
+          - os: macos-latest
+            compiler: AppleClang
+            cc: clang
+            cxx: clang++
+          - os: windows-latest
+            compiler: MSVC
+            cc: ''
+            cxx: ''
+          # A second Linux compiler catches implementation-dependent C++23
+          # and CMake behavior without multiplying the required OS matrix.
+          - os: ubuntu-latest
+            compiler: Clang
+            cc: clang
+            cxx: clang++
+
+    env:
+      # FetchContent is optional acceleration only: configuration creates this
+      # directory when it is empty or the cache is unavailable.
+      CMAKEGEN_FETCHCONTENT_DIR: ${{ runner.temp }}/cmakegen-fetchcontent
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore FetchContent downloads
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CMAKEGEN_FETCHCONTENT_DIR }}
+          key: cmakegen-fetchcontent-${{ runner.os }}-${{ matrix.compiler }}-${{ hashFiles('cmake/dependencies.cmake') }}
+          restore-keys: |
+            cmakegen-fetchcontent-${{ runner.os }}-${{ matrix.compiler }}-
+
+      - name: Report toolchain
+        shell: bash
+        run: |
+          cmake --version
+          if [ -n '${{ matrix.cxx }}' ]; then
+            '${{ matrix.cxx }}' --version
+          else
+            cl.exe
+          fi
+
+      - name: Select compiler
+        if: ${{ matrix.cxx != '' }}
+        shell: bash
+        run: |
+          printf 'CC=%s\n' '${{ matrix.cc }}' >> "$GITHUB_ENV"
+          printf 'CXX=%s\n' '${{ matrix.cxx }}' >> "$GITHUB_ENV"
+
+      - name: A. Configure bootstrap generator
+        shell: bash
+        run: >-
+          cmake -S bootstrap -B build/bootstrap
+          -DFETCHCONTENT_BASE_DIR="$CMAKEGEN_FETCHCONTENT_DIR"
+
+      - name: A. Build bootstrap generator
+        shell: bash
+        run: cmake --build build/bootstrap --config Debug --parallel
+
+      - name: Locate bootstrap generator
+        id: bootstrap
+        shell: bash
+        run: |
+          executable="$(find build/bootstrap -type f \( -name cmakegen -o -name cmakegen.exe \) | head -n 1)"
+          test -n "$executable"
+          printf 'path=%s\n' "$PWD/$executable" >> "$GITHUB_OUTPUT"
+
+      - name: B. Check generated files with bootstrap generator
+        shell: bash
+        run: |
+          '${{ steps.bootstrap.outputs.path }}' --project project.yml --root "$PWD" generate --check --no-color
+          git diff --exit-code
+
+      - name: C. Configure normal project
+        shell: bash
+        run: >-
+          cmake --preset debug
+          -DCMAKEGEN_BOOTSTRAP_BINARY="${{ steps.bootstrap.outputs.path }}"
+          -DFETCHCONTENT_BASE_DIR="$CMAKEGEN_FETCHCONTENT_DIR"
+
+      - name: C. Build normal project
+        shell: bash
+        run: cmake --build --preset debug --config Debug --parallel
+
+      - name: Locate normal generator
+        id: normal
+        shell: bash
+        run: |
+          executable="$(find build/debug -type f \( -name cmakegen -o -name cmakegen.exe \) | head -n 1)"
+          test -n "$executable"
+          printf 'path=%s\n' "$PWD/$executable" >> "$GITHUB_OUTPUT"
+
+      - name: D. Run tests and self-host invariants
+        shell: bash
+        run: ctest --test-dir build/debug --build-config Debug --output-on-failure
+
+      - name: E. Check generated files with normal generator
+        shell: bash
+        run: |
+          '${{ steps.normal.outputs.path }}' --project project.yml --root "$PWD" generate --check --no-color
+          git diff --exit-code
