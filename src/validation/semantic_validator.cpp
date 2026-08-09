@@ -59,6 +59,41 @@ namespace {
     return true;
 }
 
+// CMakePresets.json represents the lower endpoint as uint32 JSON fields. Keep
+// validation aligned with the presets renderer so a valid specification never
+// fails later while rendering. Leading zeroes are deliberately ignored here.
+[[nodiscard]] bool is_representable_preset_minimum_version(std::string_view version) {
+    constexpr std::string_view uint32_max = "4294967295";
+    std::string_view components[4];
+    std::size_t count = 0;
+    while (count < 4) {
+        const auto separator = version.find('.');
+        components[count++] = version.substr(0, separator);
+        if (separator == std::string_view::npos) break;
+        version.remove_prefix(separator + 1);
+    }
+
+    for (std::size_t index = 0; index < count; ++index) {
+        const auto first_non_zero = components[index].find_first_not_of('0');
+        const auto significant = first_non_zero == std::string_view::npos
+                                     ? std::string_view{"0"}
+                                     : components[index].substr(first_non_zero);
+        if (significant.size() > uint32_max.size() ||
+            (significant.size() == uint32_max.size() && significant > uint32_max)) return false;
+
+        // A fourth component is rounded up into patch by the renderer. There
+        // is no faithful Presets representation for UINT32_MAX.<non-zero>.
+        if (index == 3 && significant != "0") {
+            const auto patch_first_non_zero = components[2].find_first_not_of('0');
+            const auto patch = patch_first_non_zero == std::string_view::npos
+                                   ? std::string_view{"0"}
+                                   : components[2].substr(patch_first_non_zero);
+            if (patch == uint32_max) return false;
+        }
+    }
+    return true;
+}
+
 // project(VERSION) accepts a numeric version, while find_package() additionally
 // accepts a closed or half-open numeric range.  Keep these grammars separate:
 // accepting a range for project(VERSION), or rejecting it for find_package(),
@@ -88,12 +123,14 @@ namespace {
 
     const auto separator = version.find("...");
     if (separator == std::string_view::npos)
-        return has_major_and_minor(version) && version_at_least(version, "3.28");
+        return has_major_and_minor(version) && is_representable_preset_minimum_version(version) &&
+               version_at_least(version, "3.28");
 
     const auto minimum = version.substr(0, separator);
     const auto policy_maximum = version.substr(separator + 3);
     return has_major_and_minor(minimum) && has_major_and_minor(policy_maximum) &&
-           version_at_least(minimum, "3.28") && version_at_least(policy_maximum, minimum);
+           is_representable_preset_minimum_version(minimum) && version_at_least(minimum, "3.28") &&
+           version_at_least(policy_maximum, minimum);
 }
 
 [[nodiscard]] bool is_supported_c_standard(std::string_view standard) {

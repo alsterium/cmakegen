@@ -632,3 +632,23 @@ presets:
     CHECK(diagnostics[3].path == "targets.app.includeDirectories");
     CHECK(diagnostics[4].path == "targets.app.platform.macos");
 }
+
+TEST_CASE("empty preset cache variable names are rejected") {
+    const auto result = parse_raw_spec(R"(
+schemaVersion: 1
+name: invalid
+presets:
+  debug:
+    buildType: Debug
+    cacheVariables:
+      "": ON
+targets:
+  app:
+    type: executable
+)");
+
+    REQUIRE_FALSE(result);
+    const auto& diagnostic = result.error().diagnostics().front();
+    CHECK(diagnostic.path == "presets.debug.cacheVariables");
+    CHECK(diagnostic.message == "cache variable names must not be empty");
+}

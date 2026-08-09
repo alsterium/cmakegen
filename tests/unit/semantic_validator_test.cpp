@@ -368,6 +368,18 @@ TEST_CASE("semantic validation enforces the CMake 3.28 baseline and ordered poli
     REQUIRE(validate_project(project));
 }
 
+TEST_CASE("semantic validation keeps CMake minimum versions representable by presets") {
+    auto project = project_with_targets({target("Core")});
+    project.cmake.minimum_version = "00000000003.00000000028.00000000000.00000000001";
+    REQUIRE(validate_project(project));
+
+    project.cmake.minimum_version = "3.4294967296";
+    REQUIRE_FALSE(validate_project(project));
+
+    project.cmake.minimum_version = "3.28.4294967295.1";
+    REQUIRE_FALSE(validate_project(project));
+}
+
 TEST_CASE("semantic validation requires implementation sources and rejects reserved target names") {
     auto headers_only = target("Core");
     ResolvedSourcesByTarget resolved{{"Core", {{{"include/core.hpp", SourceKind::header}}, {}, {}, {}}}};

@@ -522,6 +522,11 @@ Result<RawSpec> parse_raw_spec(std::string_view yaml) {
                             continue;
                         }
                         const auto variable_name = variable.first.Scalar();
+                        if (variable_name.empty()) {
+                            add_invalid(diagnostics, preset_path + ".cacheVariables", variable.first,
+                                        "cache variable names must not be empty");
+                            continue;
+                        }
                         const auto variable_path = preset_path + ".cacheVariables." + variable_name;
                         auto value = parse_string(variable.second, variable_path, diagnostics);
                         if (!value) continue;
