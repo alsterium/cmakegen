@@ -52,3 +52,9 @@ T006 and T007.
 - Review verification: `cmake -S bootstrap -B build/bootstrap && cmake --build
   build/bootstrap --parallel 2 && ctest --test-dir build/bootstrap
   --output-on-failure && git diff --check` (pass; 77/77 tests).
+- Handoff (2026-08-09): Interface-library diagnostics for non-dependency
+  scoped values still identify the scope but do not retain the exact YAML
+  entry location. Completing this requires replacing `ScopedValues<string>`
+  with a provenance-carrying model across normalization, rendering, and tests;
+  defer it to a dedicated compatibility-reviewed follow-up rather than making
+  that cross-cutting model change during the stacked review-fix cycle.
