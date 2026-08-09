@@ -198,6 +198,23 @@ presets:
     CHECK(preset_contents.find("C:/build/example") != std::string::npos);
 }
 
+TEST_CASE("CLI rebases through an output-root symlink using its resolved base") {
+    FixtureDirectory fixture;
+    fixture.file("spec/project.yml", valid_project);
+    fixture.file("spec/src/main.cpp", "int main() {}\n");
+    fixture.file("spec/src/core.cpp", "void core() {}\n");
+    std::filesystem::create_directories(fixture.path() / "real/out");
+    std::error_code symlink_error;
+    std::filesystem::create_directory_symlink("real/out", fixture.path() / "link", symlink_error);
+    if (symlink_error) SKIP("directory symlinks are unavailable on this platform");
+    std::string output, error;
+    CHECK(run({"--project", (fixture.path() / "spec/project.yml").string(), "--root",
+               (fixture.path() / "link").string(), "generate"}, output, error) == 0);
+    std::ifstream generated{fixture.path() / "real/out/cmake/cmakegen.generated.cmake"};
+    const std::string contents{std::istreambuf_iterator<char>{generated}, std::istreambuf_iterator<char>{}};
+    CHECK(contents.find("../../spec/src/main.cpp") != std::string::npos);
+}
+
 TEST_CASE("CLI graph escapes DOT strings and prints platform-union cycle components") {
     FixtureDirectory fixture;
     fixture.file("project.yml", R"(schemaVersion: 1

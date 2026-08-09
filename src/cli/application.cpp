@@ -139,12 +139,29 @@ struct ResolvedProject {
         (value.size() >= 3 && std::isalpha(static_cast<unsigned char>(value[0])) &&
          value[1] == ':' && (value[2] == '/' || value[2] == '\\')) ||
         value.starts_with("//") || value.starts_with("\\\\");
-    if (foreign_windows_absolute) return value;
-    const auto absolute = (declared.is_absolute() ? declared : source_root / declared).lexically_normal();
+    // A root-directory-only POSIX path is not considered absolute by the
+    // Windows std::filesystem implementation, but remains absolute in the
+    // cross-platform project model.
+    if (foreign_windows_absolute || value.starts_with('/')) return value;
+    std::error_code error;
+    const auto canonical_base = [&](const std::filesystem::path& base) {
+        const auto canonical = std::filesystem::weakly_canonical(base, error);
+        if (error) {
+            error.clear();
+            return base.lexically_normal();
+        }
+        return canonical;
+    };
+    // Canonicalize only the directory bases. The final declared component is
+    // deliberately appended lexically so source-file symlinks retain their
+    // user-visible spelling and CMake language suffix.
+    const auto canonical_source_root = canonical_base(source_root);
+    const auto canonical_output_root = canonical_base(output_root);
+    const auto absolute = (declared.is_absolute() ? declared : canonical_source_root / declared).lexically_normal();
     // Unlike std::filesystem::relative(), lexical rebasing never resolves
     // source symlinks.  CMake must see the declared spelling so suffix-based
     // language detection remains consistent with the project specification.
-    const auto relative = absolute.lexically_relative(output_root);
+    const auto relative = absolute.lexically_relative(canonical_output_root);
     return relative.empty() ? absolute.generic_string() : relative.generic_string();
 }
 
