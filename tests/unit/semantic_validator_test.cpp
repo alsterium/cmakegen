@@ -106,6 +106,7 @@ TEST_CASE("semantic validation detects cycles in a common or single platform gra
         REQUIRE(result.error().diagnostics().size() == 1);
         CHECK(result.error().diagnostics().front().code == diagnostic_codes::dependency_cycle);
         CHECK(result.error().diagnostics().front().message == "internal dependency cycle: App -> Core -> App");
+        CHECK(result.error().diagnostics().front().path == "targets.Core.platform.macos.dependencies");
     }
 }
 

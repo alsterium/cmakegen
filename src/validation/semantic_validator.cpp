@@ -140,7 +140,8 @@ void classify_and_deduplicate(std::vector<LinkDependency>& dependencies, const P
 
 void detect_dependency_cycles(DiagnosticSet& diagnostics,
                               const std::map<std::string, std::vector<std::string>>& adjacency,
-                              std::set<std::string>& reported_cycles) {
+                              std::set<std::string>& reported_cycles,
+                              const std::optional<std::string_view> platform = std::nullopt) {
     std::map<std::string, int> state;
     std::vector<std::string> stack;
     std::function<void(const std::string&)> visit = [&](const std::string& node) {
@@ -160,7 +161,10 @@ void detect_dependency_cycles(DiagnosticSet& diagnostics,
                 if (reported_cycles.insert(cycle).second) {
                     diagnostics.add({std::string{diagnostic_codes::dependency_cycle},
                                      DiagnosticSeverity::error, "internal dependency cycle: " + cycle,
-                                     target_path(node) + ".dependencies", std::nullopt});
+                                     target_path(node) +
+                                         (platform ? ".platform." + std::string(*platform) + ".dependencies"
+                                                   : ".dependencies"),
+                                     std::nullopt});
                 }
             }
         }
@@ -213,6 +217,7 @@ Result<TargetGraph> validate_project(const Project& project,
     // platform graph independently so macOS-only and Windows-only edges cannot
     // invent a cycle that no build can realize.
     std::set<std::string> reported_cycles;
+    constexpr std::array<std::string_view, 3> platform_names{"macos", "linux", "windows"};
     for (const auto platform_index : std::array<std::optional<std::size_t>, 4>{
              std::nullopt, 0, 1, 2}) {
         std::map<std::string, std::vector<std::string>> effective_adjacency;
@@ -230,7 +235,8 @@ Result<TargetGraph> validate_project(const Project& project,
                 }
             }
         }
-        detect_dependency_cycles(diagnostics, effective_adjacency, reported_cycles);
+        detect_dependency_cycles(diagnostics, effective_adjacency, reported_cycles,
+                                 platform_index ? std::optional{platform_names[*platform_index]} : std::nullopt);
     }
 
     if (diagnostics.has_errors()) return std::unexpected{std::move(diagnostics)};
