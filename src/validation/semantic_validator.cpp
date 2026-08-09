@@ -314,7 +314,8 @@ void validate_sources(DiagnosticSet& diagnostics, const Target& target, const st
 }
 
 [[nodiscard]] bool is_link_mode_keyword(std::string_view value) {
-    return value == "debug" || value == "optimized" || value == "general";
+    return value == "debug" || value == "optimized" || value == "general" ||
+           value == "PUBLIC" || value == "PRIVATE" || value == "INTERFACE";
 }
 
 void validate_dependencies(DiagnosticSet& diagnostics, const ScopedValues<LinkDependency>& dependencies,

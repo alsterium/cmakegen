@@ -416,6 +416,13 @@ TEST_CASE("semantic validation rejects CMake command keywords in model values") 
     REQUIRE_FALSE(reserved);
     CHECK(reserved.error().diagnostics().front().message ==
           "target name is reserved by CMake: edit_cache");
+
+    auto scoped_keyword = target("ScopedKeyword");
+    add_dependency(scoped_keyword, "PUBLIC");
+    const auto keyword_result = validate_project(project_with_targets({scoped_keyword}));
+    REQUIRE_FALSE(keyword_result);
+    CHECK(keyword_result.error().diagnostics().front().path ==
+          "targets.ScopedKeyword.dependencies.private[0]");
 }
 
 TEST_CASE("semantic validation rejects all find_package option keywords as components") {

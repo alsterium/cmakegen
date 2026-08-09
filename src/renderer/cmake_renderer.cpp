@@ -91,7 +91,13 @@ void render_sources(Text& text, const Target& target, const std::vector<Resolved
     if (sources.empty()) return;
     text.line("target_sources(" + target.name);
     text.line("  " + std::string{target.type == TargetType::interface_library ? "INTERFACE" : "PRIVATE"});
-    for (const auto& source : sources) text.line("    " + cmake_argument(source.path));
+    for (const auto& source : sources) {
+        // Quoting does not stop target_sources() from recognizing FILE_SET as
+        // syntax. A harmless explicit relative prefix keeps a root-level file
+        // path an ordinary source argument.
+        const auto path = source.path == "FILE_SET" ? "./FILE_SET" : source.path;
+        text.line("    " + cmake_argument(path));
+    }
     text.line(")");
 }
 

@@ -64,6 +64,17 @@ include("cmake/custom.cmake")
 )");
 }
 
+TEST_CASE("CMake renderer disambiguates FILE_SET-shaped root source paths") {
+    Target app{"App", TargetType::executable};
+    const auto project = project_with({app});
+    RenderedSourcesByTarget sources;
+    sources["App"].common = {{"FILE_SET", SourceKind::header},
+                               {"main.cpp", SourceKind::source}};
+
+    const auto rendered = render_cmake(project, graph_for(project), sources);
+    CHECK(rendered.generated_cmake.find("\"./FILE_SET\"") != std::string::npos);
+}
+
 TEST_CASE("CMake renderer emits sorted sources, scoped settings, features, and native platform conditions") {
     Target core{"Core", TargetType::static_library};
     core.include_directories.public_values = {"include"};
