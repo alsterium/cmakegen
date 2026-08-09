@@ -57,21 +57,25 @@ targets:
   "buildPresets": [
     {
       "name": "debug",
-      "configurePreset": "debug"
+      "configurePreset": "debug",
+      "configuration": "Debug"
     },
     {
       "name": "release",
-      "configurePreset": "release"
+      "configurePreset": "release",
+      "configuration": "Release"
     }
   ],
   "testPresets": [
     {
       "name": "debug",
-      "configurePreset": "debug"
+      "configurePreset": "debug",
+      "configuration": "Debug"
     },
     {
       "name": "release",
-      "configurePreset": "release"
+      "configurePreset": "release",
+      "configuration": "Release"
     }
   ]
 }
@@ -163,6 +167,8 @@ TEST_CASE("presets compatibility mapping requires the documented CMake baseline"
     CHECK(preset_schema_version_for("3.28") == 8);
     CHECK(preset_schema_version_for("4.0.1") == 8);
     CHECK(cmake_version_components("4.0.1") == std::array<std::uint32_t, 3>{4, 0, 1});
+    CHECK(cmake_version_components("3.28.0.1") == std::array<std::uint32_t, 3>{3, 28, 0});
+    CHECK(cmake_version_components("3.28...3.31") == std::array<std::uint32_t, 3>{3, 28, 0});
     CHECK_THROWS_AS(preset_schema_version_for("3.27"), std::invalid_argument);
     CHECK_THROWS_AS(preset_schema_version_for("3"), std::invalid_argument);
     CHECK_THROWS_AS(preset_schema_version_for("not-a-version"), std::invalid_argument);

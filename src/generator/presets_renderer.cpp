@@ -18,12 +18,6 @@ using Json = nlohmann::ordered_json;
     return path.size() >= 3 && std::isalpha(static_cast<unsigned char>(path[0])) && path[1] == ':' && path[2] == '/';
 }
 
-[[nodiscard]] bool is_multi_config_generator(const std::optional<std::string>& generator) {
-    if (!generator) return false;
-    return *generator == "Ninja Multi-Config" || *generator == "Xcode" ||
-           generator->starts_with("Visual Studio ");
-}
-
 [[nodiscard]] std::string preset_binary_directory(const Preset& preset) {
     if (is_absolute_or_macro_path(preset.binary_dir)) return preset.binary_dir;
     return "${sourceDir}/" + preset.binary_dir;
@@ -47,7 +41,10 @@ using Json = nlohmann::ordered_json;
 
 [[nodiscard]] Json render_named_preset(const Preset& preset) {
     Json result = {{"name", preset.name}, {"configurePreset", preset.name}};
-    if (is_multi_config_generator(preset.generator)) result["configuration"] = preset.build_type;
+    // An omitted generator uses regular discovery, which may select Visual
+    // Studio, Xcode, or Ninja Multi-Config.  configuration is harmless for
+    // single-config generators and required for those multi-config cases.
+    result["configuration"] = preset.build_type;
     return result;
 }
 

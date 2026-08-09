@@ -22,17 +22,25 @@ struct Version {
 }
 
 [[nodiscard]] Version parse_version(std::string_view value) {
+    // CMake policy ranges use the lower endpoint to select the required
+    // executable version.  The upper endpoint only controls policy settings.
+    if (const auto range = value.find("..."); range != std::string_view::npos) {
+        value = value.substr(0, range);
+    }
     const auto first_dot = value.find('.');
     if (first_dot == std::string_view::npos)
         throw std::invalid_argument("CMake minimum version must use major.minor[.patch] form");
 
     const auto second_dot = value.find('.', first_dot + 1);
-    if (second_dot != std::string_view::npos && value.find('.', second_dot + 1) != std::string_view::npos)
+    const auto third_dot = second_dot == std::string_view::npos ? std::string_view::npos : value.find('.', second_dot + 1);
+    if (third_dot != std::string_view::npos && value.find('.', third_dot + 1) != std::string_view::npos)
         throw std::invalid_argument("CMake minimum version has too many components");
 
     const auto major = parse_component(value.substr(0, first_dot));
     const auto minor = parse_component(value.substr(first_dot + 1, second_dot - first_dot - 1));
-    const auto patch = second_dot == std::string_view::npos ? 0 : parse_component(value.substr(second_dot + 1));
+    const auto patch = second_dot == std::string_view::npos ? 0 :
+        parse_component(value.substr(second_dot + 1, third_dot == std::string_view::npos ? std::string_view::npos : third_dot - second_dot - 1));
+    if (third_dot != std::string_view::npos) (void)parse_component(value.substr(third_dot + 1));
     return {major, minor, patch};
 }
 
