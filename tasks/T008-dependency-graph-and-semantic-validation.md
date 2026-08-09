@@ -31,3 +31,18 @@ T006 and T007.
 
 - Run semantic-validator and graph unit tests, including multi-node cycles and
   acyclic diamonds.
+
+## Execution record
+
+- Date: 2026-08-09
+- Summary: Added semantic validation and deterministic target graph data. The
+  validator retains imported dependencies, recognizes internal dependencies by
+  project target name, detects stable concrete cycle paths, and rejects invalid
+  logical names, source paths, interface-library scopes, and implementation
+  sources (including resolved sources).
+- Verification: `cmake -S bootstrap -B build/bootstrap && cmake --build
+  build/bootstrap --parallel 2 && ctest --test-dir build/bootstrap
+  --output-on-failure && git diff --check` (pass; 72/72 tests).
+- Generated files: unchanged; normal generated CMake does not exist until T014.
+- Follow-ups: T009 and T012 should consume `validate_project` before rendering
+  or writing generated output.
