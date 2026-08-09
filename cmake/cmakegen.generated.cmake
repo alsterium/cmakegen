@@ -4,12 +4,12 @@
 add_executable(cmakegen)
 target_sources(cmakegen
   PRIVATE
-    src/main.cpp
+    "src/main.cpp"
 )
 target_link_libraries(cmakegen
   PRIVATE
-    cmakegen_core
-    CLI11::CLI11
+    "cmakegen_core"
+    "CLI11::CLI11"
 )
 target_compile_features(cmakegen
   PRIVATE
@@ -19,41 +19,41 @@ target_compile_features(cmakegen
 add_library(cmakegen_core STATIC)
 target_sources(cmakegen_core
   PRIVATE
-    include/cmakegen/cli/application.hpp
-    include/cmakegen/diagnostics/diagnostic.hpp
-    include/cmakegen/domain/dump.hpp
-    include/cmakegen/domain/model.hpp
-    include/cmakegen/domain/normalizer.hpp
-    include/cmakegen/fs/safe_writer.hpp
-    include/cmakegen/generator/presets_compatibility.hpp
-    include/cmakegen/generator/presets_renderer.hpp
-    include/cmakegen/parser/parser.hpp
-    include/cmakegen/parser/raw_spec.hpp
-    include/cmakegen/renderer/cmake_renderer.hpp
-    include/cmakegen/resolver/source_resolver.hpp
-    include/cmakegen/validation/semantic_validator.hpp
-    include/cmakegen/version.hpp
-    src/cli/application.cpp
-    src/diagnostics/diagnostic.cpp
-    src/domain/dump.cpp
-    src/domain/normalizer.cpp
-    src/fs/safe_writer.cpp
-    src/generator/presets_compatibility.cpp
-    src/generator/presets_renderer.cpp
-    src/parser/parser.cpp
-    src/renderer/cmake_renderer.cpp
-    src/resolver/source_resolver.cpp
-    src/validation/semantic_validator.cpp
-    src/version.cpp
+    "include/cmakegen/cli/application.hpp"
+    "include/cmakegen/diagnostics/diagnostic.hpp"
+    "include/cmakegen/domain/dump.hpp"
+    "include/cmakegen/domain/model.hpp"
+    "include/cmakegen/domain/normalizer.hpp"
+    "include/cmakegen/fs/safe_writer.hpp"
+    "include/cmakegen/generator/presets_compatibility.hpp"
+    "include/cmakegen/generator/presets_renderer.hpp"
+    "include/cmakegen/parser/parser.hpp"
+    "include/cmakegen/parser/raw_spec.hpp"
+    "include/cmakegen/renderer/cmake_renderer.hpp"
+    "include/cmakegen/resolver/source_resolver.hpp"
+    "include/cmakegen/validation/semantic_validator.hpp"
+    "include/cmakegen/version.hpp"
+    "src/cli/application.cpp"
+    "src/diagnostics/diagnostic.cpp"
+    "src/domain/dump.cpp"
+    "src/domain/normalizer.cpp"
+    "src/fs/safe_writer.cpp"
+    "src/generator/presets_compatibility.cpp"
+    "src/generator/presets_renderer.cpp"
+    "src/parser/parser.cpp"
+    "src/renderer/cmake_renderer.cpp"
+    "src/resolver/source_resolver.cpp"
+    "src/validation/semantic_validator.cpp"
+    "src/version.cpp"
 )
 target_include_directories(cmakegen_core
   PUBLIC
-    include
+    "include"
 )
 target_link_libraries(cmakegen_core
   PUBLIC
-    yaml-cpp::yaml-cpp
-    nlohmann_json::nlohmann_json
+    "yaml-cpp::yaml-cpp"
+    "nlohmann_json::nlohmann_json"
 )
 target_compile_features(cmakegen_core
   PUBLIC
@@ -63,22 +63,22 @@ target_compile_features(cmakegen_core
 add_executable(cmakegen_tests)
 target_sources(cmakegen_tests
   PRIVATE
-    tests/integration/generator_integration_test.cpp
-    tests/unit/cli_application_test.cpp
-    tests/unit/cmake_renderer_test.cpp
-    tests/unit/diagnostic_test.cpp
-    tests/unit/normalizer_test.cpp
-    tests/unit/parser_test.cpp
-    tests/unit/presets_renderer_test.cpp
-    tests/unit/safe_writer_test.cpp
-    tests/unit/semantic_validator_test.cpp
-    tests/unit/source_resolver_test.cpp
-    tests/unit/version_test.cpp
+    "tests/integration/generator_integration_test.cpp"
+    "tests/unit/cli_application_test.cpp"
+    "tests/unit/cmake_renderer_test.cpp"
+    "tests/unit/diagnostic_test.cpp"
+    "tests/unit/normalizer_test.cpp"
+    "tests/unit/parser_test.cpp"
+    "tests/unit/presets_renderer_test.cpp"
+    "tests/unit/safe_writer_test.cpp"
+    "tests/unit/semantic_validator_test.cpp"
+    "tests/unit/source_resolver_test.cpp"
+    "tests/unit/version_test.cpp"
 )
 target_link_libraries(cmakegen_tests
   PRIVATE
-    cmakegen_core
-    Catch2::Catch2WithMain
+    "cmakegen_core"
+    "Catch2::Catch2WithMain"
 )
 target_compile_features(cmakegen_tests
   PRIVATE
