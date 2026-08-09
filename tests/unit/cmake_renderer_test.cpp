@@ -55,10 +55,10 @@ set(CMAKE_C_EXTENSIONS OFF)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(cmake/dependencies.cmake OPTIONAL)
-find_package(fmt 11 REQUIRED)
+find_package("fmt" 11 REQUIRED)
 
 include(cmake/cmakegen.generated.cmake)
-include(cmake/custom.cmake)
+include("cmake/custom.cmake")
 )");
 }
 
@@ -88,27 +88,27 @@ TEST_CASE("CMake renderer emits sorted sources, scoped settings, features, and n
 add_library(Core STATIC)
 target_sources(Core
   PRIVATE
-    include/core.hpp
-    src/a.cpp
-    src/z.cpp
+    "include/core.hpp"
+    "src/a.cpp"
+    "src/z.cpp"
 )
 target_include_directories(Core
   PUBLIC
-    include
+    "include"
   PRIVATE
-    src
+    "src"
 )
 target_compile_definitions(Core
   PRIVATE
-    CORE_INTERNAL=1
+    "CORE_INTERNAL=1"
 )
 target_compile_options(Core
   PRIVATE
-    -Wall
+    "-Wall"
 )
 target_link_libraries(Core
   PUBLIC
-    fmt::fmt
+    "fmt::fmt"
 )
 target_compile_features(Core
   PUBLIC
@@ -118,24 +118,24 @@ target_compile_features(Core
 if(APPLE)
   target_compile_definitions(Core
     PRIVATE
-      CORE_MACOS=1
+      "CORE_MACOS=1"
   )
 endif()
 if(UNIX AND NOT APPLE)
   target_link_libraries(Core
     PRIVATE
-      Threads::Threads
+      "Threads::Threads"
   )
 endif()
 
 add_library(Headers INTERFACE)
 target_sources(Headers
   INTERFACE
-    include/header.hpp
+    "include/header.hpp"
 )
 target_include_directories(Headers
   INTERFACE
-    include
+    "include"
 )
 target_compile_features(Headers
   INTERFACE
@@ -143,6 +143,26 @@ target_compile_features(Headers
     cxx_std_23
 )
 )");
+}
+
+TEST_CASE("CMake renderer encodes dynamic values as literal single CMake arguments") {
+    Target app{"App", TargetType::executable};
+    app.include_directories.private_values = {"directory with spaces;and-list\\part\"quote"};
+    app.definitions.private_values = {"MESSAGE=one;two words"};
+    app.compile_options.private_values = {"-DVALUE=one;two words"};
+    app.dependencies.private_values = {{LinkDependency::Kind::imported_target, "Package::target;extra value"}};
+    auto project = project_with({app});
+    project.cmake.include_files = {"cmake/with spaces;and-list.cmake"};
+    RenderedSourcesByTarget sources;
+    sources["App"].common = {{"source dir/file;part.cpp", SourceKind::source}};
+
+    const auto rendered = render_cmake(project, graph_for(project), sources);
+    CHECK(rendered.root_cmake_lists.find("include(\"cmake/with spaces\\;and-list.cmake\")") != std::string::npos);
+    CHECK(rendered.generated_cmake.find("\"source dir/file\\;part.cpp\"") != std::string::npos);
+    CHECK(rendered.generated_cmake.find("\"directory with spaces\\;and-list\\\\part\\\"quote\"") != std::string::npos);
+    CHECK(rendered.generated_cmake.find("\"MESSAGE=one\\;two words\"") != std::string::npos);
+    CHECK(rendered.generated_cmake.find("\"-DVALUE=one\\;two words\"") != std::string::npos);
+    CHECK(rendered.generated_cmake.find("\"Package::target\\;extra value\"") != std::string::npos);
 }
 
 TEST_CASE("CMake renderer is byte-stable and omits empty commands") {

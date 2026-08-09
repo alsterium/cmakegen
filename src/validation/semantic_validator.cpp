@@ -17,6 +17,24 @@ namespace {
     });
 }
 
+[[nodiscard]] bool is_valid_cmake_version(std::string_view version) {
+    if (version.empty()) return false;
+
+    std::size_t components = 1;
+    bool expect_digit = true;
+    for (const auto character : version) {
+        if (std::isdigit(static_cast<unsigned char>(character))) {
+            expect_digit = false;
+        } else if (character == '.' && !expect_digit && components < 4) {
+            ++components;
+            expect_digit = true;
+        } else {
+            return false;
+        }
+    }
+    return !expect_digit;
+}
+
 [[nodiscard]] std::string target_path(const std::string& name) {
     return "targets." + name;
 }
@@ -283,6 +301,16 @@ Result<TargetGraph> validate_project(const Project& project,
 
     if (!is_valid_logical_name(project.name)) {
         add_semantic_error(diagnostics, "name", "project name contains unsupported characters");
+    }
+    if (project.version && !is_valid_cmake_version(*project.version)) {
+        add_semantic_error(diagnostics, "version",
+                           "project version must be one to four non-negative integer components");
+    }
+    for (const auto& [key, package] : project.packages) {
+        if (package.version && !is_valid_cmake_version(*package.version)) {
+            add_semantic_error(diagnostics, "packages." + key + ".version",
+                               "package version must be one to four non-negative integer components");
+        }
     }
 
     std::set<std::string> logical_names;

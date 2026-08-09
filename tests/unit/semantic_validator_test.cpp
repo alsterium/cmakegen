@@ -299,3 +299,26 @@ TEST_CASE("semantic validation diagnoses malformed manually constructed logical 
     CHECK(diagnostics[2].path == "targets.not/a-target");
     CHECK(diagnostics[3].path == "targets.not/a-target.sources[0]");
 }
+
+TEST_CASE("semantic validation rejects versions that project and find_package cannot accept") {
+    auto project = project_with_targets({target("Core")});
+    project.version = "1.2.3.4.5";
+    project.packages.emplace("bad-prerelease", Package{"Bad", "2.0-rc1", true, {}});
+    project.packages.emplace("bad-empty-component", Package{"Empty", "1..2", true, {}});
+
+    const auto result = validate_project(project);
+    REQUIRE_FALSE(result);
+    const auto& diagnostics = result.error().diagnostics();
+    REQUIRE(diagnostics.size() == 3);
+    CHECK(diagnostics[0].path == "packages.bad-empty-component.version");
+    CHECK(diagnostics[1].path == "packages.bad-prerelease.version");
+    CHECK(diagnostics[2].path == "version");
+}
+
+TEST_CASE("semantic validation accepts CMake numeric versions with up to four components") {
+    auto project = project_with_targets({target("Core")});
+    project.version = "0.1.2.3";
+    project.packages.emplace("fmt", Package{"fmt", "11", true, {}});
+
+    REQUIRE(validate_project(project));
+}
