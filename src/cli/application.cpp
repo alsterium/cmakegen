@@ -210,7 +210,8 @@ void rebase_render_paths(Project& project, const std::filesystem::path& source_r
         // Only sourceDir establishes a known absolute base. Other preset
         // macros can expand to relative text and must retain spec-relative
         // rebasing when --root differs from the specification directory.
-        const bool macro_root = preset.binary_dir.starts_with("${sourceDir}");
+        const bool macro_root = preset.binary_dir.starts_with("${sourceDir}") ||
+                                preset.binary_dir.starts_with("${sourceParentDir}");
         if (!macro_root)
             preset.binary_dir = rebase_project_path(preset.binary_dir, source_root, output_root);
     }
