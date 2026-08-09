@@ -68,8 +68,14 @@ namespace {
 
     const auto minimum = version.substr(0, separator);
     auto maximum = version.substr(separator + 3);
-    if (maximum.starts_with('<')) maximum.remove_prefix(1);
-    return is_valid_cmake_version(minimum) && is_valid_cmake_version(maximum);
+    const bool exclusive_upper_bound = maximum.starts_with('<');
+    if (exclusive_upper_bound) maximum.remove_prefix(1);
+    if (!is_valid_cmake_version(minimum) || !is_valid_cmake_version(maximum)) return false;
+
+    // CMake rejects backwards ranges and an exclusive range whose endpoints
+    // coincide.  A closed range with equal endpoints is still meaningful.
+    return exclusive_upper_bound ? !version_at_least(minimum, maximum)
+                                 : version_at_least(maximum, minimum);
 }
 
 // cmake_minimum_required() requires at least a major and minor component, and
@@ -213,6 +219,70 @@ void validate_sources(DiagnosticSet& diagnostics, const Target& target, const st
         add_semantic_error(diagnostics, path + ".sources",
                            "non-interface targets require at least one implementation source");
     }
+}
+
+[[nodiscard]] bool contains_implementation_source(const std::vector<SourceEntry>& sources) {
+    return std::ranges::any_of(sources, [](const SourceEntry& source) {
+        return source.kind == SourceKind::source;
+    });
+}
+
+// At this stage the resolver supplies one flattened vector for a target.  Its
+// aggregate check above catches empty and header-only expansions.  Explicit
+// implementation entries must additionally be present in every generated
+// common-plus-platform source set: a source only in a Windows override cannot
+// make the Linux target compilable.
+void validate_platform_source_sets(DiagnosticSet& diagnostics, const Target& target,
+                                   const std::string& path) {
+    if (target.type == TargetType::interface_library) return;
+    const bool has_explicit_implementation =
+        contains_implementation_source(target.sources) ||
+        contains_implementation_source(target.platform.macos.sources) ||
+        contains_implementation_source(target.platform.linux.sources) ||
+        contains_implementation_source(target.platform.windows.sources);
+    // Automatic entries are classified only after expansion, where this
+    // compact validation input deliberately does not retain their platform
+    // provenance.  The flattened resolved-set check still validates those.
+    if (!has_explicit_implementation || contains_implementation_source(target.sources)) return;
+
+    const auto validate_platform = [&](const TargetOverride& override, std::string_view platform) {
+        if (!contains_implementation_source(override.sources)) {
+            add_semantic_error(diagnostics, path + ".platform." + std::string{platform} + ".sources",
+                               "non-interface targets require an implementation source on every platform");
+        }
+    };
+    validate_platform(target.platform.macos, "macos");
+    validate_platform(target.platform.linux, "linux");
+    validate_platform(target.platform.windows, "windows");
+}
+
+[[nodiscard]] bool is_link_mode_keyword(std::string_view value) {
+    return value == "debug" || value == "optimized" || value == "general";
+}
+
+void validate_dependencies(DiagnosticSet& diagnostics, const ScopedValues<LinkDependency>& dependencies,
+                           const std::string& path) {
+    const auto validate_scope = [&](const std::vector<LinkDependency>& values, std::string_view scope) {
+        for (std::size_t index = 0; index < values.size(); ++index) {
+            if (is_link_mode_keyword(values[index].name)) {
+                add_semantic_error(diagnostics, path + "." + std::string{scope} + "[" +
+                                                   std::to_string(index) + "]",
+                                   "dependency name is reserved as a CMake link-mode keyword: " +
+                                       values[index].name);
+            }
+        }
+    };
+    validate_scope(dependencies.private_values, "private");
+    validate_scope(dependencies.public_values, "public");
+    validate_scope(dependencies.interface_values, "interface");
+}
+
+[[nodiscard]] bool is_find_package_keyword(std::string_view value) {
+    static constexpr std::array keywords{"EXACT", "QUIET", "MODULE", "REQUIRED", "COMPONENTS",
+                                         "OPTIONAL_COMPONENTS", "CONFIG", "NO_MODULE", "NAMES", "CONFIGS",
+                                         "HINTS", "PATHS", "PATH_SUFFIXES", "REGISTRY_VIEW", "GLOBAL",
+                                         "BYPASS_PROVIDER", "UNWIND_INCLUDE"};
+    return std::ranges::find(keywords, value) != keywords.end();
 }
 
 void classify_and_deduplicate(std::vector<LinkDependency>& dependencies, const Project& project) {
@@ -396,6 +466,14 @@ Result<TargetGraph> validate_project(const Project& project,
             add_semantic_error(diagnostics, "packages." + key + ".version",
                                "package version must be a numeric version or numeric version range");
         }
+        for (std::size_t index = 0; index < package.components.size(); ++index) {
+            if (is_find_package_keyword(package.components[index])) {
+                add_semantic_error(diagnostics, "packages." + key + ".components[" +
+                                                   std::to_string(index) + "]",
+                                   "package component name is reserved by find_package: " +
+                                       package.components[index]);
+            }
+        }
     }
 
     std::set<std::string> logical_names;
@@ -411,7 +489,7 @@ Result<TargetGraph> validate_project(const Project& project,
             add_semantic_error(diagnostics, path, "target key and logical target name must match");
         }
         static constexpr std::array reserved_target_names{"all", "clean", "help", "install",
-                                                           "package", "test"};
+                                                           "package", "test", "edit_cache", "rebuild_cache"};
         if (std::ranges::find(reserved_target_names, target.name) != reserved_target_names.end()) {
             add_semantic_error(diagnostics, path,
                                "target name is reserved by CMake: " + target.name);
@@ -420,6 +498,14 @@ Result<TargetGraph> validate_project(const Project& project,
             add_semantic_error(diagnostics, path, "duplicate logical target definition '" + target.name + "'");
         }
         validate_sources(diagnostics, target, path, resolved_sources);
+        validate_platform_source_sets(diagnostics, target, path);
+        validate_dependencies(diagnostics, target.dependencies, path + ".dependencies");
+        validate_dependencies(diagnostics, target.platform.macos.dependencies,
+                              path + ".platform.macos.dependencies");
+        validate_dependencies(diagnostics, target.platform.linux.dependencies,
+                              path + ".platform.linux.dependencies");
+        validate_dependencies(diagnostics, target.platform.windows.dependencies,
+                              path + ".platform.windows.dependencies");
         if (target.type == TargetType::interface_library) {
             validate_interface_scopes(diagnostics, target, path);
         }

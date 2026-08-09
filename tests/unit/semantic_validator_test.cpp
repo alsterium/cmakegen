@@ -325,6 +325,20 @@ TEST_CASE("semantic validation accepts CMake numeric versions and find_package r
     REQUIRE(validate_project(project));
 }
 
+TEST_CASE("semantic validation rejects empty and backwards package version ranges") {
+    auto project = project_with_targets({target("Core")});
+    project.packages.emplace("backwards", Package{"Backwards", "2.0...1.0", true, {}});
+    project.packages.emplace("empty-exclusive", Package{"Empty", "1.0...<1.0", true, {}});
+    project.packages.emplace("closed-point", Package{"Point", "1.0...1.0", true, {}});
+
+    const auto result = validate_project(project);
+    REQUIRE_FALSE(result);
+    const auto& diagnostics = result.error().diagnostics();
+    REQUIRE(diagnostics.size() == 2);
+    CHECK(diagnostics[0].path == "packages.backwards.version");
+    CHECK(diagnostics[1].path == "packages.empty-exclusive.version");
+}
+
 TEST_CASE("semantic validation rejects CMake values that cannot be emitted as meta-features") {
     auto project = project_with_targets({target("Core")});
     project.cmake.minimum_version = "banana";
@@ -363,4 +377,41 @@ TEST_CASE("semantic validation requires implementation sources and rejects reser
     const auto reserved_result = validate_project(project_with_targets({reserved}));
     REQUIRE_FALSE(reserved_result);
     CHECK(reserved_result.error().diagnostics().front().message == "target name is reserved by CMake: all");
+}
+
+TEST_CASE("semantic validation requires explicit platform-only sources on every platform") {
+    auto core = target("Core");
+    core.platform.windows.sources.push_back({"src/windows.cpp", true, {}, SourceKind::source});
+    ResolvedSourcesByTarget resolved{{"Core", {{"include/core.hpp", SourceKind::header},
+                                                   {"src/windows.cpp", SourceKind::source}}}};
+
+    const auto result = validate_project(project_with_targets({core}), resolved);
+    REQUIRE_FALSE(result);
+    const auto& diagnostics = result.error().diagnostics();
+    REQUIRE(diagnostics.size() == 2);
+    CHECK(diagnostics[0].path == "targets.Core.platform.linux.sources");
+    CHECK(diagnostics[1].path == "targets.Core.platform.macos.sources");
+}
+
+TEST_CASE("semantic validation rejects CMake command keywords in model values") {
+    auto app = target("App");
+    add_dependency(app, "debug");
+    app.platform.linux.dependencies.public_values.push_back(
+        {LinkDependency::Kind::imported_target, "optimized"});
+    auto project = project_with_targets({app});
+    project.packages.emplace("pkg", Package{"Pkg", std::nullopt, true, {"REQUIRED", "Core"}});
+
+    const auto result = validate_project(project);
+    REQUIRE_FALSE(result);
+    const auto& diagnostics = result.error().diagnostics();
+    REQUIRE(diagnostics.size() == 3);
+    CHECK(diagnostics[0].path == "packages.pkg.components[0]");
+    CHECK(diagnostics[1].path == "targets.App.dependencies.private[0]");
+    CHECK(diagnostics[2].path == "targets.App.platform.linux.dependencies.public[0]");
+
+    auto generator_reserved = target("edit_cache");
+    const auto reserved = validate_project(project_with_targets({generator_reserved}));
+    REQUIRE_FALSE(reserved);
+    CHECK(reserved.error().diagnostics().front().message ==
+          "target name is reserved by CMake: edit_cache");
 }
