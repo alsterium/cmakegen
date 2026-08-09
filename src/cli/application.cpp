@@ -347,7 +347,10 @@ int run_cli(const std::vector<std::string>& arguments, std::ostream& output, std
         }
         auto render_project = *project;
         rebase_render_paths(render_project, spec.parent_path(), root);
-        const auto cmake = render_cmake(render_project, *graph, resolved.rendered_sources);
+        auto rebased_graph = validate_project(render_project, resolved.rendered_sources);
+        if (!rebased_graph) { print_diagnostics(rebased_graph.error(), !options.no_color, error); return diagnostic_exit(rebased_graph.error()); }
+        const auto cmake = render_cmake(render_project, *rebased_graph, resolved.rendered_sources,
+                                        spec.filename().generic_string());
         GeneratedFileSet files;
         (void)files.add({"CMakeLists.txt", cmake.root_cmake_lists});
         (void)files.add({"cmake/cmakegen.generated.cmake", cmake.generated_cmake});
