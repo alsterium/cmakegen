@@ -156,10 +156,15 @@ void print_graph_text(const TargetGraph& graph, bool include_external, std::ostr
     std::set<std::string> children;
     for (const auto& [target, dependencies] : graph.internal_adjacency)
         children.insert(dependencies.begin(), dependencies.end());
+    std::set<std::string> visited;
     std::function<void(const std::string&, const std::string&, bool, std::set<std::string>&)> visit;
-    visit = [&](const std::string& target, const std::string& prefix, bool last, std::set<std::string>& seen) {
+    visit = [&](const std::string& target, const std::string& prefix, bool last, std::set<std::string>& ancestors) {
         output << prefix << (last ? "└── " : "├── ") << target << '\n';
-        if (!seen.insert(target).second) return;
+        if (!ancestors.insert(target).second) return;
+        if (!visited.insert(target).second) {
+            ancestors.erase(target);
+            return;
+        }
         std::vector<std::string> dependencies = graph.internal_adjacency.at(target);
         if (include_external) for (const auto& dependency : graph.dependencies.at(target))
             if (dependency.kind == LinkDependency::Kind::imported_target) dependencies.push_back(dependency.name);
@@ -168,21 +173,26 @@ void print_graph_text(const TargetGraph& graph, bool include_external, std::ostr
             const bool child_last = i + 1 == dependencies.size();
             const auto child_prefix = prefix + (last ? "    " : "│   ");
             if (graph.internal_adjacency.contains(dependencies[i]))
-                visit(dependencies[i], child_prefix, child_last, seen);
+                visit(dependencies[i], child_prefix, child_last, ancestors);
             else output << child_prefix << (child_last ? "└── " : "├── ") << dependencies[i] << '\n';
         }
-        seen.erase(target);
+        ancestors.erase(target);
     };
     std::vector<std::string> roots;
     for (const auto& [target, unused] : graph.internal_adjacency) if (!children.contains(target)) roots.push_back(target);
-    // The graph displayed here is the union of the common and platform-specific
-    // dependencies.  That union can have no root even though every effective
-    // platform graph is acyclic, so still give the user a useful view instead
-    // of printing nothing.
-    if (roots.empty()) for (const auto& [target, unused] : graph.internal_adjacency) roots.push_back(target);
     std::ranges::sort(roots);
     for (std::size_t index = 0; index < roots.size(); ++index) {
-        std::set<std::string> seen; visit(roots[index], {}, index + 1 == roots.size(), seen);
+        std::set<std::string> ancestors; visit(roots[index], {}, index + 1 == roots.size(), ancestors);
+    }
+    // The displayed graph is the union of common and platform-specific edges.
+    // A union-only cycle has no root even when every effective platform graph is
+    // acyclic.  Print one traversal for each component missed by the root pass.
+    std::vector<std::string> remaining;
+    for (const auto& [target, unused] : graph.internal_adjacency)
+        if (!visited.contains(target)) remaining.push_back(target);
+    std::ranges::sort(remaining);
+    for (std::size_t index = 0; index < remaining.size(); ++index) {
+        std::set<std::string> ancestors; visit(remaining[index], {}, index + 1 == remaining.size(), ancestors);
     }
 }
 

@@ -137,7 +137,7 @@ TEST_CASE("CLI resolves sources relative to the specification, not the output ro
     CHECK_FALSE(std::filesystem::exists(fixture.path() / "spec/CMakeLists.txt"));
 }
 
-TEST_CASE("CLI graph escapes DOT strings and prints a platform-union graph without roots") {
+TEST_CASE("CLI graph escapes DOT strings and prints platform-union cycle components") {
     FixtureDirectory fixture;
     fixture.file("project.yml", R"(schemaVersion: 1
 name: Example
@@ -154,12 +154,15 @@ targets:
       windows:
         dependencies:
           private: [App]
+  Tool:
+    type: executable
 )");
     std::string output, error;
     const auto project = (fixture.path() / "project.yml").string();
     CHECK(run({"--project", project, "graph", "--format", "text"}, output, error) == 0);
     CHECK(output.find("App") != std::string::npos);
     CHECK(output.find("Core") != std::string::npos);
+    CHECK(output.find("Tool") != std::string::npos);
 
     fixture.file("escaped.yml", R"(schemaVersion: 1
 name: Example
