@@ -70,8 +70,6 @@ namespace {
 
 struct ResolvedSourceCandidate {
     ResolvedSource source;
-    std::string diagnostic_path;
-    std::optional<SourceLocation> diagnostic_location;
 };
 
 [[nodiscard]] bool excluded(const SourceEntry& entry, std::string_view project_relative,
@@ -103,7 +101,8 @@ void add_filesystem_diagnostic(DiagnosticSet& diagnostics, const SourceEntry& en
 
 void add_resolved(std::vector<ResolvedSourceCandidate>& resolved, const std::filesystem::path& base,
                   const std::filesystem::path& file, SourceKind kind, const SourceEntry& entry) {
-    resolved.push_back({{rendered_path(base, file), kind}, entry.diagnostic_path, entry.diagnostic_location});
+    resolved.push_back({{rendered_path(base, file), kind, entry.diagnostic_path,
+                         entry.diagnostic_location}});
 }
 
 } // namespace
@@ -206,21 +205,22 @@ Result<std::vector<ResolvedSource>> resolve_sources(const std::filesystem::path&
     }
 
     std::ranges::sort(resolved, [](const ResolvedSourceCandidate& left, const ResolvedSourceCandidate& right) {
-        const auto left_line = left.diagnostic_location ? left.diagnostic_location->line : 0;
-        const auto left_column = left.diagnostic_location ? left.diagnostic_location->column : 0;
-        const auto right_line = right.diagnostic_location ? right.diagnostic_location->line : 0;
-        const auto right_column = right.diagnostic_location ? right.diagnostic_location->column : 0;
-        return std::tuple{left.source.path, left.source.kind, left.diagnostic_path, left_line, left_column} <
-               std::tuple{right.source.path, right.source.kind, right.diagnostic_path, right_line, right_column};
+        const auto left_line = left.source.diagnostic_location ? left.source.diagnostic_location->line : 0;
+        const auto left_column = left.source.diagnostic_location ? left.source.diagnostic_location->column : 0;
+        const auto right_line = right.source.diagnostic_location ? right.source.diagnostic_location->line : 0;
+        const auto right_column = right.source.diagnostic_location ? right.source.diagnostic_location->column : 0;
+        return std::tuple{left.source.path, left.source.kind, left.source.diagnostic_path, left_line, left_column} <
+               std::tuple{right.source.path, right.source.kind, right.source.diagnostic_path, right_line, right_column};
     });
     for (std::size_t index = 1; index < resolved.size(); ++index) {
         if (resolved[index - 1].source.path == resolved[index].source.path &&
             resolved[index - 1].source.kind != resolved[index].source.kind) {
             diagnostics.add({std::string{diagnostic_codes::invalid_value}, DiagnosticSeverity::error,
                              "source path resolves with conflicting kinds: " + resolved[index].source.path,
-                             resolved[index].diagnostic_path.empty() ? resolved[index].source.path
-                                                                      : resolved[index].diagnostic_path,
-                             resolved[index].diagnostic_location});
+                             resolved[index].source.diagnostic_path.empty()
+                                 ? resolved[index].source.path
+                                 : resolved[index].source.diagnostic_path,
+                             resolved[index].source.diagnostic_location});
         }
     }
     if (diagnostics.has_errors()) return std::unexpected{std::move(diagnostics)};

@@ -180,6 +180,27 @@ TEST_CASE("interface libraries reject non-interface scopes and implementation so
     CHECK(diagnostics[3].message == "interface libraries cannot contain implementation sources");
 }
 
+TEST_CASE("source semantic diagnostics retain declaration provenance") {
+    auto interface_target = target("Headers", TargetType::interface_library);
+    SourceLocation location{12, 7};
+    interface_target.platform.linux.sources.push_back(
+        {"src/implementation.cpp", true, {}, SourceKind::source,
+         "targets.Headers.platform.linux.sources[0]", location});
+    ResolvedSourcesByTarget resolved{{"Headers",
+                                      {{"src/discovered.cpp", SourceKind::source,
+                                        "targets.Headers.platform.linux.sources[0]", location}}}};
+
+    const auto result = validate_project(project_with_targets({interface_target}), resolved);
+    REQUIRE_FALSE(result);
+    const auto& diagnostics = result.error().diagnostics();
+    REQUIRE(diagnostics.size() == 2);
+    for (const auto& diagnostic : diagnostics) {
+        CHECK(diagnostic.path == "targets.Headers.platform.linux.sources[0]");
+        REQUIRE(diagnostic.location);
+        CHECK(*diagnostic.location == location);
+    }
+}
+
 TEST_CASE("semantic validation diagnoses malformed manually constructed logical definitions and paths") {
     auto target_with_mismatched_name = target("Different");
     target_with_mismatched_name.sources.push_back({"", true, {}, SourceKind::automatic});

@@ -33,6 +33,11 @@ struct SourceEntry {
 struct ResolvedSource {
     std::string path;
     SourceKind kind;
+    // Keep the declaration provenance while expanding a source entry. Semantic
+    // checks run after expansion, so this lets their diagnostics point back to
+    // a platform override (rather than the target's common sources list).
+    std::string diagnostic_path;
+    std::optional<SourceLocation> diagnostic_location;
 };
 
 struct LinkDependency {

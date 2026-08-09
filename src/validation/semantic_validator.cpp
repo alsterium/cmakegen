@@ -26,6 +26,22 @@ void add_semantic_error(DiagnosticSet& diagnostics, std::string path, std::strin
                      std::move(message), std::move(path), std::nullopt});
 }
 
+void add_source_semantic_error(DiagnosticSet& diagnostics, const SourceEntry& source,
+                               std::string fallback_path, std::string message) {
+    diagnostics.add({std::string{diagnostic_codes::semantic_error}, DiagnosticSeverity::error,
+                     std::move(message), source.diagnostic_path.empty() ? std::move(fallback_path)
+                                                                        : source.diagnostic_path,
+                     source.diagnostic_location});
+}
+
+void add_resolved_source_semantic_error(DiagnosticSet& diagnostics, const ResolvedSource& source,
+                                        std::string fallback_path, std::string message) {
+    diagnostics.add({std::string{diagnostic_codes::semantic_error}, DiagnosticSeverity::error,
+                     std::move(message), source.diagnostic_path.empty() ? std::move(fallback_path)
+                                                                        : source.diagnostic_path,
+                     source.diagnostic_location});
+}
+
 void validate_interface_scopes(DiagnosticSet& diagnostics, const Target& target,
                                const std::string& path) {
     const auto validate_scopes = [&](const auto& values, const std::string& property_path) {
@@ -59,13 +75,13 @@ void validate_source_entries(DiagnosticSet& diagnostics, const std::vector<Sourc
                              TargetType target_type, const std::string& sources_path) {
     for (std::size_t index = 0; index < sources.size(); ++index) {
         const auto& source = sources[index];
+        const auto source_path = sources_path + "[" + std::to_string(index) + "]";
         if (source.path.empty()) {
-            add_semantic_error(diagnostics, sources_path + "[" + std::to_string(index) + "]",
-                               "source path must not be empty");
+            add_source_semantic_error(diagnostics, source, source_path, "source path must not be empty");
         }
         if (target_type == TargetType::interface_library && source.kind == SourceKind::source) {
-            add_semantic_error(diagnostics, sources_path + "[" + std::to_string(index) + "]",
-                               "interface libraries cannot contain implementation sources");
+            add_source_semantic_error(diagnostics, source, source_path,
+                                      "interface libraries cannot contain implementation sources");
         }
     }
 }
@@ -83,8 +99,9 @@ void validate_sources(DiagnosticSet& diagnostics, const Target& target, const st
     if (target.type != TargetType::interface_library || resolved == resolved_sources.end()) return;
     for (const auto& source : resolved->second) {
         if (source.kind == SourceKind::source) {
-            add_semantic_error(diagnostics, path + ".sources",
-                               "interface libraries cannot contain implementation sources: " + source.path);
+            add_resolved_source_semantic_error(
+                diagnostics, source, path + ".sources",
+                "interface libraries cannot contain implementation sources: " + source.path);
         }
     }
 }
