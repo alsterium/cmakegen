@@ -428,6 +428,10 @@ Result<WriteResult> SafeWriter::write(const GeneratedFileSet& files, const Write
     for (const auto& [relative,file] : next_files) {
         auto resolved_destination=resolve_existing_alias(project_root_, relative); if(!resolved_destination) return std::unexpected{resolved_destination.error()};
         const auto destination=*resolved_destination; auto status=std::filesystem::symlink_status(destination,ec);
+        // A stale owned file may be an ancestor of this destination. It is
+        // scheduled for removal before writes, so treat ENOTDIR as absent here;
+        // reject_file_ancestor below still rejects every unscheduled file.
+        if (ec == std::errc::not_a_directory) ec.clear();
         if(ec && !is_not_found(ec)) return std::unexpected{error("cannot inspect destination: "+ec.message(),destination.generic_string())};
         if (is_not_found(ec)) { ec.clear(); status = std::filesystem::file_status{}; }
         if(std::filesystem::is_symlink(status) || (std::filesystem::exists(status) && !std::filesystem::is_regular_file(status))) return std::unexpected{error("destination must be a regular file",destination.generic_string())};

@@ -203,7 +203,14 @@ TEST_CASE("safe writer rejects portable aliases of its manifest path") {
     cmakegen::SafeWriter writer{fixture.path()};
     CHECK_FALSE(writer.write(file_set({{"generated.txt", "contents\n"}})));
     CHECK_FALSE(writer.clean());
-    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/manifest.json"));
+    std::size_t manifest_directory_count = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(fixture.path()))
+        if (entry.is_directory() &&
+            (entry.path().filename() == ".CmakeGen" || entry.path().filename() == ".cmakegen"))
+            ++manifest_directory_count;
+    // Do not query the canonical spelling directly: on a case-insensitive
+    // filesystem it is the same directory as the intentional alias.
+    CHECK(manifest_directory_count == 0);
 }
 
 TEST_CASE("safe writer rejects portable metadata aliases and output collisions during preflight") {
