@@ -169,10 +169,10 @@ void render_platform(Text& text, const Target& target, std::string_view platform
     text.line("endif()");
 }
 
-[[nodiscard]] std::string render_root(const Project& project) {
+[[nodiscard]] std::string render_root(const Project& project, const std::string_view source_label) {
     Text text;
     text.line(ownership_header.substr(0, ownership_header.size() - 1));
-    text.line("# Source: project.yml");
+    text.line("# Source: " + std::string{source_label});
     text.blank();
     text.line("cmake_minimum_required(VERSION " + project.cmake.minimum_version + ")");
     text.blank();
@@ -215,11 +215,12 @@ void render_platform(Text& text, const Target& target, std::string_view platform
 } // namespace
 
 RenderedCmakeFiles render_cmake(const Project& project, const TargetGraph& graph,
-                                const RenderedSourcesByTarget& sources) {
+                                const RenderedSourcesByTarget& sources,
+                                const std::string_view source_label) {
     (void)graph;
     Text generated;
     generated.line(ownership_header.substr(0, ownership_header.size() - 1));
-    generated.line("# Source: project.yml");
+    generated.line("# Source: " + std::string{source_label});
     for (const auto& [name, target] : project.targets) {
         generated.blank();
         const auto source = sources.find(name);
@@ -235,7 +236,7 @@ RenderedCmakeFiles render_cmake(const Project& project, const TargetGraph& graph
         render_platform(generated, target, "windows", target.platform.windows,
                         resolved ? resolved->windows : empty_sources);
     }
-    return {render_root(project), std::move(generated).take()};
+    return {render_root(project, source_label), std::move(generated).take()};
 }
 
 } // namespace cmakegen

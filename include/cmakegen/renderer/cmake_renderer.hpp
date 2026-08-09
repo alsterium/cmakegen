@@ -22,6 +22,7 @@ struct RenderedCmakeFiles {
 // TargetGraph argument deliberately makes validation an explicit pipeline
 // prerequisite; this function performs no filesystem or process operations.
 [[nodiscard]] RenderedCmakeFiles render_cmake(const Project& project, const TargetGraph& graph,
-                                               const RenderedSourcesByTarget& sources);
+                                               const RenderedSourcesByTarget& sources,
+                                               std::string_view source_label = "project.yml");
 
 } // namespace cmakegen
