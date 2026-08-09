@@ -4,7 +4,7 @@
 add_library(Engine STATIC)
 target_sources(Engine
   PRIVATE
-    src/engine.cpp
+    "src/engine.cpp"
 )
 target_compile_features(Engine
   PUBLIC
@@ -14,11 +14,11 @@ target_compile_features(Engine
 add_executable(app)
 target_sources(app
   PRIVATE
-    app/main.cpp
+    "app/main.cpp"
 )
 target_link_libraries(app
   PRIVATE
-    Engine
+    "Engine"
 )
 target_compile_features(app
   PRIVATE

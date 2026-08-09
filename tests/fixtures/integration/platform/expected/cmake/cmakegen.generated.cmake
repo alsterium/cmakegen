@@ -4,11 +4,11 @@
 add_executable(app)
 target_sources(app
   PRIVATE
-    app/main.cpp
+    "app/main.cpp"
 )
 target_link_libraries(app
   PRIVATE
-    platform
+    "platform"
 )
 target_compile_features(app
   PRIVATE
@@ -18,7 +18,7 @@ target_compile_features(app
 add_library(platform STATIC)
 target_sources(platform
   PRIVATE
-    src/common/common.cpp
+    "src/common/common.cpp"
 )
 target_compile_features(platform
   PUBLIC
@@ -27,30 +27,30 @@ target_compile_features(platform
 if(APPLE)
   target_sources(platform
     PRIVATE
-      src/macos/platform.cpp
+      "src/macos/platform.cpp"
   )
   target_compile_definitions(platform
     PRIVATE
-      PLATFORM_MACOS
+      "PLATFORM_MACOS"
   )
 endif()
 if(UNIX AND NOT APPLE)
   target_sources(platform
     PRIVATE
-      src/linux/platform.cpp
+      "src/linux/platform.cpp"
   )
   target_compile_definitions(platform
     PRIVATE
-      PLATFORM_LINUX
+      "PLATFORM_LINUX"
   )
 endif()
 if(WIN32)
   target_sources(platform
     PRIVATE
-      src/windows/platform.cpp
+      "src/windows/platform.cpp"
   )
   target_compile_definitions(platform
     PRIVATE
-      PLATFORM_WINDOWS
+      "PLATFORM_WINDOWS"
   )
 endif()

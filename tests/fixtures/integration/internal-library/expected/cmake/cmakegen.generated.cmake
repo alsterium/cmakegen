@@ -4,11 +4,11 @@
 add_library(CalculatorCore STATIC)
 target_sources(CalculatorCore
   PRIVATE
-    Sources/Core/core.cpp
+    "Sources/Core/core.cpp"
 )
 target_include_directories(CalculatorCore
   PUBLIC
-    include
+    "include"
 )
 target_compile_features(CalculatorCore
   PUBLIC
@@ -18,11 +18,11 @@ target_compile_features(CalculatorCore
 add_executable(calculator)
 target_sources(calculator
   PRIVATE
-    Sources/App/main.cpp
+    "Sources/App/main.cpp"
 )
 target_link_libraries(calculator
   PRIVATE
-    CalculatorCore
+    "CalculatorCore"
 )
 target_compile_features(calculator
   PRIVATE

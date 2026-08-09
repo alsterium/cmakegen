@@ -4,7 +4,7 @@
 add_executable(hello)
 target_sources(hello
   PRIVATE
-    src/main.cpp
+    "src/main.cpp"
 )
 target_compile_features(hello
   PRIVATE

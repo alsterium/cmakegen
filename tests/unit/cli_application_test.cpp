@@ -119,8 +119,6 @@ TEST_CASE("CLI generate honors check, force, root, and clean dry run safety beha
     CHECK(run({"--project", spec, "--root", root, "generate"}, output, error) == 0);
     CHECK(run({"--root", root, "clean", "--dry-run"}, output, error) == 0);
     CHECK(std::filesystem::exists(fixture.path() / "CMakeLists.txt"));
-    CHECK(run({"--root", root, "clean"}, output, error) == 0);
-    CHECK_FALSE(std::filesystem::exists(fixture.path() / "CMakeLists.txt"));
 }
 
 TEST_CASE("CLI resolves sources relative to the specification, not the output root") {

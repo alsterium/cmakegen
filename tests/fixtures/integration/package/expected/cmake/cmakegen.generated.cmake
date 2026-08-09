@@ -4,11 +4,11 @@
 add_executable(formatter)
 target_sources(formatter
   PRIVATE
-    src/main.cpp
+    "src/main.cpp"
 )
 target_link_libraries(formatter
   PRIVATE
-    fmt::fmt
+    "fmt::fmt"
 )
 target_compile_features(formatter
   PRIVATE

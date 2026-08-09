@@ -11,6 +11,6 @@ project(
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(cmake/dependencies.cmake OPTIONAL)
-find_package(fmt 11 REQUIRED)
+find_package("fmt" 11 REQUIRED)
 
 include(cmake/cmakegen.generated.cmake)

@@ -64,6 +64,30 @@ void require_generated_files_match(std::string_view name, const std::filesystem:
     }
 }
 
+struct GeneratedOutputSnapshot {
+    std::string root_cmake_lists;
+    std::string generated_cmake;
+    std::string presets;
+    std::string manifest;
+};
+
+[[nodiscard]] GeneratedOutputSnapshot snapshot_generated_outputs(const std::filesystem::path& root) {
+    return {
+        read_file(root / "CMakeLists.txt"),
+        read_file(root / "cmake/cmakegen.generated.cmake"),
+        read_file(root / "CMakePresets.json"),
+        read_file(root / ".cmakegen/manifest.json"),
+    };
+}
+
+void require_generated_outputs_unchanged(const std::filesystem::path& root,
+                                         const GeneratedOutputSnapshot& snapshot) {
+    CHECK(read_file(root / "CMakeLists.txt") == snapshot.root_cmake_lists);
+    CHECK(read_file(root / "cmake/cmakegen.generated.cmake") == snapshot.generated_cmake);
+    CHECK(read_file(root / "CMakePresets.json") == snapshot.presets);
+    CHECK(read_file(root / ".cmakegen/manifest.json") == snapshot.manifest);
+}
+
 [[nodiscard]] int cmake_command(const std::filesystem::path& source, const std::filesystem::path& build,
                                 bool build_project) {
     const auto command = std::string{"\"" CMAKEGEN_CMAKE_COMMAND "\" "} +
@@ -105,22 +129,36 @@ TEST_CASE("generation is byte-stable and check mode neither writes nor accepts d
     std::string output;
     std::string error;
     REQUIRE(run_cli_at(output_directory.path(), {"generate", "--no-color"}, output, error) == 0);
-    const auto first_root = read_file(output_directory.path() / "CMakeLists.txt");
-    const auto first_generated = read_file(output_directory.path() / "cmake/cmakegen.generated.cmake");
-    const auto first_presets = read_file(output_directory.path() / "CMakePresets.json");
-    const auto first_manifest = read_file(output_directory.path() / ".cmakegen/manifest.json");
+    const auto first = snapshot_generated_outputs(output_directory.path());
 
     REQUIRE(run_cli_at(output_directory.path(), {"generate", "--no-color"}, output, error) == 0);
     CHECK(output == "No changes.\n");
-    CHECK(read_file(output_directory.path() / "CMakeLists.txt") == first_root);
-    CHECK(read_file(output_directory.path() / "cmake/cmakegen.generated.cmake") == first_generated);
-    CHECK(read_file(output_directory.path() / "CMakePresets.json") == first_presets);
-    CHECK(read_file(output_directory.path() / ".cmakegen/manifest.json") == first_manifest);
+    require_generated_outputs_unchanged(output_directory.path(), first);
 
     { std::ofstream altered{output_directory.path() / "CMakeLists.txt", std::ios::binary}; altered << "drift\n"; }
-    REQUIRE(run_cli_at(output_directory.path(), {"generate", "--check", "--no-color"}, output, error) == 1);
+    REQUIRE(run_cli_at(output_directory.path(), {"generate", "--check", "--no-color"}, output, error) == 2);
     CHECK(read_file(output_directory.path() / "CMakeLists.txt") == "drift\n");
-    CHECK(read_file(output_directory.path() / ".cmakegen/manifest.json") == first_manifest);
+    CHECK(read_file(output_directory.path() / "cmake/cmakegen.generated.cmake") == first.generated_cmake);
+    CHECK(read_file(output_directory.path() / "CMakePresets.json") == first.presets);
+    CHECK(read_file(output_directory.path() / ".cmakegen/manifest.json") == first.manifest);
+}
+
+TEST_CASE("generation refuses ownership conflicts atomically unless forced") {
+    TemporaryDirectory output_directory;
+    copy_fixture("basic", output_directory.path());
+    { std::ofstream existing{output_directory.path() / "CMakeLists.txt", std::ios::binary}; existing << "user-owned\n"; }
+    std::string output;
+    std::string error;
+
+    REQUIRE(run_cli_at(output_directory.path(), {"generate", "--no-color"}, output, error) == 2);
+    CHECK(read_file(output_directory.path() / "CMakeLists.txt") == "user-owned\n");
+    CHECK_FALSE(std::filesystem::exists(output_directory.path() / "cmake/cmakegen.generated.cmake"));
+    CHECK_FALSE(std::filesystem::exists(output_directory.path() / "CMakePresets.json"));
+    CHECK_FALSE(std::filesystem::exists(output_directory.path() / ".cmakegen/manifest.json"));
+
+    REQUIRE(run_cli_at(output_directory.path(), {"generate", "--force", "--no-color"}, output, error) == 0);
+    require_generated_files_match("basic", output_directory.path());
+    CHECK(std::filesystem::exists(output_directory.path() / ".cmakegen/manifest.json"));
 }
 
 TEST_CASE("invalid input is rejected before any generated output is written") {
@@ -136,6 +174,8 @@ targets:
     std::string error;
     REQUIRE(run_cli_at(output_directory.path(), {"generate", "--no-color"}, output, error) == 2);
     CHECK_FALSE(std::filesystem::exists(output_directory.path() / "CMakeLists.txt"));
+    CHECK_FALSE(std::filesystem::exists(output_directory.path() / "cmake/cmakegen.generated.cmake"));
+    CHECK_FALSE(std::filesystem::exists(output_directory.path() / "CMakePresets.json"));
     CHECK_FALSE(std::filesystem::exists(output_directory.path() / ".cmakegen/manifest.json"));
 }
 
