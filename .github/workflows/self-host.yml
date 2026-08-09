@@ -43,10 +43,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Restore FetchContent downloads
+      - name: Restore FetchContent sources
         uses: actions/cache@v4
         with:
-          path: ${{ env.CMAKEGEN_FETCHCONTENT_DIR }}
+          # FetchContent's base directory also contains per-package CMake
+          # build and populate directories. Cache only the extracted sources:
+          # they are safe to reuse while compiler- and generator-specific
+          # outputs are rebuilt for every CI job.
+          path: ${{ env.CMAKEGEN_FETCHCONTENT_DIR }}/*-src
           key: cmakegen-fetchcontent-${{ runner.os }}-${{ matrix.compiler }}-${{ hashFiles('cmake/dependencies.cmake') }}
           restore-keys: |
             cmakegen-fetchcontent-${{ runner.os }}-${{ matrix.compiler }}-
