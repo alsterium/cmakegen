@@ -167,7 +167,10 @@ TEST_CASE("presets compatibility mapping requires the documented CMake baseline"
     CHECK(preset_schema_version_for("3.28") == 8);
     CHECK(preset_schema_version_for("4.0.1") == 8);
     CHECK(cmake_version_components("4.0.1") == std::array<std::uint32_t, 3>{4, 0, 1});
-    CHECK(cmake_version_components("3.28.0.1") == std::array<std::uint32_t, 3>{3, 28, 0});
+    CHECK(cmake_version_components("3.28.0.1") == std::array<std::uint32_t, 3>{3, 28, 1});
+    CHECK(cmake_version_components("3.28.4.7") == std::array<std::uint32_t, 3>{3, 28, 5});
+    CHECK(cmake_version_components("00000000003.00000000028.00000000000.00000000001") ==
+          std::array<std::uint32_t, 3>{3, 28, 1});
     CHECK(cmake_version_components("3.28...3.31") == std::array<std::uint32_t, 3>{3, 28, 0});
     CHECK_THROWS_AS(preset_schema_version_for("3.27"), std::invalid_argument);
     CHECK_THROWS_AS(preset_schema_version_for("3"), std::invalid_argument);

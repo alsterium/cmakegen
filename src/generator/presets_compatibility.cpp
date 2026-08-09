@@ -1,6 +1,7 @@
 #include "cmakegen/generator/presets_compatibility.hpp"
 
 #include <charconv>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -11,9 +12,16 @@ struct Version {
     std::uint32_t major;
     std::uint32_t minor;
     std::uint32_t patch;
+    std::uint32_t tweak;
 };
 
 [[nodiscard]] std::uint32_t parse_component(std::string_view value) {
+    // Semantic validation permits numeric components with leading zeroes.  Trim
+    // them before converting so an otherwise small component does not overflow
+    // solely because its textual representation is wide.
+    const auto first_non_zero = value.find_first_not_of('0');
+    value = first_non_zero == std::string_view::npos ? std::string_view{"0"}
+                                                      : value.substr(first_non_zero);
     std::uint32_t component = 0;
     const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), component);
     if (error != std::errc{} || end != value.data() + value.size())
@@ -40,8 +48,9 @@ struct Version {
     const auto minor = parse_component(value.substr(first_dot + 1, second_dot - first_dot - 1));
     const auto patch = second_dot == std::string_view::npos ? 0 :
         parse_component(value.substr(second_dot + 1, third_dot == std::string_view::npos ? std::string_view::npos : third_dot - second_dot - 1));
-    if (third_dot != std::string_view::npos) (void)parse_component(value.substr(third_dot + 1));
-    return {major, minor, patch};
+    const auto tweak = third_dot == std::string_view::npos ? 0 :
+        parse_component(value.substr(third_dot + 1));
+    return {major, minor, patch, tweak};
 }
 
 } // namespace
@@ -55,6 +64,15 @@ std::uint32_t preset_schema_version_for(const std::string_view cmake_minimum_ver
 
 std::array<std::uint32_t, 3> cmake_version_components(const std::string_view version) {
     const auto parsed = parse_version(version);
+    // CMakePresets.json has only major/minor/patch fields.  A non-zero fourth
+    // CMake component must therefore round the advertised patch *up*, never
+    // down: 3.28.0.1 is not compatible with 3.28.0.
+    if (parsed.tweak != 0) {
+        if (parsed.patch == std::numeric_limits<std::uint32_t>::max()) {
+            throw std::invalid_argument("CMake minimum version cannot be represented by CMake Presets");
+        }
+        return {parsed.major, parsed.minor, static_cast<std::uint32_t>(parsed.patch + 1)};
+    }
     return {parsed.major, parsed.minor, parsed.patch};
 }
 
