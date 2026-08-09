@@ -45,6 +45,10 @@ struct LinkDependency {
 
     Kind kind;
     std::string name;
+    // Retain the parsed declaration so diagnostics produced from the effective
+    // dependency graph identify the exact dependency that closes a cycle.
+    std::string diagnostic_path;
+    std::optional<SourceLocation> diagnostic_location;
 };
 
 struct TargetOverride {

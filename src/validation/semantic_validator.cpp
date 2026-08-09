@@ -158,17 +158,21 @@ void classify_and_deduplicate(std::vector<LinkDependency>& dependencies, const P
 struct InternalDependencyEdge {
     std::string name;
     std::string provenance_path;
+    std::optional<SourceLocation> provenance_location;
 };
 
 [[nodiscard]] std::vector<InternalDependencyEdge> effective_internal_dependencies(
     const std::string& target_name, const Target& target, const Project& project,
     const TargetOverride* platform_override = nullptr,
     const std::optional<std::string_view> platform = std::nullopt) {
-    std::map<std::string, std::string> edges;
+    std::map<std::string, InternalDependencyEdge> edges;
     const auto append = [&](const auto& dependencies, const std::string& provenance_path) {
         for (const auto& dependency : dependencies) {
             if (dependency.kind == LinkDependency::Kind::project_target) {
-                edges.try_emplace(dependency.name, provenance_path);
+                edges.try_emplace(dependency.name, InternalDependencyEdge{
+                    dependency.name,
+                    dependency.diagnostic_path.empty() ? provenance_path : dependency.diagnostic_path,
+                    dependency.diagnostic_location});
             }
         }
     };
@@ -181,8 +185,8 @@ struct InternalDependencyEdge {
 
     std::vector<InternalDependencyEdge> result;
     result.reserve(edges.size());
-    for (auto& [name, provenance_path] : edges) {
-        result.push_back({std::move(name), std::move(provenance_path)});
+    for (auto& [_, edge] : edges) {
+        result.push_back(std::move(edge));
     }
     return result;
 }
@@ -210,7 +214,7 @@ void detect_dependency_cycles(DiagnosticSet& diagnostics,
                     diagnostics.add({std::string{diagnostic_codes::dependency_cycle},
                                      DiagnosticSeverity::error, "internal dependency cycle: " + cycle,
                                      dependency.provenance_path,
-                                     std::nullopt});
+                                     dependency.provenance_location});
                 }
             }
         }

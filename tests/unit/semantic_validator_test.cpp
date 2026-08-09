@@ -1,4 +1,6 @@
 #include "cmakegen/validation/semantic_validator.hpp"
+#include "cmakegen/domain/normalizer.hpp"
+#include "cmakegen/parser/parser.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -130,6 +132,30 @@ TEST_CASE("semantic validation reports the closing edge provenance in a mixed cy
     const auto& diagnostic = result.error().diagnostics().front();
     CHECK(diagnostic.message == "internal dependency cycle: App -> Core -> App");
     CHECK(diagnostic.path == "targets.Core.dependencies");
+}
+
+TEST_CASE("semantic validation reports the parsed location of the closing dependency edge") {
+    const auto project = [] {
+        const auto raw = parse_raw_spec(R"(
+schemaVersion: 1
+name: example
+targets:
+  App:
+    type: staticLibrary
+    dependencies: [Core]
+  Core:
+    type: staticLibrary
+    dependencies: [App]
+)");
+        REQUIRE(raw);
+        return normalize_project(*raw);
+    }();
+
+    const auto result = validate_project(project);
+    REQUIRE_FALSE(result);
+    const auto& diagnostic = result.error().diagnostics().front();
+    CHECK(diagnostic.path == "targets.Core.dependencies[0]");
+    CHECK(diagnostic.location == SourceLocation{10, 20});
 }
 
 TEST_CASE("semantic validation accepts an acyclic dependency diamond") {
