@@ -174,6 +174,8 @@ TEST_CASE("safe writer rejects portable metadata aliases and output collisions d
     cmakegen::GeneratedFileSet metadata_alias;
     CHECK_FALSE(metadata_alias.add({".CMakeGen/manifest.json", "bad\n"}));
     CHECK_FALSE(metadata_alias.add({".CMAKEGEN", "bad\n"}));
+    CHECK_FALSE(metadata_alias.add({".cmakegen./manifest.json", "bad\n"}));
+    CHECK_FALSE(metadata_alias.add({".cmakegen /manifest.json", "bad\n"}));
 
     cmakegen::GeneratedFileSet duplicates;
     REQUIRE(duplicates.add({"CMakeLists.txt", "one\n"}));
@@ -186,6 +188,22 @@ TEST_CASE("safe writer rejects portable metadata aliases and output collisions d
     cmakegen::GeneratedFileSet case_folded_ancestors;
     REQUIRE(case_folded_ancestors.add({"Directory", "file\n"}));
     CHECK_FALSE(case_folded_ancestors.add({"directory/child.txt", "child\n"}));
+
+    cmakegen::GeneratedFileSet win32_aliases;
+    REQUIRE(win32_aliases.add({"output", "one\n"}));
+    CHECK_FALSE(win32_aliases.add({"output. ", "two\n"}));
+}
+
+TEST_CASE("safe writer recognizes manifest ownership through portable path aliases") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo.txt", "first\n"}})));
+
+    const auto updated = writer.write(file_set({{"foo.txt", "second\n"}}));
+    REQUIRE(updated);
+    CHECK(read_file(fixture.path() / "Foo.txt") == "second\n");
+    REQUIRE(writer.clean());
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / "Foo.txt"));
 }
 
 TEST_CASE("safe writer rejects an existing file ancestor before writing") {

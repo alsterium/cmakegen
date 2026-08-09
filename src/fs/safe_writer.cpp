@@ -41,6 +41,31 @@ struct Manifest {
     return result;
 }
 
+// Ordinary Win32 paths disregard a component's trailing dots and spaces.  Use
+// that identity everywhere we reason about portable output ownership, even on
+// hosts whose native filesystem permits those names.
+[[nodiscard]] std::string filesystem_equivalence_key(std::string_view path) {
+    std::string result;
+    std::size_t start = 0;
+    while (start <= path.size()) {
+        const auto end = path.find('/', start);
+        auto component = path.substr(start, end == std::string_view::npos ? path.size() - start : end - start);
+        while (!component.empty() && (component.back() == '.' || component.back() == ' ')) component.remove_suffix(1);
+        if (!result.empty()) result += '/';
+        result += case_insensitive_key(component);
+        if (end == std::string_view::npos) break;
+        start = end + 1;
+    }
+    return result;
+}
+
+[[nodiscard]] auto find_equivalent_manifest_entry(const Manifest& manifest, std::string_view relative) {
+    const auto key = filesystem_equivalence_key(relative);
+    return std::ranges::find_if(manifest.files, [&key](const auto& entry) {
+        return filesystem_equivalence_key(entry.first) == key;
+    });
+}
+
 [[nodiscard]] DiagnosticSet error(std::string message, std::string path = {}) {
     DiagnosticSet diagnostics;
     diagnostics.add({std::string{diagnostic_codes::filesystem_error}, DiagnosticSeverity::error,
@@ -62,7 +87,7 @@ struct Manifest {
         }
     }
     const auto result = normalized.generic_string();
-    const auto insensitive = case_insensitive_key(result);
+    const auto insensitive = filesystem_equivalence_key(result);
     if (insensitive == ".cmakegen" || insensitive.starts_with(".cmakegen/")) {
         return std::unexpected{error("generated path is reserved for cmakegen metadata", result)};
     }
@@ -89,8 +114,8 @@ struct Manifest {
         if (ec == std::errc::no_such_file_or_directory) return std::optional<std::filesystem::path>{};
         if (ec) return std::unexpected{error("cannot inspect destination ancestor: " + ec.message(), parent.generic_string())};
         for (const auto& entry : entries) {
-            if (case_insensitive_key(entry.path().filename().generic_string()) ==
-                case_insensitive_key(component.generic_string())) {
+            if (filesystem_equivalence_key(entry.path().filename().generic_string()) ==
+                filesystem_equivalence_key(component.generic_string())) {
                 return entry.path();
             }
         }
@@ -132,8 +157,8 @@ struct Manifest {
             if (ec) return std::unexpected{error("cannot inspect destination: " + ec.message(), current.generic_string())};
             std::optional<std::filesystem::path> matched;
             for (const auto& entry : entries) {
-                if (case_insensitive_key(entry.path().filename().generic_string()) ==
-                    case_insensitive_key(component.generic_string())) {
+                if (filesystem_equivalence_key(entry.path().filename().generic_string()) ==
+                    filesystem_equivalence_key(component.generic_string())) {
                     matched = entry.path();
                     break;
                 }
@@ -150,6 +175,45 @@ struct Manifest {
         }
     }
     return {};
+}
+
+// Resolve an already-existing portable alias so that a case-only (or Win32
+// trailing-dot/space-only) spelling change cannot create a second physical
+// output when the generator runs on a case-sensitive host.
+[[nodiscard]] Result<std::filesystem::path> resolve_existing_alias(const std::filesystem::path& root,
+                                                                    const std::filesystem::path& relative) {
+    std::error_code ec;
+    auto current = root;
+    for (const auto& component : relative) {
+        const auto exact = current / component;
+        const auto exact_status = std::filesystem::symlink_status(exact, ec);
+        if (!ec && exact_status.type() != std::filesystem::file_type::not_found) {
+            current = exact;
+            continue;
+        }
+        if (ec && ec != std::errc::no_such_file_or_directory) {
+            return std::unexpected{error("cannot inspect destination: " + ec.message(), exact.generic_string())};
+        }
+        ec.clear();
+        std::filesystem::directory_iterator entries(current, ec);
+        if (ec == std::errc::no_such_file_or_directory) {
+            current = exact;
+            continue;
+        }
+        if (ec) return std::unexpected{error("cannot inspect destination: " + ec.message(), current.generic_string())};
+        std::optional<std::filesystem::path> matched;
+        for (const auto& entry : entries) {
+            if (filesystem_equivalence_key(entry.path().filename().generic_string()) ==
+                filesystem_equivalence_key(component.generic_string())) {
+                if (matched) {
+                    return std::unexpected{error("destination has ambiguous portable path aliases", current.generic_string())};
+                }
+                matched = entry.path();
+            }
+        }
+        current = matched ? *matched : exact;
+    }
+    return current;
 }
 
 [[nodiscard]] Result<std::string> read_file(const std::filesystem::path& path) {
@@ -182,7 +246,7 @@ struct Manifest {
             }
             auto normalized = normalize_relative_path(entry["path"].get<std::string>());
             if (!normalized || *normalized != entry["path"].get<std::string>() ||
-                !insensitive_paths.emplace(case_insensitive_key(*normalized)).second ||
+                !insensitive_paths.emplace(filesystem_equivalence_key(*normalized)).second ||
                 !manifest.files.emplace(*normalized, entry["sha256"].get<std::string>()).second) {
                 return std::unexpected{error("manifest contains duplicate or unsafe paths", path.generic_string())};
             }
@@ -290,13 +354,13 @@ constexpr std::array<std::uint32_t, 64> sha_constants = {
 Result<void> GeneratedFileSet::add(GeneratedFile file) {
     auto normalized = normalize_relative_path(file.path);
     if (!normalized) return std::unexpected{normalized.error()};
-    const auto key = case_insensitive_key(*normalized);
+    const auto key = filesystem_equivalence_key(*normalized);
     for (const auto& existing : files_) {
         const auto existing_path = existing.path.generic_string();
-        if (case_insensitive_key(existing_path) == key) {
+        if (filesystem_equivalence_key(existing_path) == key) {
             return std::unexpected{error("generated file set contains duplicate paths on a case-insensitive filesystem", *normalized)};
         }
-        const auto insensitive_existing = case_insensitive_key(existing_path);
+        const auto insensitive_existing = filesystem_equivalence_key(existing_path);
         const auto separator = insensitive_existing + "/";
         const auto new_separator = key + "/";
         if (key.starts_with(separator) || insensitive_existing.starts_with(new_separator)) {
@@ -325,21 +389,28 @@ Result<WriteResult> SafeWriter::write(const GeneratedFileSet& files, const Write
     auto old_manifest = load_manifest(manifest_path); if (!old_manifest) return std::unexpected{old_manifest.error()};
     Manifest next_manifest = options.cleanup_stale ? Manifest{} : *old_manifest;
     std::map<std::string, const GeneratedFile*, std::less<>> next_files;
+    std::set<std::string, std::less<>> next_file_keys;
     for (const auto& file : files.files()) {
         auto normalized=normalize_relative_path(file.path); if(!normalized) return std::unexpected{normalized.error()};
         auto parents=reject_symlink_parents(project_root_, *normalized); if(!parents) return std::unexpected{parents.error()};
         auto ancestors=reject_file_ancestor(project_root_, *normalized); if(!ancestors) return std::unexpected{ancestors.error()};
         next_files.emplace(*normalized,&file);
+        next_file_keys.emplace(filesystem_equivalence_key(*normalized));
+        if (const auto existing = find_equivalent_manifest_entry(next_manifest, *normalized);
+            existing != next_manifest.files.end()) {
+            next_manifest.files.erase(existing);
+        }
         next_manifest.files.insert_or_assign(*normalized, sha256(file.content));
     }
     struct Pending { std::filesystem::path destination; std::string content; };
     std::vector<Pending> writes; std::vector<std::filesystem::path> removals;
     for (const auto& [relative,file] : next_files) {
-        const auto destination=project_root_/relative; auto status=std::filesystem::symlink_status(destination,ec);
+        auto resolved_destination=resolve_existing_alias(project_root_, relative); if(!resolved_destination) return std::unexpected{resolved_destination.error()};
+        const auto destination=*resolved_destination; auto status=std::filesystem::symlink_status(destination,ec);
         if(ec && !is_not_found(ec)) return std::unexpected{error("cannot inspect destination: "+ec.message(),destination.generic_string())};
         if (is_not_found(ec)) { ec.clear(); status = std::filesystem::file_status{}; }
         if(std::filesystem::is_symlink(status) || (std::filesystem::exists(status) && !std::filesystem::is_regular_file(status))) return std::unexpected{error("destination must be a regular file",destination.generic_string())};
-        const auto old = old_manifest->files.find(relative);
+        const auto old = find_equivalent_manifest_entry(*old_manifest, relative);
         const bool owned=old != old_manifest->files.end();
         if(std::filesystem::exists(status) && !owned && !options.force) return std::unexpected{error("refusing to replace an unowned file; use force to take ownership",relative)};
         if (std::filesystem::exists(status) && owned) {
@@ -357,7 +428,7 @@ Result<WriteResult> SafeWriter::write(const GeneratedFileSet& files, const Write
             if (*current != file->content) writes.push_back({destination,file->content});
         }
     }
-    if(options.cleanup_stale) for(const auto& [relative,hash] : old_manifest->files) if(!next_files.contains(relative)) { auto checked=normalize_relative_path(relative); if(!checked) return std::unexpected{checked.error()}; auto parent=reject_symlink_parents(project_root_,*checked); if(!parent) return std::unexpected{parent.error()}; const auto destination=project_root_/relative; auto status=std::filesystem::symlink_status(destination,ec); if(ec && !is_not_found(ec)) return std::unexpected{error("cannot inspect stale file: "+ec.message(),destination.generic_string())}; if (is_not_found(ec)) { ec.clear(); status = std::filesystem::file_status{}; } if(std::filesystem::is_symlink(status) || (std::filesystem::exists(status)&&!std::filesystem::is_regular_file(status))) return std::unexpected{error("owned stale path is not a regular file",relative)}; if(std::filesystem::exists(status)) { auto current=read_file(destination); if(!current)return std::unexpected{current.error()}; if(sha256(*current)!=hash&&!options.force)return std::unexpected{error("refusing to remove a generated file modified since its recorded hash; use force to remove it",relative)}; removals.push_back(destination); } }
+    if(options.cleanup_stale) for(const auto& [relative,hash] : old_manifest->files) if(!next_file_keys.contains(filesystem_equivalence_key(relative))) { auto checked=normalize_relative_path(relative); if(!checked) return std::unexpected{checked.error()}; auto parent=reject_symlink_parents(project_root_,*checked); if(!parent) return std::unexpected{parent.error()}; auto resolved_destination=resolve_existing_alias(project_root_, relative); if(!resolved_destination) return std::unexpected{resolved_destination.error()}; const auto destination=*resolved_destination; auto status=std::filesystem::symlink_status(destination,ec); if(ec && !is_not_found(ec)) return std::unexpected{error("cannot inspect stale file: "+ec.message(),destination.generic_string())}; if (is_not_found(ec)) { ec.clear(); status = std::filesystem::file_status{}; } if(std::filesystem::is_symlink(status) || (std::filesystem::exists(status)&&!std::filesystem::is_regular_file(status))) return std::unexpected{error("owned stale path is not a regular file",relative)}; if(std::filesystem::exists(status)) { auto current=read_file(destination); if(!current)return std::unexpected{current.error()}; if(sha256(*current)!=hash&&!options.force)return std::unexpected{error("refusing to remove a generated file modified since its recorded hash; use force to remove it",relative)}; removals.push_back(destination); } }
     const auto rendered_manifest=render_manifest(next_manifest); bool manifest_changed=true; if(std::filesystem::exists(manifest_path,ec) && !ec) { auto existing=read_file(manifest_path); if(!existing) return std::unexpected{existing.error()}; manifest_changed=*existing!=rendered_manifest; }
     WriteResult result{writes.size(),removals.size(),!writes.empty()||!removals.empty()||manifest_changed};
     if(options.check||options.dry_run||!result.would_change) return result;
@@ -377,9 +448,9 @@ Result<WriteResult> SafeWriter::write(const GeneratedFileSet& files, const Write
 Result<WriteResult> SafeWriter::clean(bool dry_run, bool force) const {
     std::error_code ec; if(!std::filesystem::is_directory(project_root_,ec)||ec) return std::unexpected{error("project root must be an existing directory",project_root_.generic_string())};
     const auto manifest_path=project_root_/manifest_relative_path; auto manifest_parent=reject_symlink_parents(project_root_,manifest_relative_path);if(!manifest_parent)return std::unexpected{manifest_parent.error()}; auto manifest=load_manifest(manifest_path);if(!manifest)return std::unexpected{manifest.error()}; WriteResult result{};
-    for(const auto& [relative,hash]:manifest->files){auto valid=normalize_relative_path(relative);if(!valid)return std::unexpected{valid.error()};auto parents=reject_symlink_parents(project_root_,*valid);if(!parents)return std::unexpected{parents.error()};const auto path=project_root_/relative;auto status=std::filesystem::symlink_status(path,ec);if(ec && !is_not_found(ec))return std::unexpected{error("cannot inspect owned file: "+ec.message(),path.generic_string())};if (is_not_found(ec)) { ec.clear(); status = std::filesystem::file_status{}; }if(std::filesystem::is_symlink(status)||(std::filesystem::exists(status)&&!std::filesystem::is_regular_file(status)))return std::unexpected{error("owned path is not a regular file",relative)};if(std::filesystem::exists(status)){auto current=read_file(path);if(!current)return std::unexpected{current.error()};if(sha256(*current)!=hash&&!force)return std::unexpected{error("refusing to remove a generated file modified since its recorded hash; use force to remove it",relative)};++result.files_removed;result.would_change=true;}}
+    for(const auto& [relative,hash]:manifest->files){auto valid=normalize_relative_path(relative);if(!valid)return std::unexpected{valid.error()};auto parents=reject_symlink_parents(project_root_,*valid);if(!parents)return std::unexpected{parents.error()};auto resolved_path=resolve_existing_alias(project_root_, relative);if(!resolved_path)return std::unexpected{resolved_path.error()};const auto path=*resolved_path;auto status=std::filesystem::symlink_status(path,ec);if(ec && !is_not_found(ec))return std::unexpected{error("cannot inspect owned file: "+ec.message(),path.generic_string())};if (is_not_found(ec)) { ec.clear(); status = std::filesystem::file_status{}; }if(std::filesystem::is_symlink(status)||(std::filesystem::exists(status)&&!std::filesystem::is_regular_file(status)))return std::unexpected{error("owned path is not a regular file",relative)};if(std::filesystem::exists(status)){auto current=read_file(path);if(!current)return std::unexpected{current.error()};if(sha256(*current)!=hash&&!force)return std::unexpected{error("refusing to remove a generated file modified since its recorded hash; use force to remove it",relative)};++result.files_removed;result.would_change=true;}}
     if(std::filesystem::exists(manifest_path,ec)&&!ec)result.would_change=true; if(dry_run||!result.would_change)return result;
-    for(const auto& [relative,hash]:manifest->files){std::filesystem::remove(project_root_/relative,ec);if(ec)return std::unexpected{error("cannot remove owned file: "+ec.message(),relative)};}
+    for(const auto& [relative,hash]:manifest->files){auto resolved_path=resolve_existing_alias(project_root_, relative);if(!resolved_path)return std::unexpected{resolved_path.error()};std::filesystem::remove(*resolved_path,ec);if(ec)return std::unexpected{error("cannot remove owned file: "+ec.message(),relative)};}
     std::filesystem::remove(manifest_path,ec);if(ec)return std::unexpected{error("cannot remove manifest: "+ec.message(),manifest_path.generic_string())}; std::filesystem::remove(manifest_path.parent_path(),ec); return result;
 }
 
