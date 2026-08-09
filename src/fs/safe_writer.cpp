@@ -78,7 +78,11 @@ struct Manifest {
         return std::unexpected{error("generated path must be a non-empty relative path", path.generic_string())};
     }
     const auto normalized = path.lexically_normal();
-    if (normalized == "." || normalized.string().empty()) {
+    // A generated entry always denotes a file.  Preserve this distinction
+    // before the write phase: paths ending in a separator (including
+    // `directory/.`) have no filename and would otherwise reach filesystem
+    // operations as directory destinations.
+    if (normalized == "." || normalized.filename().empty()) {
         return std::unexpected{error("generated path must name a file", path.generic_string())};
     }
     for (const auto& component : normalized) {

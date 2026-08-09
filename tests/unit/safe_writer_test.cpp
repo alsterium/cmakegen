@@ -192,6 +192,10 @@ TEST_CASE("safe writer rejects portable metadata aliases and output collisions d
     cmakegen::GeneratedFileSet win32_aliases;
     REQUIRE(win32_aliases.add({"output", "one\n"}));
     CHECK_FALSE(win32_aliases.add({"output. ", "two\n"}));
+
+    cmakegen::GeneratedFileSet directory_destinations;
+    CHECK_FALSE(directory_destinations.add({"directory/file/", "bad\n"}));
+    CHECK_FALSE(directory_destinations.add({"directory/file/.", "bad\n"}));
 }
 
 TEST_CASE("safe writer recognizes manifest ownership through portable path aliases") {
