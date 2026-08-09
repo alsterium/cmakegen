@@ -64,12 +64,35 @@ TEST_CASE("CLI validates, dumps, and prints project-only or external dependency 
     const auto project = (fixture.path() / "project.yml").string();
     CHECK(run({"--project", project, "validate"}, output, error) == 0);
     CHECK(output == "Valid.\n");
-    CHECK(run({"--project", project, "dump", "--format", "json"}, output, error) == 0);
+    CHECK(run({"--project", project, "dump"}, output, error) == 0);
     CHECK(output.find("\"name\": \"Example\"") != std::string::npos);
     CHECK(run({"--project", project, "graph"}, output, error) == 0);
+    CHECK(output.starts_with("└── App\n"));
+    CHECK(output.find("    └── Core\n") != std::string::npos);
     CHECK(output.find("fmt::fmt") == std::string::npos);
     CHECK(run({"--project", project, "graph", "--include-external", "--format", "dot"}, output, error) == 0);
     CHECK(output.find("\"App\" -> \"fmt::fmt\"") != std::string::npos);
+}
+
+TEST_CASE("CLI rejects command-only options on commands that do not support them") {
+    std::string output, error;
+    CHECK(run({"generate", "--dry-run"}, output, error) == 1);
+    CHECK(error == "error: --dry-run is only valid with clean\n");
+    CHECK(run({"validate", "--force"}, output, error) == 1);
+    CHECK(error == "error: --force is only valid with generate\n");
+    CHECK(run({"clean", "--format", "json"}, output, error) == 1);
+    CHECK(error == "error: --format is only valid with dump or graph\n");
+}
+
+TEST_CASE("CLI verbose mode reports command context and validation progress") {
+    FixtureDirectory fixture;
+    fixture.file("project.yml", valid_project);
+    std::string output, error;
+    const auto project = (fixture.path() / "project.yml").string();
+    CHECK(run({"--project", project, "validate", "--verbose"}, output, error) == 0);
+    CHECK(output == "Valid.\n");
+    CHECK(error.find("verbose: command=validate") != std::string::npos);
+    CHECK(error.find("verbose: validated Example (2 targets)") != std::string::npos);
 }
 
 TEST_CASE("CLI generate honors check, force, root, and clean dry run safety behavior") {

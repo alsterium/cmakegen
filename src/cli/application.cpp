@@ -34,7 +34,8 @@ struct Options {
     bool resolved = false;
     bool include_external = false;
     bool dry_run = false;
-    std::string format = "text";
+    std::string format = "json";
+    bool format_specified = false;
     std::string command;
 };
 
@@ -70,7 +71,7 @@ void print_diagnostics(const DiagnosticSet& diagnostics, bool color, std::ostrea
         else if (arg == "--resolved") options.resolved = true;
         else if (arg == "--include-external") options.include_external = true;
         else if (arg == "--dry-run") options.dry_run = true;
-        else if (arg == "--format") { auto v = value(arg); if (!v) return std::nullopt; options.format = *v; }
+        else if (arg == "--format") { auto v = value(arg); if (!v) return std::nullopt; options.format = *v; options.format_specified = true; }
         else if (arg == "--version") { options.command = "version"; }
         else if (arg == "--help" || arg == "-h") { options.command = "help"; }
         else if (arg.starts_with('-')) { error << "error: unknown option " << arg << '\n'; return std::nullopt; }
@@ -79,6 +80,24 @@ void print_diagnostics(const DiagnosticSet& diagnostics, bool color, std::ostrea
     }
     if (options.verbose && options.quiet) { error << "error: --verbose and --quiet cannot be combined\n"; return std::nullopt; }
     return options;
+}
+
+[[nodiscard]] bool validate_command_options(const Options& options, std::ostream& error) {
+    const auto require = [&](bool supplied, std::string_view option, std::string_view command) {
+        if (!supplied || options.command == command) return true;
+        error << "error: " << option << " is only valid with " << command << "\n";
+        return false;
+    };
+    if (!require(options.check, "--check", "generate")) return false;
+    if (!require(options.force, "--force", "generate")) return false;
+    if (!require(options.resolved, "--resolved", "validate")) return false;
+    if (!require(options.include_external, "--include-external", "graph")) return false;
+    if (!require(options.dry_run, "--dry-run", "clean")) return false;
+    if (options.format_specified && options.command != "dump" && options.command != "graph") {
+        error << "error: --format is only valid with dump or graph\n";
+        return false;
+    }
+    return true;
 }
 
 void print_help(std::ostream& output) {
@@ -137,9 +156,9 @@ void print_graph_text(const TargetGraph& graph, bool include_external, std::ostr
     std::set<std::string> children;
     for (const auto& [target, dependencies] : graph.internal_adjacency)
         children.insert(dependencies.begin(), dependencies.end());
-    std::function<void(const std::string&, std::string, bool, std::set<std::string>&)> visit;
-    visit = [&](const std::string& target, std::string prefix, bool last, std::set<std::string>& seen) {
-        output << prefix << (prefix.empty() ? "" : (last ? "└── " : "├── ")) << target << '\n';
+    std::function<void(const std::string&, const std::string&, bool, std::set<std::string>&)> visit;
+    visit = [&](const std::string& target, const std::string& prefix, bool last, std::set<std::string>& seen) {
+        output << prefix << (last ? "└── " : "├── ") << target << '\n';
         if (!seen.insert(target).second) return;
         std::vector<std::string> dependencies = graph.internal_adjacency.at(target);
         if (include_external) for (const auto& dependency : graph.dependencies.at(target))
@@ -147,15 +166,18 @@ void print_graph_text(const TargetGraph& graph, bool include_external, std::ostr
         std::ranges::sort(dependencies);
         for (std::size_t i = 0; i < dependencies.size(); ++i) {
             const bool child_last = i + 1 == dependencies.size();
+            const auto child_prefix = prefix + (last ? "    " : "│   ");
             if (graph.internal_adjacency.contains(dependencies[i]))
-                visit(dependencies[i], prefix + (prefix.empty() ? "" : (last ? "    " : "│   ")), child_last, seen);
-            else output << prefix + (prefix.empty() ? "" : (last ? "    " : "│   "))
-                        << (child_last ? "└── " : "├── ") << dependencies[i] << '\n';
+                visit(dependencies[i], child_prefix, child_last, seen);
+            else output << child_prefix << (child_last ? "└── " : "├── ") << dependencies[i] << '\n';
         }
         seen.erase(target);
     };
-    for (const auto& [target, unused] : graph.internal_adjacency) if (!children.contains(target)) {
-        std::set<std::string> seen; visit(target, {}, true, seen);
+    std::vector<std::string> roots;
+    for (const auto& [target, unused] : graph.internal_adjacency) if (!children.contains(target)) roots.push_back(target);
+    std::ranges::sort(roots);
+    for (std::size_t index = 0; index < roots.size(); ++index) {
+        std::set<std::string> seen; visit(roots[index], {}, index + 1 == roots.size(), seen);
     }
 }
 
@@ -181,8 +203,11 @@ int run_cli(const std::vector<std::string>& arguments, std::ostream& output, std
         if (options.command != "generate" && options.command != "validate" && options.command != "dump" && options.command != "graph" && options.command != "clean") {
             error << "error: unknown command " << options.command << '\n'; return 1;
         }
+        if (!validate_command_options(options, error)) return 1;
         const auto spec = std::filesystem::absolute(options.project);
         const auto root = options.root ? std::filesystem::absolute(*options.root) : spec.parent_path();
+        if (options.verbose) error << "verbose: command=" << options.command << " project=" << spec.generic_string()
+                                   << " root=" << root.generic_string() << '\n';
         if (options.command == "clean") {
             auto cleaned = SafeWriter(root).clean(options.dry_run);
             if (!cleaned) { print_diagnostics(cleaned.error(), !options.no_color, error); return diagnostic_exit(cleaned.error()); }
@@ -197,9 +222,15 @@ int run_cli(const std::vector<std::string>& arguments, std::ostream& output, std
             auto result = resolve_project_sources(*project, root);
             if (!result) { print_diagnostics(result.error(), !options.no_color, error); return diagnostic_exit(result.error()); }
             resolved = std::move(*result);
+            if (options.verbose) {
+                std::size_t source_count = 0;
+                for (const auto& [target, sources] : resolved.semantic_sources) source_count += sources.size();
+                error << "verbose: resolved " << source_count << " source files\n";
+            }
         }
         auto graph = validate_project(*project, need_sources ? resolved.semantic_sources : ResolvedSourcesByTarget{});
         if (!graph) { print_diagnostics(graph.error(), !options.no_color, error); return diagnostic_exit(graph.error()); }
+        if (options.verbose) error << "verbose: validated " << project->name << " (" << project->targets.size() << " targets)\n";
         if (options.command == "validate") { if (!options.quiet) output << "Valid.\n"; return 0; }
         if (options.command == "dump") {
             if (options.format == "json") output << dump_project_json(*project);
@@ -208,7 +239,7 @@ int run_cli(const std::vector<std::string>& arguments, std::ostream& output, std
             return 0;
         }
         if (options.command == "graph") {
-            if (options.format == "text") print_graph_text(*graph, options.include_external, output);
+            if (!options.format_specified || options.format == "text") print_graph_text(*graph, options.include_external, output);
             else if (options.format == "dot") print_graph_dot(*graph, options.include_external, output);
             else { error << "error: graph format must be text or dot\n"; return 1; }
             return 0;
