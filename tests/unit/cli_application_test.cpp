@@ -125,9 +125,23 @@ TEST_CASE("CLI generate honors check, force, root, and clean dry run safety beha
 
 TEST_CASE("CLI resolves sources relative to the specification, not the output root") {
     FixtureDirectory fixture;
-    fixture.file("spec/project.yml", valid_project);
+    fixture.file("spec/project.yml", R"(schemaVersion: 1
+name: Example
+cmake:
+  include: [cmake/custom.cmake]
+targets:
+  App:
+    type: executable
+    sources: [src/main.cpp]
+    includeDirectories: [include]
+  Core:
+    type: staticLibrary
+    sources: [src/core.cpp]
+)");
     fixture.file("spec/src/main.cpp", "int main() {}\n");
     fixture.file("spec/src/core.cpp", "void core() {}\n");
+    fixture.file("spec/cmake/custom.cmake", "# custom\n");
+    std::filesystem::create_directories(fixture.path() / "spec/include");
     const auto output_root = fixture.path() / "generated";
     std::filesystem::create_directories(output_root);
     std::string output, error;
@@ -136,8 +150,12 @@ TEST_CASE("CLI resolves sources relative to the specification, not the output ro
     CHECK(std::filesystem::exists(output_root / "CMakeLists.txt"));
     CHECK_FALSE(std::filesystem::exists(fixture.path() / "spec/CMakeLists.txt"));
     std::ifstream generated{output_root / "cmake/cmakegen.generated.cmake"};
-    const std::string contents{std::istreambuf_iterator<char>{generated}, std::istreambuf_iterator<char>{}};
-    CHECK(contents.find("../spec/src/main.cpp") != std::string::npos);
+    const std::string generated_contents{std::istreambuf_iterator<char>{generated}, std::istreambuf_iterator<char>{}};
+    CHECK(generated_contents.find("../spec/src/main.cpp") != std::string::npos);
+    CHECK(generated_contents.find("../spec/include") != std::string::npos);
+    std::ifstream root_cmake{output_root / "CMakeLists.txt"};
+    const std::string root_contents{std::istreambuf_iterator<char>{root_cmake}, std::istreambuf_iterator<char>{}};
+    CHECK(root_contents.find("../spec/cmake/custom.cmake") != std::string::npos);
 }
 
 TEST_CASE("CLI graph escapes DOT strings and prints platform-union cycle components") {

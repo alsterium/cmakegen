@@ -127,6 +127,19 @@ struct ResolvedProject {
     RenderedSourcesByTarget rendered_sources;
 };
 
+[[nodiscard]] std::string rebase_project_path(const std::string& value,
+                                              const std::filesystem::path& source_root,
+                                              const std::filesystem::path& output_root) {
+    const auto declared = std::filesystem::path{value};
+    const auto absolute = (declared.is_absolute() ? declared : source_root / declared).lexically_normal();
+    std::error_code error;
+    const auto relative = std::filesystem::relative(absolute, output_root, error);
+    // Different Windows volumes cannot be represented relatively.  CMake
+    // accepts an absolute source/include path, whereas an empty argument is
+    // silently unusable.
+    return error || relative.empty() ? absolute.generic_string() : relative.lexically_normal().generic_string();
+}
+
 [[nodiscard]] Result<ResolvedProject> resolve_project_sources(const Project& project,
                                                                 const std::filesystem::path& source_root,
                                                                 const std::filesystem::path& output_root) {
@@ -137,9 +150,7 @@ struct ResolvedProject {
         if (!sources) return std::unexpected{sources.error()};
         destination = std::move(*sources);
         for (auto& source : destination) {
-            const auto source_path = std::filesystem::path{source.path};
-            const auto absolute_path = source_path.is_absolute() ? source_path : source_root / source_path;
-            source.path = std::filesystem::relative(absolute_path, output_root).lexically_normal().generic_string();
+            source.path = rebase_project_path(source.path, source_root, output_root);
         }
         return {};
     };
@@ -153,6 +164,23 @@ struct ResolvedProject {
             std::ranges::sort(*sources, {}, &ResolvedSource::path);
     }
     return result;
+}
+
+void rebase_scoped_paths(ScopedValues<std::string>& values, const std::filesystem::path& source_root,
+                         const std::filesystem::path& output_root) {
+    for (auto* scope : {&values.private_values, &values.public_values, &values.interface_values})
+        for (auto& value : *scope) value = rebase_project_path(value, source_root, output_root);
+}
+
+void rebase_render_paths(Project& project, const std::filesystem::path& source_root,
+                         const std::filesystem::path& output_root) {
+    for (auto& include : project.cmake.include_files)
+        include = rebase_project_path(include, source_root, output_root);
+    for (auto& [unused, target] : project.targets) {
+        rebase_scoped_paths(target.include_directories, source_root, output_root);
+        for (auto* platform : {&target.platform.macos, &target.platform.linux, &target.platform.windows})
+            rebase_scoped_paths(platform->include_directories, source_root, output_root);
+    }
 }
 
 void print_graph_text(const TargetGraph& graph, bool include_external, std::ostream& output) {
@@ -283,7 +311,9 @@ int run_cli(const std::vector<std::string>& arguments, std::ostream& output, std
             else { error << "error: graph format must be text or dot\n"; return 1; }
             return 0;
         }
-        const auto cmake = render_cmake(*project, *graph, resolved.rendered_sources);
+        auto render_project = *project;
+        rebase_render_paths(render_project, spec.parent_path(), root);
+        const auto cmake = render_cmake(render_project, *graph, resolved.rendered_sources);
         GeneratedFileSet files;
         (void)files.add({"CMakeLists.txt", cmake.root_cmake_lists});
         (void)files.add({"cmake/cmakegen.generated.cmake", cmake.generated_cmake});
