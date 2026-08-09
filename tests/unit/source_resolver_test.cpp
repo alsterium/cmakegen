@@ -114,10 +114,15 @@ TEST_CASE("source resolver rejects duplicate paths with conflicting kinds") {
 
     const SourceEntry source{"src/main.cpp", true, {}, SourceKind::source,
                              "targets.App.sources[0]", SourceLocation{7, 7}};
+    const SourceEntry duplicate_source{"src/main.cpp", true, {}, SourceKind::source,
+                                       "targets.App.sources[2]", SourceLocation{9, 7}};
     const SourceEntry header{"src/main.cpp", true, {}, SourceKind::header,
                              "targets.App.sources[1]", SourceLocation{8, 7}};
+    const SourceEntry duplicate_header{"src/main.cpp", true, {}, SourceKind::header,
+                                       "targets.App.sources[3]", SourceLocation{10, 7}};
 
-    const auto resolved = resolve_sources(fixture.path(), {source, header});
+    const auto resolved = resolve_sources(fixture.path(),
+                                          {duplicate_header, duplicate_source, header, source});
     REQUIRE_FALSE(resolved);
     REQUIRE(resolved.error().diagnostics().size() == 1);
     CHECK(resolved.error().diagnostics()[0].code == diagnostic_codes::invalid_value);
@@ -211,6 +216,19 @@ TEST_CASE("source resolver does not traverse directory symlinks") {
     const auto resolved = resolve_sources(fixture.path(), {{"src", true, {}, SourceKind::automatic}});
     REQUIRE(resolved);
     CHECK(paths(*resolved) == std::vector<std::string>{"src/main.cpp"});
+}
+
+TEST_CASE("source resolver includes regular-file symlinks during recursive scans") {
+    FixtureDirectory fixture;
+    fixture.file("src/main.cpp");
+    fixture.file("shared/linked.cpp");
+    std::error_code error;
+    std::filesystem::create_symlink(fixture.path() / "shared/linked.cpp", fixture.path() / "src/linked.cpp", error);
+    if (error) SKIP("file symlinks are unavailable on this platform");
+
+    const auto resolved = resolve_sources(fixture.path(), {{"src", true, {}, SourceKind::automatic}});
+    REQUIRE(resolved);
+    CHECK(paths(*resolved) == std::vector<std::string>{"src/linked.cpp", "src/main.cpp"});
 }
 
 TEST_CASE("source resolver accepts normalized Windows-style source paths") {

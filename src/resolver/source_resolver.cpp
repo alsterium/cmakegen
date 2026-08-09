@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cstdint>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 namespace cmakegen {
@@ -180,6 +181,7 @@ Result<std::vector<ResolvedSource>> resolve_sources(const std::filesystem::path&
                 if (error) break;
                 if (std::filesystem::is_symlink(current_status)) {
                     if (std::filesystem::is_directory(current, error)) iterator.disable_recursion_pending();
+                    else if (!error && std::filesystem::is_regular_file(current, error)) add_directory_file(current);
                 } else if (std::filesystem::is_regular_file(current, error)) {
                     add_directory_file(current);
                 }
@@ -204,8 +206,12 @@ Result<std::vector<ResolvedSource>> resolve_sources(const std::filesystem::path&
     }
 
     std::ranges::sort(resolved, [](const ResolvedSourceCandidate& left, const ResolvedSourceCandidate& right) {
-        return left.source.path == right.source.path ? left.source.kind < right.source.kind
-                                                      : left.source.path < right.source.path;
+        const auto left_line = left.diagnostic_location ? left.diagnostic_location->line : 0;
+        const auto left_column = left.diagnostic_location ? left.diagnostic_location->column : 0;
+        const auto right_line = right.diagnostic_location ? right.diagnostic_location->line : 0;
+        const auto right_column = right.diagnostic_location ? right.diagnostic_location->column : 0;
+        return std::tuple{left.source.path, left.source.kind, left.diagnostic_path, left_line, left_column} <
+               std::tuple{right.source.path, right.source.kind, right.diagnostic_path, right_line, right_column};
     });
     for (std::size_t index = 1; index < resolved.size(); ++index) {
         if (resolved[index - 1].source.path == resolved[index].source.path &&

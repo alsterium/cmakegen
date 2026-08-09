@@ -62,6 +62,18 @@ T006.
 - Generated files: unchanged.
 - Follow-ups: none.
 
+## Execution record — review follow-up 7
+
+- Date: 2026-08-09
+- Summary: Included regular-file symlinks during recursive directory expansion
+  while continuing not to traverse directory symlinks. Added source provenance
+  as a sort tie-breaker so kind-conflict diagnostics remain reproducible when
+  duplicate entries are present.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure`.
+- Generated files: unchanged.
+- Follow-ups: none.
+
 ## Execution record — review follow-up 6
 
 - Date: 2026-08-09
