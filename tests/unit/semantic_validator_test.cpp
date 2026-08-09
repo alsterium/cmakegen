@@ -247,8 +247,10 @@ TEST_CASE("source semantic diagnostics retain declaration provenance") {
         {"src/implementation.cpp", true, {}, SourceKind::source,
          "targets.Headers.platform.linux.sources[0]", location});
     ResolvedSourcesByTarget resolved{{"Headers",
-                                      {{"src/discovered.cpp", SourceKind::source,
-                                        "targets.Headers.platform.linux.sources[0]", location}}}};
+                                      {{}, {},
+                                       {{"src/discovered.cpp", SourceKind::source,
+                                         "targets.Headers.platform.linux.sources[0]", location}},
+                                       {}}}};
 
     const auto result = validate_project(project_with_targets({interface_target}), resolved);
     REQUIRE_FALSE(result);
