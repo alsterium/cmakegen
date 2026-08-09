@@ -136,8 +136,9 @@ struct Manifest {
         current = **matched;
         const auto status = std::filesystem::symlink_status(current, ec);
         if (ec) return std::unexpected{error("cannot inspect destination ancestor: " + ec.message(), current.generic_string())};
-        if (std::filesystem::is_regular_file(status) &&
-            std::ranges::find(removable_files, current) == removable_files.end()) {
+        const bool removable_regular_file = std::filesystem::is_regular_file(status) &&
+                                           std::ranges::find(removable_files, current) != removable_files.end();
+        if (!std::filesystem::is_directory(status) && !removable_regular_file) {
             return std::unexpected{error("generated path collides with an existing file ancestor", current.generic_string())};
         }
     }
