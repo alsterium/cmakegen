@@ -107,9 +107,10 @@ Must match:
 
 ### version
 
-Optional semantic-ish version string.
-
-Do not strictly enforce SemVer in MVP.
+Optional CMake project version: one to four dot-separated, non-negative integer
+components (for example, `0.1.0` or `1.2.3.4`). CMake emits this value through
+`project(VERSION ...)`, which does not accept SemVer prerelease or build
+metadata such as `1.2.3-beta`.
 
 ### cmake
 
