@@ -89,6 +89,15 @@ struct Manifest {
         return std::unexpected{error("generated path must name a file", path.generic_string())};
     }
     for (const auto& component : normalized) {
+        auto portable_component = component.generic_string();
+        while (!portable_component.empty() &&
+               (portable_component.back() == '.' || portable_component.back() == ' ')) {
+            portable_component.pop_back();
+        }
+        if (portable_component.empty()) {
+            return std::unexpected{error("generated path contains a component empty under Win32 rules",
+                                         path.generic_string())};
+        }
         if (component == "..") {
             return std::unexpected{error("generated path cannot escape the project root", path.generic_string())};
         }
