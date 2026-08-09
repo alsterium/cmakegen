@@ -49,3 +49,7 @@ T003.
   normalization without a Unicode/filesystem capability layer. Add that layer
   (and macOS case-insensitive coverage) in a dedicated follow-up before
   claiming Unicode-equivalent output names are collision-safe.
+- Handoff (2026-08-09): `SafeWriter` does not yet roll back already-replaced
+  outputs if a later atomic replacement fails. Implementing this safely needs
+  a transaction journal/backups with recovery semantics, including Windows
+  locked-file behavior; track it as a dedicated writer transaction task.
