@@ -57,14 +57,33 @@ void validate_interface_scopes(DiagnosticSet& diagnostics, const Target& target,
     validate_scopes(target.include_directories, path + ".includeDirectories");
     validate_scopes(target.definitions, path + ".definitions");
     validate_scopes(target.compile_options, path + ".compileOptions");
-    validate_scopes(target.dependencies, path + ".dependencies");
+    const auto validate_dependencies = [&](const ScopedValues<LinkDependency>& values,
+                                           const std::string& property_path) {
+        const auto validate_scope = [&](const std::vector<LinkDependency>& dependencies,
+                                        std::string_view scope) {
+            for (std::size_t index = 0; index < dependencies.size(); ++index) {
+                const auto& dependency = dependencies[index];
+                if (scope == "interface") continue;
+                diagnostics.add({std::string{diagnostic_codes::semantic_error}, DiagnosticSeverity::error,
+                                 "interface libraries only allow interface scope",
+                                 dependency.diagnostic_path.empty()
+                                     ? property_path + "." + std::string{scope} + "[" + std::to_string(index) + "]"
+                                     : dependency.diagnostic_path,
+                                 dependency.diagnostic_location});
+            }
+        };
+        validate_scope(values.private_values, "private");
+        validate_scope(values.public_values, "public");
+        validate_scope(values.interface_values, "interface");
+    };
+    validate_dependencies(target.dependencies, path + ".dependencies");
 
     const auto validate_override = [&](const TargetOverride& override, std::string_view platform) {
         const auto platform_path = path + ".platform." + std::string{platform};
         validate_scopes(override.include_directories, platform_path + ".includeDirectories");
         validate_scopes(override.definitions, platform_path + ".definitions");
         validate_scopes(override.compile_options, platform_path + ".compileOptions");
-        validate_scopes(override.dependencies, platform_path + ".dependencies");
+        validate_dependencies(override.dependencies, platform_path + ".dependencies");
     };
     validate_override(target.platform.macos, "macos");
     validate_override(target.platform.linux, "linux");
@@ -270,7 +289,10 @@ Result<TargetGraph> validate_project(const Project& project,
     for (const auto& [key, target] : project.targets) {
         const auto path = target_path(key);
         if (!is_valid_logical_name(key)) {
-            add_semantic_error(diagnostics, path, "target name contains unsupported characters");
+            diagnostics.add({std::string{diagnostic_codes::semantic_error}, DiagnosticSeverity::error,
+                             "target name contains unsupported characters",
+                             target.diagnostic_path.empty() ? path : target.diagnostic_path,
+                             target.diagnostic_location});
         }
         if (target.name != key) {
             add_semantic_error(diagnostics, path, "target key and logical target name must match");

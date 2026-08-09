@@ -152,6 +152,8 @@ template <typename T, typename Transform>
 [[nodiscard]] Target normalize_target(const RawTarget& raw, const RawSpec& spec) {
     Target result;
     result.name = raw.name;
+    result.diagnostic_path = raw.path;
+    result.diagnostic_location = raw.location;
     result.type = normalize_target_type(raw.type.value);
     result.sources.reserve(raw.sources.size());
     for (const auto& source : raw.sources) result.sources.push_back(normalize_source(source));

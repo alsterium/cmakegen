@@ -261,6 +261,27 @@ TEST_CASE("source semantic diagnostics retain declaration provenance") {
     }
 }
 
+TEST_CASE("semantic validation retains parsed target and dependency provenance") {
+    const auto raw = parse_raw_spec(R"(
+schemaVersion: 1
+name: example
+targets:
+  bad/name:
+    type: interfaceLibrary
+    dependencies:
+      private: [fmt::fmt]
+)");
+    REQUIRE(raw);
+    const auto result = validate_project(normalize_project(*raw));
+    REQUIRE_FALSE(result);
+    const auto& diagnostics = result.error().diagnostics();
+    REQUIRE(diagnostics.size() == 2);
+    CHECK(diagnostics[0].path == "targets.bad/name");
+    CHECK(diagnostics[0].location == SourceLocation{5, 3});
+    CHECK(diagnostics[1].path == "targets.bad/name.dependencies.private[0]");
+    CHECK(diagnostics[1].location == SourceLocation{8, 17});
+}
+
 TEST_CASE("semantic validation diagnoses malformed manually constructed logical definitions and paths") {
     auto target_with_mismatched_name = target("Different");
     target_with_mismatched_name.sources.push_back({"", true, {}, SourceKind::automatic});

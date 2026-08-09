@@ -67,6 +67,8 @@ struct PlatformOverrides {
 
 struct Target {
     std::string name;
+    std::string diagnostic_path;
+    std::optional<SourceLocation> diagnostic_location;
     TargetType type;
     std::vector<SourceEntry> sources;
     ScopedValues<std::string> include_directories;
