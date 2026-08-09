@@ -32,3 +32,100 @@ T006.
 - Run resolver tests for recursion, ordering, exclusions, missing paths,
   explicit extensions, symlinks, and Windows-style path normalization.
 - Ensure test fixtures require no network access.
+
+## Execution record
+
+- Date: 2026-08-09
+- Summary: Added a `std::filesystem`-based source resolver that expands
+  recursive and non-recursive directory entries into stable, slash-normalized
+  source lists. Directory expansion recognizes the MVP source/header extension
+  set; explicit files remain present regardless of extension. Exclusions match
+  normalized entry-relative and project-relative glob paths. Directory
+  symlinks are not traversed, and missing or unreadable paths return structured
+  `CMG2001` diagnostics.
+- Verification: `cmake -S bootstrap -B build/bootstrap && cmake --build
+  build/bootstrap --parallel 2 && ctest --test-dir build/bootstrap
+  --output-on-failure` (pass; 59/59 tests).
+- Generated files: unchanged; normal generated CMake does not exist until
+  T014.
+- Follow-ups: T008 consumes the resolved source lists during semantic
+  validation.
+
+## Execution record — review follow-up
+
+- Date: 2026-08-09
+- Summary: Stopped silently skipping unreadable directories during source
+  traversal. Permission failures now produce the existing structured `CMG2001`
+  diagnostic instead of generating an incomplete source list.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure` (pass; 60/60 tests).
+- Generated files: unchanged.
+- Follow-ups: none.
+
+## Execution record — review follow-up 7
+
+- Date: 2026-08-09
+- Summary: Included regular-file symlinks during recursive directory expansion
+  while continuing not to traverse directory symlinks. Added source provenance
+  as a sort tie-breaker so kind-conflict diagnostics remain reproducible when
+  duplicate entries are present.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure`.
+- Generated files: unchanged.
+- Follow-ups: none.
+
+## Execution record — review follow-up 6
+
+- Date: 2026-08-09
+- Summary: Preserved filesystem inspection failures before iterator advancement
+  so they cannot be overwritten. Source-path lookup failures now report their
+  actual filesystem cause rather than being mislabeled as missing paths.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure`.
+- Generated files: unchanged.
+- Follow-ups: none.
+
+## Execution record — review follow-up 5
+
+- Date: 2026-08-09
+- Summary: Memoized glob matcher states to prevent exponential backtracking on
+  complex exclusion patterns. Retained source-entry provenance until duplicate
+  kind conflicts are diagnosed, so those diagnostics also identify the YAML
+  source entry and location.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure`.
+- Generated files: unchanged.
+- Follow-ups: none.
+
+## Execution record — review follow-up 4
+
+- Date: 2026-08-09
+- Summary: Preserved each normalized source entry's YAML path and source
+  location so resolver filesystem diagnostics identify the corresponding
+  `targets.<name>.sources[...]` entry rather than only the filesystem path.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure`.
+- Generated files: unchanged.
+- Follow-ups: none.
+
+## Execution record — review follow-up 3
+
+- Date: 2026-08-09
+- Summary: Made single-character glob wildcards path-component local, so `?`
+  cannot match `/`. The resolver now reports an invalid-value diagnostic when
+  overlapping entries give the same source path different kinds, eliminating
+  implementation-dependent duplicate selection.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure`.
+- Generated files: unchanged.
+- Follow-ups: none.
+
+## Execution record — review follow-up 2
+
+- Date: 2026-08-09
+- Summary: Applied an explicit source kind consistently to files expanded from
+  directories, matching explicit-file resolution semantics.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure`.
+- Generated files: unchanged.
+- Follow-ups: none.
