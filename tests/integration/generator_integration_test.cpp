@@ -89,9 +89,12 @@ void require_generated_outputs_unchanged(const std::filesystem::path& root,
 }
 
 [[nodiscard]] int cmake_command(const std::filesystem::path& source, const std::filesystem::path& build,
-                                bool build_project) {
+                                bool build_project,
+                                const std::filesystem::path& package_prefix = {}) {
     const auto command = std::string{"\"" CMAKEGEN_CMAKE_COMMAND "\" "} +
-        (build_project ? "--build \"" + build.string() + "\"" : "-S \"" + source.string() + "\" -B \"" + build.string() + "\"");
+        (build_project ? "--build \"" + build.string() + "\""
+                       : "-S \"" + source.string() + "\" -B \"" + build.string() + "\"" +
+                             (package_prefix.empty() ? "" : " -DCMAKE_PREFIX_PATH=\"" + package_prefix.string() + "\""));
     return std::system(command.c_str());
 }
 
@@ -111,14 +114,17 @@ TEST_CASE("full generator pipeline matches offline golden fixtures") {
 }
 
 TEST_CASE("generated fixture projects configure and build without network access") {
-    for (const auto name : {"basic", "internal-library", "platform", "exclusion"}) {
+    for (const auto name : {"basic", "internal-library", "package", "platform", "exclusion"}) {
         TemporaryDirectory output_directory;
         copy_fixture(name, output_directory.path());
         std::string output;
         std::string error;
         INFO("fixture: " << name);
         REQUIRE(run_cli_at(output_directory.path(), {"generate", "--no-color"}, output, error) == 0);
-        REQUIRE(cmake_command(output_directory.path(), output_directory.path() / "build", false) == 0);
+        const auto package_prefix = std::string_view{name} == "package"
+            ? output_directory.path() / "vendor/fmt"
+            : std::filesystem::path{};
+        REQUIRE(cmake_command(output_directory.path(), output_directory.path() / "build", false, package_prefix) == 0);
         REQUIRE(cmake_command(output_directory.path(), output_directory.path() / "build", true) == 0);
     }
 }
