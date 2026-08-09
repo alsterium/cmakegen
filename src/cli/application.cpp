@@ -12,6 +12,7 @@
 #include "cmakegen/version.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -131,13 +132,20 @@ struct ResolvedProject {
                                               const std::filesystem::path& source_root,
                                               const std::filesystem::path& output_root) {
     const auto declared = std::filesystem::path{value};
+    // std::filesystem follows the host's path grammar.  The project model is
+    // cross-platform, so preserve Windows drive and UNC roots even while a
+    // POSIX host generates the Windows-specific portions of a project.
+    const bool foreign_windows_absolute =
+        (value.size() >= 3 && std::isalpha(static_cast<unsigned char>(value[0])) &&
+         value[1] == ':' && (value[2] == '/' || value[2] == '\\')) ||
+        value.starts_with("//") || value.starts_with("\\\\");
+    if (foreign_windows_absolute) return value;
     const auto absolute = (declared.is_absolute() ? declared : source_root / declared).lexically_normal();
-    std::error_code error;
-    const auto relative = std::filesystem::relative(absolute, output_root, error);
-    // Different Windows volumes cannot be represented relatively.  CMake
-    // accepts an absolute source/include path, whereas an empty argument is
-    // silently unusable.
-    return error || relative.empty() ? absolute.generic_string() : relative.lexically_normal().generic_string();
+    // Unlike std::filesystem::relative(), lexical rebasing never resolves
+    // source symlinks.  CMake must see the declared spelling so suffix-based
+    // language detection remains consistent with the project specification.
+    const auto relative = absolute.lexically_relative(output_root);
+    return relative.empty() ? absolute.generic_string() : relative.generic_string();
 }
 
 [[nodiscard]] Result<ResolvedProject> resolve_project_sources(const Project& project,
@@ -182,7 +190,7 @@ void rebase_render_paths(Project& project, const std::filesystem::path& source_r
             rebase_scoped_paths(platform->include_directories, source_root, output_root);
     }
     for (auto& [unused, preset] : project.presets) {
-        if (!preset.binary_dir.starts_with('$') && !std::filesystem::path{preset.binary_dir}.is_absolute())
+        if (!preset.binary_dir.starts_with('$'))
             preset.binary_dir = rebase_project_path(preset.binary_dir, source_root, output_root);
     }
 }

@@ -165,6 +165,39 @@ presets:
     CHECK(preset_contents.find("${sourceDir}/../spec/out/debug") != std::string::npos);
 }
 
+TEST_CASE("CLI preserves foreign absolute paths and source symlink spellings while rebasing") {
+    FixtureDirectory fixture;
+    fixture.file("spec/project.yml", R"(schemaVersion: 1
+name: Example
+targets:
+  App:
+    type: executable
+    sources: [src/main.cpp]
+    includeDirectories: [C:/SDK/include]
+presets:
+  debug:
+    buildType: Debug
+    binaryDir: C:/build/example
+)");
+    fixture.file("spec/actual.c", "int main() { return 0; }\n");
+    std::filesystem::create_directories(fixture.path() / "spec/src");
+    std::error_code symlink_error;
+    std::filesystem::create_symlink("../actual.c", fixture.path() / "spec/src/main.cpp", symlink_error);
+    if (symlink_error) SKIP("file symlinks are unavailable on this platform");
+    const auto output_root = fixture.path() / "generated";
+    std::filesystem::create_directories(output_root);
+    std::string output, error;
+    CHECK(run({"--project", (fixture.path() / "spec/project.yml").string(), "--root", output_root.string(),
+               "generate"}, output, error) == 0);
+    std::ifstream generated{output_root / "cmake/cmakegen.generated.cmake"};
+    const std::string generated_contents{std::istreambuf_iterator<char>{generated}, std::istreambuf_iterator<char>{}};
+    CHECK(generated_contents.find("../spec/src/main.cpp") != std::string::npos);
+    CHECK(generated_contents.find("C:/SDK/include") != std::string::npos);
+    std::ifstream presets{output_root / "CMakePresets.json"};
+    const std::string preset_contents{std::istreambuf_iterator<char>{presets}, std::istreambuf_iterator<char>{}};
+    CHECK(preset_contents.find("C:/build/example") != std::string::npos);
+}
+
 TEST_CASE("CLI graph escapes DOT strings and prints platform-union cycle components") {
     FixtureDirectory fixture;
     fixture.file("project.yml", R"(schemaVersion: 1
