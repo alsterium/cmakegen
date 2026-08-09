@@ -181,6 +181,10 @@ void rebase_render_paths(Project& project, const std::filesystem::path& source_r
         for (auto* platform : {&target.platform.macos, &target.platform.linux, &target.platform.windows})
             rebase_scoped_paths(platform->include_directories, source_root, output_root);
     }
+    for (auto& [unused, preset] : project.presets) {
+        if (!preset.binary_dir.starts_with('$') && !std::filesystem::path{preset.binary_dir}.is_absolute())
+            preset.binary_dir = rebase_project_path(preset.binary_dir, source_root, output_root);
+    }
 }
 
 void print_graph_text(const TargetGraph& graph, bool include_external, std::ostream& output) {
@@ -317,7 +321,7 @@ int run_cli(const std::vector<std::string>& arguments, std::ostream& output, std
         GeneratedFileSet files;
         (void)files.add({"CMakeLists.txt", cmake.root_cmake_lists});
         (void)files.add({"cmake/cmakegen.generated.cmake", cmake.generated_cmake});
-        (void)files.add({"CMakePresets.json", render_presets(*project)});
+        (void)files.add({"CMakePresets.json", render_presets(render_project)});
         auto written = SafeWriter(root).write(files, {.check = options.check, .force = options.force});
         if (!written) { print_diagnostics(written.error(), !options.no_color, error); return diagnostic_exit(written.error()); }
         if (options.check && written->would_change) return 1;

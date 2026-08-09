@@ -137,6 +137,10 @@ targets:
   Core:
     type: staticLibrary
     sources: [src/core.cpp]
+presets:
+  debug:
+    buildType: Debug
+    binaryDir: out/debug
 )");
     fixture.file("spec/src/main.cpp", "int main() {}\n");
     fixture.file("spec/src/core.cpp", "void core() {}\n");
@@ -156,6 +160,9 @@ targets:
     std::ifstream root_cmake{output_root / "CMakeLists.txt"};
     const std::string root_contents{std::istreambuf_iterator<char>{root_cmake}, std::istreambuf_iterator<char>{}};
     CHECK(root_contents.find("../spec/cmake/custom.cmake") != std::string::npos);
+    std::ifstream presets{output_root / "CMakePresets.json"};
+    const std::string preset_contents{std::istreambuf_iterator<char>{presets}, std::istreambuf_iterator<char>{}};
+    CHECK(preset_contents.find("${sourceDir}/../spec/out/debug") != std::string::npos);
 }
 
 TEST_CASE("CLI graph escapes DOT strings and prints platform-union cycle components") {
