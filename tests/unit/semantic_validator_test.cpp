@@ -315,10 +315,27 @@ TEST_CASE("semantic validation rejects versions that project and find_package ca
     CHECK(diagnostics[2].path == "version");
 }
 
-TEST_CASE("semantic validation accepts CMake numeric versions with up to four components") {
+TEST_CASE("semantic validation accepts CMake numeric versions and find_package ranges") {
     auto project = project_with_targets({target("Core")});
     project.version = "0.1.2.3";
-    project.packages.emplace("fmt", Package{"fmt", "11", true, {}});
+    project.cmake.minimum_version = "3.28.1.2...3.31.0.0";
+    project.packages.emplace("fmt", Package{"fmt", "11...<12.0", true, {}});
+    project.packages.emplace("zlib", Package{"ZLIB", "1.2.3...1.3.0", true, {}});
 
     REQUIRE(validate_project(project));
+}
+
+TEST_CASE("semantic validation rejects CMake values that cannot be emitted as meta-features") {
+    auto project = project_with_targets({target("Core")});
+    project.cmake.minimum_version = "banana";
+    project.cmake.c_standard = "20";
+    project.cmake.cxx_standard = "24";
+
+    const auto result = validate_project(project);
+    REQUIRE_FALSE(result);
+    const auto& diagnostics = result.error().diagnostics();
+    REQUIRE(diagnostics.size() == 3);
+    CHECK(diagnostics[0].path == "cmake.cStandard");
+    CHECK(diagnostics[1].path == "cmake.cxxStandard");
+    CHECK(diagnostics[2].path == "cmake.minimumVersion");
 }

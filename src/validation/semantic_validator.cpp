@@ -35,6 +35,43 @@ namespace {
     return !expect_digit;
 }
 
+// project(VERSION) accepts a numeric version, while find_package() additionally
+// accepts a closed or half-open numeric range.  Keep these grammars separate:
+// accepting a range for project(VERSION), or rejecting it for find_package(),
+// would make an otherwise validated model fail when CMake configures it.
+[[nodiscard]] bool is_valid_package_version(std::string_view version) {
+    const auto separator = version.find("...");
+    if (separator == std::string_view::npos) return is_valid_cmake_version(version);
+
+    const auto minimum = version.substr(0, separator);
+    auto maximum = version.substr(separator + 3);
+    if (maximum.starts_with('<')) maximum.remove_prefix(1);
+    return is_valid_cmake_version(minimum) && is_valid_cmake_version(maximum);
+}
+
+// cmake_minimum_required() requires at least a major and minor component, and
+// optionally permits a policy-version range with the same component grammar.
+[[nodiscard]] bool is_valid_cmake_minimum_version(std::string_view version) {
+    const auto has_major_and_minor = [](std::string_view value) {
+        return is_valid_cmake_version(value) && value.find('.') != std::string_view::npos;
+    };
+
+    const auto separator = version.find("...");
+    if (separator == std::string_view::npos) return has_major_and_minor(version);
+    return has_major_and_minor(version.substr(0, separator)) &&
+           has_major_and_minor(version.substr(separator + 3));
+}
+
+[[nodiscard]] bool is_supported_c_standard(std::string_view standard) {
+    return standard == "90" || standard == "99" || standard == "11" || standard == "17" ||
+           standard == "23";
+}
+
+[[nodiscard]] bool is_supported_cxx_standard(std::string_view standard) {
+    return standard == "98" || standard == "11" || standard == "14" || standard == "17" ||
+           standard == "20" || standard == "23";
+}
+
 [[nodiscard]] std::string target_path(const std::string& name) {
     return "targets." + name;
 }
@@ -306,10 +343,23 @@ Result<TargetGraph> validate_project(const Project& project,
         add_semantic_error(diagnostics, "version",
                            "project version must be one to four non-negative integer components");
     }
+    if (!is_valid_cmake_minimum_version(project.cmake.minimum_version)) {
+        add_semantic_error(diagnostics, "cmake.minimumVersion",
+                           "CMake minimum version must be two to four non-negative integer components"
+                           " or a range of such versions");
+    }
+    if (project.cmake.c_standard && !is_supported_c_standard(*project.cmake.c_standard)) {
+        add_semantic_error(diagnostics, "cmake.cStandard",
+                           "C standard must be one of 90, 99, 11, 17, or 23");
+    }
+    if (project.cmake.cxx_standard && !is_supported_cxx_standard(*project.cmake.cxx_standard)) {
+        add_semantic_error(diagnostics, "cmake.cxxStandard",
+                           "C++ standard must be one of 98, 11, 14, 17, 20, or 23");
+    }
     for (const auto& [key, package] : project.packages) {
-        if (package.version && !is_valid_cmake_version(*package.version)) {
+        if (package.version && !is_valid_package_version(*package.version)) {
             add_semantic_error(diagnostics, "packages." + key + ".version",
-                               "package version must be one to four non-negative integer components");
+                               "package version must be a numeric version or numeric version range");
         }
     }
 
