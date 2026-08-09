@@ -207,7 +207,11 @@ void rebase_render_paths(Project& project, const std::filesystem::path& source_r
             rebase_scoped_paths(platform->include_directories, source_root, output_root);
     }
     for (auto& [unused, preset] : project.presets) {
-        if (!preset.binary_dir.starts_with('$'))
+        const bool macro_root = preset.binary_dir.starts_with("${") ||
+                                preset.binary_dir.starts_with("$env{") ||
+                                preset.binary_dir.starts_with("$penv{") ||
+                                preset.binary_dir.starts_with("$vendor{");
+        if (!macro_root)
             preset.binary_dir = rebase_project_path(preset.binary_dir, source_root, output_root);
     }
 }
