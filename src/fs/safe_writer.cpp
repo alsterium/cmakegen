@@ -15,6 +15,10 @@
 #include <sstream>
 #include <system_error>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace cmakegen {
 namespace {
 
@@ -59,7 +63,7 @@ struct Manifest {
     }
     const auto result = normalized.generic_string();
     const auto insensitive = case_insensitive_key(result);
-    if (insensitive == manifest_relative_path || insensitive.starts_with(".cmakegen/")) {
+    if (insensitive == ".cmakegen" || insensitive.starts_with(".cmakegen/")) {
         return std::unexpected{error("generated path is reserved for cmakegen metadata", result)};
     }
     return result;
@@ -225,7 +229,22 @@ struct Manifest {
 [[nodiscard]] Result<void> replace_file(const std::filesystem::path& temporary,
                                          const std::filesystem::path& destination) {
     std::error_code ec;
+#ifdef _WIN32
+    // std::filesystem::rename cannot replace an existing file on Windows.
+    // ReplaceFile provides the corresponding same-volume replacement; use
+    // MoveFileEx only for the initial creation, where no destination exists.
+    if (!::ReplaceFileW(destination.c_str(), temporary.c_str(), nullptr,
+                        REPLACEFILE_WRITE_THROUGH, nullptr, nullptr)) {
+        const auto replace_error = ::GetLastError();
+        if (replace_error != ERROR_FILE_NOT_FOUND ||
+            !::MoveFileExW(temporary.c_str(), destination.c_str(), MOVEFILE_WRITE_THROUGH)) {
+            ec = {static_cast<int>(replace_error == ERROR_FILE_NOT_FOUND ? ::GetLastError() : replace_error),
+                  std::system_category()};
+        }
+    }
+#else
     std::filesystem::rename(temporary, destination, ec);
+#endif
     if (ec) return std::unexpected{error("cannot replace output atomically: " + ec.message(), destination.generic_string())};
     return {};
 }
@@ -310,7 +329,8 @@ Result<WriteResult> SafeWriter::write(const GeneratedFileSet& files, const Write
         auto normalized=normalize_relative_path(file.path); if(!normalized) return std::unexpected{normalized.error()};
         auto parents=reject_symlink_parents(project_root_, *normalized); if(!parents) return std::unexpected{parents.error()};
         auto ancestors=reject_file_ancestor(project_root_, *normalized); if(!ancestors) return std::unexpected{ancestors.error()};
-        next_files.emplace(*normalized,&file); next_manifest.files.emplace(*normalized,sha256(file.content));
+        next_files.emplace(*normalized,&file);
+        next_manifest.files.insert_or_assign(*normalized, sha256(file.content));
     }
     struct Pending { std::filesystem::path destination; std::string content; };
     std::vector<Pending> writes; std::vector<std::filesystem::path> removals;

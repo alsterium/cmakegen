@@ -142,6 +142,17 @@ TEST_CASE("disabling stale cleanup retains ownership of files omitted from this 
     CHECK_FALSE(std::filesystem::exists(fixture.path() / "keep.txt"));
 }
 
+TEST_CASE("disabling stale cleanup updates hashes for regenerated files") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"old.txt", "old\n"}, {"keep.txt", "first\n"}})));
+
+    REQUIRE(writer.write(file_set({{"keep.txt", "second\n"}}), {.cleanup_stale = false}));
+    REQUIRE(writer.clean());
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / "old.txt"));
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / "keep.txt"));
+}
+
 TEST_CASE("stale cleanup and clean preserve manifest-owned files modified by users") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};
@@ -162,6 +173,7 @@ TEST_CASE("stale cleanup and clean preserve manifest-owned files modified by use
 TEST_CASE("safe writer rejects portable metadata aliases and output collisions during preflight") {
     cmakegen::GeneratedFileSet metadata_alias;
     CHECK_FALSE(metadata_alias.add({".CMakeGen/manifest.json", "bad\n"}));
+    CHECK_FALSE(metadata_alias.add({".CMAKEGEN", "bad\n"}));
 
     cmakegen::GeneratedFileSet duplicates;
     REQUIRE(duplicates.add({"CMakeLists.txt", "one\n"}));
