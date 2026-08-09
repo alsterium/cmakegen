@@ -35,6 +35,29 @@ namespace {
     return !expect_digit;
 }
 
+// Compare after grammar validation without narrowing arbitrary-length numeric
+// components. This avoids both lexicographic ordering mistakes (3.10 vs 3.9)
+// and integer overflow in valid CMake version text.
+[[nodiscard]] bool version_at_least(std::string_view value, std::string_view minimum) {
+    const auto next_component = [](std::string_view& remaining) {
+        const auto separator = remaining.find('.');
+        const auto component = remaining.substr(0, separator);
+        remaining = separator == std::string_view::npos ? std::string_view{}
+                                                         : remaining.substr(separator + 1);
+        const auto significant = component.find_first_not_of('0');
+        return significant == std::string_view::npos ? std::string_view{"0"}
+                                                      : component.substr(significant);
+    };
+
+    for (std::size_t index = 0; index < 4; ++index) {
+        const auto left = value.empty() ? std::string_view{"0"} : next_component(value);
+        const auto right = minimum.empty() ? std::string_view{"0"} : next_component(minimum);
+        if (left.size() != right.size()) return left.size() > right.size();
+        if (left != right) return left > right;
+    }
+    return true;
+}
+
 // project(VERSION) accepts a numeric version, while find_package() additionally
 // accepts a closed or half-open numeric range.  Keep these grammars separate:
 // accepting a range for project(VERSION), or rejecting it for find_package(),
@@ -57,9 +80,13 @@ namespace {
     };
 
     const auto separator = version.find("...");
-    if (separator == std::string_view::npos) return has_major_and_minor(version);
-    return has_major_and_minor(version.substr(0, separator)) &&
-           has_major_and_minor(version.substr(separator + 3));
+    if (separator == std::string_view::npos)
+        return has_major_and_minor(version) && version_at_least(version, "3.28");
+
+    const auto minimum = version.substr(0, separator);
+    const auto policy_maximum = version.substr(separator + 3);
+    return has_major_and_minor(minimum) && has_major_and_minor(policy_maximum) &&
+           version_at_least(minimum, "3.28") && version_at_least(policy_maximum, minimum);
 }
 
 [[nodiscard]] bool is_supported_c_standard(std::string_view standard) {
@@ -170,13 +197,21 @@ void validate_sources(DiagnosticSet& diagnostics, const Target& target, const st
     validate_source_entries(diagnostics, target.platform.windows.sources, target.type,
                             path + ".platform.windows.sources");
     const auto resolved = resolved_sources.find(target.name);
-    if (target.type != TargetType::interface_library || resolved == resolved_sources.end()) return;
-    for (const auto& source : resolved->second) {
-        if (source.kind == SourceKind::source) {
-            add_resolved_source_semantic_error(
-                diagnostics, source, path + ".sources",
-                "interface libraries cannot contain implementation sources: " + source.path);
+    if (resolved == resolved_sources.end()) return;
+    if (target.type == TargetType::interface_library) {
+        for (const auto& source : resolved->second) {
+            if (source.kind == SourceKind::source) {
+                add_resolved_source_semantic_error(diagnostics, source, path + ".sources",
+                            "interface libraries cannot contain implementation sources: " + source.path);
+            }
         }
+        return;
+    }
+    if (std::ranges::none_of(resolved->second, [](const ResolvedSource& source) {
+            return source.kind == SourceKind::source;
+        })) {
+        add_semantic_error(diagnostics, path + ".sources",
+                           "non-interface targets require at least one implementation source");
     }
 }
 
@@ -374,6 +409,12 @@ Result<TargetGraph> validate_project(const Project& project,
         }
         if (target.name != key) {
             add_semantic_error(diagnostics, path, "target key and logical target name must match");
+        }
+        static constexpr std::array reserved_target_names{"all", "clean", "help", "install",
+                                                           "package", "test"};
+        if (std::ranges::find(reserved_target_names, target.name) != reserved_target_names.end()) {
+            add_semantic_error(diagnostics, path,
+                               "target name is reserved by CMake: " + target.name);
         }
         if (!logical_names.insert(target.name).second) {
             add_semantic_error(diagnostics, path, "duplicate logical target definition '" + target.name + "'");

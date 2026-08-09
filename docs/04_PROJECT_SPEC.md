@@ -162,6 +162,10 @@ type: sharedLibrary
 type: interfaceLibrary
 ```
 
+Target keys use the same name grammar as `name`, except CMake-reserved target
+names `all`, `clean`, `help`, `install`, `package`, and `test` are not allowed.
+Non-interface targets must resolve to at least one implementation source.
+
 ## 6. Sources
 
 Shorthand:

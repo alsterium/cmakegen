@@ -148,7 +148,7 @@ target_compile_features(Headers
 TEST_CASE("CMake renderer encodes dynamic values as literal single CMake arguments") {
     Target app{"App", TargetType::executable};
     app.include_directories.private_values = {"directory with spaces;and-list\\part\"quote"};
-    app.definitions.private_values = {"MESSAGE=one;two words"};
+    app.definitions.private_values = {"MESSAGE=one;two words$literal"};
     app.compile_options.private_values = {"-DVALUE=one;two words"};
     app.dependencies.private_values = {{LinkDependency::Kind::imported_target, "Package::target;extra value"}};
     auto project = project_with({app});
@@ -160,7 +160,7 @@ TEST_CASE("CMake renderer encodes dynamic values as literal single CMake argumen
     CHECK(rendered.root_cmake_lists.find("include(\"cmake/with spaces\\;and-list.cmake\")") != std::string::npos);
     CHECK(rendered.generated_cmake.find("\"source dir/file\\;part.cpp\"") != std::string::npos);
     CHECK(rendered.generated_cmake.find("\"directory with spaces\\;and-list\\\\part\\\"quote\"") != std::string::npos);
-    CHECK(rendered.generated_cmake.find("\"MESSAGE=one\\;two words\"") != std::string::npos);
+    CHECK(rendered.generated_cmake.find("\"MESSAGE=one\\;two words\\$literal\"") != std::string::npos);
     CHECK(rendered.generated_cmake.find("\"-DVALUE=one\\;two words\"") != std::string::npos);
     CHECK(rendered.generated_cmake.find("\"Package::target\\;extra value\"") != std::string::npos);
 }

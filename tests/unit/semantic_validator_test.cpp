@@ -339,3 +339,28 @@ TEST_CASE("semantic validation rejects CMake values that cannot be emitted as me
     CHECK(diagnostics[1].path == "cmake.cxxStandard");
     CHECK(diagnostics[2].path == "cmake.minimumVersion");
 }
+
+TEST_CASE("semantic validation enforces the CMake 3.28 baseline and ordered policy ranges") {
+    auto project = project_with_targets({target("Core")});
+    project.cmake.minimum_version = "3.27";
+    REQUIRE_FALSE(validate_project(project));
+
+    project.cmake.minimum_version = "3.28...3.27";
+    REQUIRE_FALSE(validate_project(project));
+
+    project.cmake.minimum_version = "3.28...3.31.0.0";
+    REQUIRE(validate_project(project));
+}
+
+TEST_CASE("semantic validation requires implementation sources and rejects reserved target names") {
+    auto headers_only = target("Core");
+    ResolvedSourcesByTarget resolved{{"Core", {{"include/core.hpp", SourceKind::header}}}};
+    const auto missing_source = validate_project(project_with_targets({headers_only}), resolved);
+    REQUIRE_FALSE(missing_source);
+    CHECK(missing_source.error().diagnostics().front().path == "targets.Core.sources");
+
+    auto reserved = target("all");
+    const auto reserved_result = validate_project(project_with_targets({reserved}));
+    REQUIRE_FALSE(reserved_result);
+    CHECK(reserved_result.error().diagnostics().front().message == "target name is reserved by CMake: all");
+}

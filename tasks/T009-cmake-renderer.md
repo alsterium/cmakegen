@@ -54,3 +54,15 @@ T006, T007, and T008.
 - Follow-ups: T012 must resolve common and platform source entries, call
   `validate_project`, then pass its `TargetGraph` and resolved source map to
   `render_cmake` before T011 writes the returned files.
+
+- Date: 2026-08-09
+- Summary: Hardened the renderable-model validation against CMake 3.28's
+  supported minimum-version baseline and policy-range ordering, reserved target
+  names, and non-interface targets with no implementation source. Literal CMake
+  arguments now also preserve dollar signs rather than expanding user-provided
+  variable syntax.
+- Verification: `clang++ -std=c++23 -Iinclude -fsyntax-only
+  src/validation/semantic_validator.cpp src/renderer/cmake_renderer.cpp && git
+  diff --check` (pass). A bootstrap configure was attempted but could not
+  complete in this isolated worktree because its FetchContent dependencies are
+  unavailable in the sandbox.
