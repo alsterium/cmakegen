@@ -34,3 +34,17 @@ ctest --test-dir <build-dir> --output-on-failure
 
 - Run the integration suite twice from clean temporary output directories.
 - Inspect fixtures to confirm they do not fetch network dependencies.
+
+## Execution record
+
+- 2026-08-09: Added basic, internal-library, package, platform, and exclusion
+  fixtures with byte-for-byte golden generated output. Added full-pipeline
+  tests for deterministic regeneration, check-mode no-write behavior,
+  validation-before-write, manifest stability, and slash-normalized paths.
+  The basic, internal-library, platform, and exclusion fixtures also configure
+  and build with CMake in isolated temporary directories. The package fixture
+  is golden-only because it intentionally emits `find_package(fmt)`; no
+  fixture or integration test fetches dependencies from the network.
+- Verification: `cmake -S bootstrap -B build/t013 -DCMAKEGEN_BOOTSTRAP_TESTS=ON`,
+  `cmake --build build/t013 --parallel 4`, and
+  `ctest --test-dir build/t013 --output-on-failure` (95/95 passed).

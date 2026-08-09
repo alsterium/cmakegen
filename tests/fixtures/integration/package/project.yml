@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: Formatter
+packages:
+  fmt:
+    name: fmt
+    version: "11"
+targets:
+  formatter:
+    type: executable
+    sources: [src]
+    dependencies: [fmt::fmt]
