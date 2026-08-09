@@ -23,7 +23,9 @@ foreach(generator CMAKEGEN_BOOTSTRAP_BINARY CMAKEGEN_NORMAL_BINARY)
     RESULT_VARIABLE status
     OUTPUT_VARIABLE output
     ERROR_VARIABLE error)
-  if(NOT status EQUAL 0 OR NOT output STREQUAL "No changes.\n")
+  # Exit status is the canonical check result.  Do not compare the friendly
+  # diagnostic byte-for-byte: redirected stdout uses CRLF on Windows.
+  if(NOT status EQUAL 0)
     message(FATAL_ERROR "${generator} does not reproduce canonical output (status ${status}): ${output}${error}")
   endif()
 endforeach()
