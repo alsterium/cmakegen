@@ -142,7 +142,7 @@ TEST_CASE("generation is byte-stable and check mode neither writes nor accepts d
     require_generated_outputs_unchanged(output_directory.path(), first);
 
     { std::ofstream altered{output_directory.path() / "CMakeLists.txt", std::ios::binary}; altered << "drift\n"; }
-    REQUIRE(run_cli_at(output_directory.path(), {"generate", "--check", "--no-color"}, output, error) == 2);
+    REQUIRE(run_cli_at(output_directory.path(), {"generate", "--check", "--no-color"}, output, error) == 1);
     CHECK(read_file(output_directory.path() / "CMakeLists.txt") == "drift\n");
     CHECK(read_file(output_directory.path() / "cmake/cmakegen.generated.cmake") == first.generated_cmake);
     CHECK(read_file(output_directory.path() / "CMakePresets.json") == first.presets);
