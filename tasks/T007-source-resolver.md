@@ -62,6 +62,17 @@ T006.
 - Generated files: unchanged.
 - Follow-ups: none.
 
+## Execution record — review follow-up 6
+
+- Date: 2026-08-09
+- Summary: Preserved filesystem inspection failures before iterator advancement
+  so they cannot be overwritten. Source-path lookup failures now report their
+  actual filesystem cause rather than being mislabeled as missing paths.
+- Verification: `cmake --build build/bootstrap --parallel 2 && ctest --test-dir
+  build/bootstrap --output-on-failure`.
+- Generated files: unchanged.
+- Follow-ups: none.
+
 ## Execution record — review follow-up 5
 
 - Date: 2026-08-09

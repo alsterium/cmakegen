@@ -117,7 +117,12 @@ Result<std::vector<ResolvedSource>> resolve_sources(const std::filesystem::path&
         const auto input_path = entry_filesystem_path(base, entry);
         std::error_code error;
         const auto status = std::filesystem::symlink_status(input_path, error);
-        if (error || status.type() == std::filesystem::file_type::not_found) {
+        if (error) {
+            add_filesystem_diagnostic(diagnostics, entry,
+                                      "could not inspect source path: " + entry.path + ": " + error.message());
+            continue;
+        }
+        if (status.type() == std::filesystem::file_type::not_found) {
             add_filesystem_diagnostic(diagnostics, entry,
                                       "source path does not exist: " + entry.path);
             continue;
@@ -173,11 +178,12 @@ Result<std::vector<ResolvedSource>> resolve_sources(const std::filesystem::path&
                 const auto current = iterator->path();
                 const auto current_status = iterator->symlink_status(error);
                 if (error) break;
-                if (std::filesystem::is_symlink(current_status) && std::filesystem::is_directory(current, error)) {
-                    iterator.disable_recursion_pending();
+                if (std::filesystem::is_symlink(current_status)) {
+                    if (std::filesystem::is_directory(current, error)) iterator.disable_recursion_pending();
                 } else if (std::filesystem::is_regular_file(current, error)) {
                     add_directory_file(current);
                 }
+                if (error) break;
                 iterator.increment(error);
             }
         } else {
@@ -187,6 +193,7 @@ Result<std::vector<ResolvedSource>> resolve_sources(const std::filesystem::path&
                 const auto current_status = iterator->symlink_status(error);
                 if (error) break;
                 if (std::filesystem::is_regular_file(iterator->path(), error)) add_directory_file(iterator->path());
+                if (error) break;
                 iterator.increment(error);
             }
         }
