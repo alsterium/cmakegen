@@ -80,6 +80,18 @@ TEST_CASE("safe writer protects unowned files unless force is requested") {
     CHECK(read_file(fixture.path() / "CMakeLists.txt") == "generated\n");
 }
 
+TEST_CASE("safe writer verifies a manifest-owned file before replacing it") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"generated.txt", "first\n"}})));
+    write_file(fixture.path() / "generated.txt", "user edit\n");
+
+    CHECK_FALSE(writer.write(file_set({{"generated.txt", "second\n"}})));
+    CHECK(read_file(fixture.path() / "generated.txt") == "user edit\n");
+    REQUIRE(writer.write(file_set({{"generated.txt", "second\n"}}), {.force = true}));
+    CHECK(read_file(fixture.path() / "generated.txt") == "second\n");
+}
+
 TEST_CASE("check and dry-run perform no writes while reporting pending changes") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};
@@ -113,6 +125,45 @@ TEST_CASE("stale cleanup and clean affect only manifest-owned files") {
     REQUIRE(writer.clean());
     CHECK_FALSE(std::filesystem::exists(fixture.path() / "keep.txt"));
     CHECK(std::filesystem::exists(fixture.path() / "user.txt"));
+}
+
+TEST_CASE("stale cleanup and clean preserve manifest-owned files modified by users") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"stale.txt", "generated\n"}, {"keep.txt", "keep\n"}})));
+    write_file(fixture.path() / "stale.txt", "user edit\n");
+
+    CHECK_FALSE(writer.write(file_set({{"keep.txt", "keep\n"}})));
+    CHECK(std::filesystem::exists(fixture.path() / "stale.txt"));
+    REQUIRE(writer.write(file_set({{"keep.txt", "keep\n"}}), {.force = true}));
+    REQUIRE(writer.write(file_set({{"clean.txt", "generated\n"}})));
+    write_file(fixture.path() / "clean.txt", "user edit\n");
+    CHECK_FALSE(writer.clean());
+    CHECK(std::filesystem::exists(fixture.path() / "clean.txt"));
+    REQUIRE(writer.clean(false, true));
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / "clean.txt"));
+}
+
+TEST_CASE("safe writer rejects portable metadata aliases and output collisions during preflight") {
+    cmakegen::GeneratedFileSet metadata_alias;
+    CHECK_FALSE(metadata_alias.add({".CMakeGen/manifest.json", "bad\n"}));
+
+    cmakegen::GeneratedFileSet duplicates;
+    REQUIRE(duplicates.add({"CMakeLists.txt", "one\n"}));
+    CHECK_FALSE(duplicates.add({"cmakelists.TXT", "two\n"}));
+
+    cmakegen::GeneratedFileSet ancestors;
+    REQUIRE(ancestors.add({"directory", "file\n"}));
+    CHECK_FALSE(ancestors.add({"directory/child.txt", "child\n"}));
+}
+
+TEST_CASE("safe writer rejects an existing file ancestor before writing") {
+    TemporaryDirectory fixture;
+    write_file(fixture.path() / "directory", "user file\n");
+    cmakegen::SafeWriter writer{fixture.path()};
+    CHECK_FALSE(writer.write(file_set({{"directory/child.txt", "generated\n"}})));
+    CHECK(read_file(fixture.path() / "directory") == "user file\n");
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/manifest.json"));
 }
 
 TEST_CASE("unsafe paths and failed preflight cannot alter output outside the root") {

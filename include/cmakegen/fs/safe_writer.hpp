@@ -44,7 +44,9 @@ public:
 
     [[nodiscard]] Result<WriteResult> write(const GeneratedFileSet& files,
                                              const WriteOptions& options = {}) const;
-    [[nodiscard]] Result<WriteResult> clean(bool dry_run = false) const;
+    /// Refuses to remove generated files modified since their recorded hash,
+    /// unless force is explicitly requested.
+    [[nodiscard]] Result<WriteResult> clean(bool dry_run = false, bool force = false) const;
 
     [[nodiscard]] static std::string sha256(std::string_view content);
 

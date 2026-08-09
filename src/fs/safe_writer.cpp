@@ -5,10 +5,12 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cctype>
 #include <cstdint>
 #include <fstream>
 #include <iomanip>
 #include <map>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <system_error>
@@ -22,6 +24,18 @@ constexpr std::string_view manifest_relative_path = ".cmakegen/manifest.json";
 struct Manifest {
     std::map<std::string, std::string, std::less<>> files;
 };
+
+// Generated trees must be portable to the default case-insensitive file
+// systems used by macOS and Windows.  Keep this deliberately ASCII-only: the
+// generator emits portable source paths, and locale-dependent folding would
+// make manifests non-deterministic.
+[[nodiscard]] std::string case_insensitive_key(std::string_view path) {
+    std::string result{path};
+    std::ranges::transform(result, result.begin(), [](unsigned char character) {
+        return static_cast<char>(std::tolower(character));
+    });
+    return result;
+}
 
 [[nodiscard]] DiagnosticSet error(std::string message, std::string path = {}) {
     DiagnosticSet diagnostics;
@@ -44,10 +58,30 @@ struct Manifest {
         }
     }
     const auto result = normalized.generic_string();
-    if (result == manifest_relative_path || result.starts_with(".cmakegen/")) {
+    const auto insensitive = case_insensitive_key(result);
+    if (insensitive == manifest_relative_path || insensitive.starts_with(".cmakegen/")) {
         return std::unexpected{error("generated path is reserved for cmakegen metadata", result)};
     }
     return result;
+}
+
+[[nodiscard]] Result<void> reject_file_ancestor(const std::filesystem::path& root,
+                                                 const std::filesystem::path& relative) {
+    std::error_code ec;
+    auto current = root;
+    for (const auto& component : relative.parent_path()) {
+        current /= component;
+        const auto status = std::filesystem::symlink_status(current, ec);
+        if (ec == std::errc::no_such_file_or_directory) {
+            ec.clear();
+            return {};
+        }
+        if (ec) return std::unexpected{error("cannot inspect destination ancestor: " + ec.message(), current.generic_string())};
+        if (std::filesystem::is_regular_file(status)) {
+            return std::unexpected{error("generated path collides with an existing file ancestor", current.generic_string())};
+        }
+    }
+    return {};
 }
 
 [[nodiscard]] Result<void> reject_symlink_parents(const std::filesystem::path& root,
@@ -93,13 +127,16 @@ struct Manifest {
             return std::unexpected{error("manifest has an unsupported format", path.generic_string())};
         }
         Manifest manifest;
+        std::set<std::string, std::less<>> insensitive_paths;
         for (const auto& entry : json["files"]) {
             if (!entry.is_object() || !entry.contains("path") || !entry.contains("sha256") ||
                 !entry["path"].is_string() || !entry["sha256"].is_string()) {
                 return std::unexpected{error("manifest contains an invalid file entry", path.generic_string())};
             }
             auto normalized = normalize_relative_path(entry["path"].get<std::string>());
-            if (!normalized || *normalized != entry["path"].get<std::string>() || !manifest.files.emplace(*normalized, entry["sha256"].get<std::string>()).second) {
+            if (!normalized || *normalized != entry["path"].get<std::string>() ||
+                !insensitive_paths.emplace(case_insensitive_key(*normalized)).second ||
+                !manifest.files.emplace(*normalized, entry["sha256"].get<std::string>()).second) {
                 return std::unexpected{error("manifest contains duplicate or unsafe paths", path.generic_string())};
             }
         }
@@ -191,8 +228,18 @@ constexpr std::array<std::uint32_t, 64> sha_constants = {
 Result<void> GeneratedFileSet::add(GeneratedFile file) {
     auto normalized = normalize_relative_path(file.path);
     if (!normalized) return std::unexpected{normalized.error()};
-    const auto duplicate = std::ranges::any_of(files_, [&](const GeneratedFile& existing) { return existing.path.generic_string() == *normalized; });
-    if (duplicate) return std::unexpected{error("generated file set contains duplicate paths", *normalized)};
+    const auto key = case_insensitive_key(*normalized);
+    for (const auto& existing : files_) {
+        const auto existing_path = existing.path.generic_string();
+        if (case_insensitive_key(existing_path) == key) {
+            return std::unexpected{error("generated file set contains duplicate paths on a case-insensitive filesystem", *normalized)};
+        }
+        const auto separator = existing_path + "/";
+        const auto new_separator = *normalized + "/";
+        if (normalized->starts_with(separator) || existing_path.starts_with(new_separator)) {
+            return std::unexpected{error("generated file set contains file/ancestor path collisions", *normalized)};
+        }
+    }
     file.path = std::filesystem::path{*normalized};
     files_.push_back(std::move(file));
     return {};
@@ -215,7 +262,12 @@ Result<WriteResult> SafeWriter::write(const GeneratedFileSet& files, const Write
     auto old_manifest = load_manifest(manifest_path); if (!old_manifest) return std::unexpected{old_manifest.error()};
     Manifest next_manifest;
     std::map<std::string, const GeneratedFile*, std::less<>> next_files;
-    for (const auto& file : files.files()) { auto normalized=normalize_relative_path(file.path); if(!normalized) return std::unexpected{normalized.error()}; auto parents=reject_symlink_parents(project_root_, *normalized); if(!parents) return std::unexpected{parents.error()}; next_files.emplace(*normalized,&file); next_manifest.files.emplace(*normalized,sha256(file.content)); }
+    for (const auto& file : files.files()) {
+        auto normalized=normalize_relative_path(file.path); if(!normalized) return std::unexpected{normalized.error()};
+        auto parents=reject_symlink_parents(project_root_, *normalized); if(!parents) return std::unexpected{parents.error()};
+        auto ancestors=reject_file_ancestor(project_root_, *normalized); if(!ancestors) return std::unexpected{ancestors.error()};
+        next_files.emplace(*normalized,&file); next_manifest.files.emplace(*normalized,sha256(file.content));
+    }
     struct Pending { std::filesystem::path destination; std::string content; };
     std::vector<Pending> writes; std::vector<std::filesystem::path> removals;
     for (const auto& [relative,file] : next_files) {
@@ -223,8 +275,16 @@ Result<WriteResult> SafeWriter::write(const GeneratedFileSet& files, const Write
         if(ec && !is_not_found(ec)) return std::unexpected{error("cannot inspect destination: "+ec.message(),destination.generic_string())};
         if (is_not_found(ec)) { ec.clear(); status = std::filesystem::file_status{}; }
         if(std::filesystem::is_symlink(status) || (std::filesystem::exists(status) && !std::filesystem::is_regular_file(status))) return std::unexpected{error("destination must be a regular file",destination.generic_string())};
-        const bool owned=old_manifest->files.contains(relative);
+        const auto old = old_manifest->files.find(relative);
+        const bool owned=old != old_manifest->files.end();
         if(std::filesystem::exists(status) && !owned && !options.force) return std::unexpected{error("refusing to replace an unowned file; use force to take ownership",relative)};
+        if (std::filesystem::exists(status) && owned) {
+            auto current = read_file(destination);
+            if (!current) return std::unexpected{current.error()};
+            if (sha256(*current) != old->second && !options.force) {
+                return std::unexpected{error("refusing to replace a generated file modified since its recorded hash; use force to take ownership", relative)};
+            }
+        }
         if(!std::filesystem::exists(status) || !owned) {
             writes.push_back({destination,file->content});
         } else {
@@ -233,26 +293,27 @@ Result<WriteResult> SafeWriter::write(const GeneratedFileSet& files, const Write
             if (*current != file->content) writes.push_back({destination,file->content});
         }
     }
-    if(options.cleanup_stale) for(const auto& [relative,hash] : old_manifest->files) if(!next_files.contains(relative)) { auto checked=normalize_relative_path(relative); if(!checked) return std::unexpected{checked.error()}; auto parent=reject_symlink_parents(project_root_,*checked); if(!parent) return std::unexpected{parent.error()}; const auto destination=project_root_/relative; auto status=std::filesystem::symlink_status(destination,ec); if(ec && !is_not_found(ec)) return std::unexpected{error("cannot inspect stale file: "+ec.message(),destination.generic_string())}; if (is_not_found(ec)) { ec.clear(); status = std::filesystem::file_status{}; } if(std::filesystem::is_symlink(status) || (std::filesystem::exists(status)&&!std::filesystem::is_regular_file(status))) return std::unexpected{error("owned stale path is not a regular file",relative)}; if(std::filesystem::exists(status)) removals.push_back(destination); }
+    if(options.cleanup_stale) for(const auto& [relative,hash] : old_manifest->files) if(!next_files.contains(relative)) { auto checked=normalize_relative_path(relative); if(!checked) return std::unexpected{checked.error()}; auto parent=reject_symlink_parents(project_root_,*checked); if(!parent) return std::unexpected{parent.error()}; const auto destination=project_root_/relative; auto status=std::filesystem::symlink_status(destination,ec); if(ec && !is_not_found(ec)) return std::unexpected{error("cannot inspect stale file: "+ec.message(),destination.generic_string())}; if (is_not_found(ec)) { ec.clear(); status = std::filesystem::file_status{}; } if(std::filesystem::is_symlink(status) || (std::filesystem::exists(status)&&!std::filesystem::is_regular_file(status))) return std::unexpected{error("owned stale path is not a regular file",relative)}; if(std::filesystem::exists(status)) { auto current=read_file(destination); if(!current)return std::unexpected{current.error()}; if(sha256(*current)!=hash&&!options.force)return std::unexpected{error("refusing to remove a generated file modified since its recorded hash; use force to remove it",relative)}; removals.push_back(destination); } }
     const auto rendered_manifest=render_manifest(next_manifest); bool manifest_changed=true; if(std::filesystem::exists(manifest_path,ec) && !ec) { auto existing=read_file(manifest_path); if(!existing) return std::unexpected{existing.error()}; manifest_changed=*existing!=rendered_manifest; }
     WriteResult result{writes.size(),removals.size(),!writes.empty()||!removals.empty()||manifest_changed};
     if(options.check||options.dry_run||!result.would_change) return result;
     for(const auto& pending:writes) { std::filesystem::create_directories(pending.destination.parent_path(),ec); if(ec) return std::unexpected{error("cannot create output directory: "+ec.message(),pending.destination.parent_path().generic_string())}; }
     std::vector<std::pair<std::filesystem::path,std::filesystem::path>> temporary; temporary.reserve(writes.size()+1);
-    auto cleanup=[&](){ for(const auto& [temp,dest]:temporary){std::error_code ignored;std::filesystem::remove(temp,ignored);} };
+    std::optional<std::filesystem::path> manifest_temp;
+    auto cleanup=[&](){ for(const auto& [temp,dest]:temporary){std::error_code ignored;std::filesystem::remove(temp,ignored);} if(manifest_temp){std::error_code ignored;std::filesystem::remove(*manifest_temp,ignored);} };
     for(const auto& pending:writes){auto temp=write_temporary(pending.destination,pending.content);if(!temp){cleanup();return std::unexpected{temp.error()};}temporary.emplace_back(*temp,pending.destination);}
     std::filesystem::create_directories(manifest_path.parent_path(),ec); if(ec){cleanup();return std::unexpected{error("cannot create manifest directory: "+ec.message(),manifest_path.parent_path().generic_string())};}
-    auto manifest_temp=write_temporary(manifest_path,rendered_manifest);if(!manifest_temp){cleanup();return std::unexpected{manifest_temp.error()};}
+    auto pending_manifest_temp=write_temporary(manifest_path,rendered_manifest);if(!pending_manifest_temp){cleanup();return std::unexpected{pending_manifest_temp.error()};} manifest_temp=*pending_manifest_temp;
     for(const auto& stale:removals){std::filesystem::remove(stale,ec);if(ec){cleanup();return std::unexpected{error("cannot remove stale generated file: "+ec.message(),stale.generic_string())};}}
     for(const auto& [temp,destination]:temporary){auto replaced=replace_file(temp,destination);if(!replaced){cleanup();return std::unexpected{replaced.error()};}}
-    auto replaced=replace_file(*manifest_temp,manifest_path);if(!replaced){std::error_code ignored;std::filesystem::remove(*manifest_temp,ignored);return std::unexpected{replaced.error()};}
+    auto replaced=replace_file(*manifest_temp,manifest_path);if(!replaced){cleanup();return std::unexpected{replaced.error()};}
     return result;
 }
 
-Result<WriteResult> SafeWriter::clean(bool dry_run) const {
+Result<WriteResult> SafeWriter::clean(bool dry_run, bool force) const {
     std::error_code ec; if(!std::filesystem::is_directory(project_root_,ec)||ec) return std::unexpected{error("project root must be an existing directory",project_root_.generic_string())};
     const auto manifest_path=project_root_/manifest_relative_path; auto manifest_parent=reject_symlink_parents(project_root_,manifest_relative_path);if(!manifest_parent)return std::unexpected{manifest_parent.error()}; auto manifest=load_manifest(manifest_path);if(!manifest)return std::unexpected{manifest.error()}; WriteResult result{};
-    for(const auto& [relative,hash]:manifest->files){auto valid=normalize_relative_path(relative);if(!valid)return std::unexpected{valid.error()};auto parents=reject_symlink_parents(project_root_,*valid);if(!parents)return std::unexpected{parents.error()};const auto path=project_root_/relative;auto status=std::filesystem::symlink_status(path,ec);if(ec && !is_not_found(ec))return std::unexpected{error("cannot inspect owned file: "+ec.message(),path.generic_string())};if (is_not_found(ec)) { ec.clear(); status = std::filesystem::file_status{}; }if(std::filesystem::is_symlink(status)||(std::filesystem::exists(status)&&!std::filesystem::is_regular_file(status)))return std::unexpected{error("owned path is not a regular file",relative)};if(std::filesystem::exists(status)){++result.files_removed;result.would_change=true;}}
+    for(const auto& [relative,hash]:manifest->files){auto valid=normalize_relative_path(relative);if(!valid)return std::unexpected{valid.error()};auto parents=reject_symlink_parents(project_root_,*valid);if(!parents)return std::unexpected{parents.error()};const auto path=project_root_/relative;auto status=std::filesystem::symlink_status(path,ec);if(ec && !is_not_found(ec))return std::unexpected{error("cannot inspect owned file: "+ec.message(),path.generic_string())};if (is_not_found(ec)) { ec.clear(); status = std::filesystem::file_status{}; }if(std::filesystem::is_symlink(status)||(std::filesystem::exists(status)&&!std::filesystem::is_regular_file(status)))return std::unexpected{error("owned path is not a regular file",relative)};if(std::filesystem::exists(status)){auto current=read_file(path);if(!current)return std::unexpected{current.error()};if(sha256(*current)!=hash&&!force)return std::unexpected{error("refusing to remove a generated file modified since its recorded hash; use force to remove it",relative)};++result.files_removed;result.would_change=true;}}
     if(std::filesystem::exists(manifest_path,ec)&&!ec)result.would_change=true; if(dry_run||!result.would_change)return result;
     for(const auto& [relative,hash]:manifest->files){std::filesystem::remove(project_root_/relative,ec);if(ec)return std::unexpected{error("cannot remove owned file: "+ec.message(),relative)};}
     std::filesystem::remove(manifest_path,ec);if(ec)return std::unexpected{error("cannot remove manifest: "+ec.message(),manifest_path.generic_string())}; std::filesystem::remove(manifest_path.parent_path(),ec); return result;
