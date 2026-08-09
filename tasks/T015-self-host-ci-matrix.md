@@ -38,8 +38,7 @@ T014.
   and MSVC/Windows, with a second Clang/Linux job for compiler diversity.
   The normal configuration receives the located stage-0 executable, so its
   CTest run covers both bootstrap source drift and stage-binary equivalence.
-  The FetchContent cache is optional and keyed by OS, compiler, and
-  `cmake/dependencies.cmake`; every configure command works on a cold cache.
+  Every configure command works from a cold `FetchContent` population.
 - Verification: local workflow YAML structural parse passed. The T014 stage-0
   and stage-1 binaries both reported `No changes.` against this exact source
   tree; the source-drift and direct stage-binary-equivalence CMake scripts also
@@ -49,3 +48,7 @@ T014.
   checkout.
 - 2026-08-09: T015 remains `doing` until the hosted Linux, macOS, and Windows
   matrix has completed successfully and its run URLs are recorded here.
+- 2026-08-09: Removed the ineffective extracted-source `FetchContent` cache.
+  CMake's populate metadata is not retained alongside the cached `*-src`
+  directories, so each job repopulated dependencies anyway. CI now uses a
+  cold dependency population and continues to avoid caching build outputs.
