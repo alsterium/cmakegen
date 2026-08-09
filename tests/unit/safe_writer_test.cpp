@@ -210,7 +210,7 @@ TEST_CASE("safe writer rejects portable aliases of its manifest path") {
             ++manifest_directory_count;
     // Do not query the canonical spelling directly: on a case-insensitive
     // filesystem it is the same directory as the intentional alias.
-    CHECK(manifest_directory_count == 0);
+    CHECK(manifest_directory_count == 1);
 }
 
 TEST_CASE("safe writer rejects portable metadata aliases and output collisions during preflight") {

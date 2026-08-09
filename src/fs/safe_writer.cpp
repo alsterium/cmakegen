@@ -194,6 +194,13 @@ struct Manifest {
     for (const auto& component : relative) {
         const auto exact = current / component;
         const auto exact_status = std::filesystem::symlink_status(exact, ec);
+        if (ec == std::errc::not_a_directory) {
+            // An earlier component is a stale owned file scheduled for
+            // removal. Return the unresolved suffix so the write preflight
+            // can treat it as absent after validating that removal.
+            ec.clear();
+            return exact;
+        }
         if (ec && ec != std::errc::no_such_file_or_directory) {
             return std::unexpected{error("cannot inspect destination: " + ec.message(), exact.generic_string())};
         }
