@@ -124,30 +124,27 @@ void print_help(std::ostream& output) {
 }
 
 struct ResolvedProject {
-    ResolvedSourcesByTarget semantic_sources;
     RenderedSourcesByTarget rendered_sources;
 };
 
 [[nodiscard]] Result<ResolvedProject> resolve_project_sources(const Project& project,
                                                                 const std::filesystem::path& root) {
     ResolvedProject result;
-    auto resolve = [&](const std::string& target_name, const std::vector<SourceEntry>& entries,
+    auto resolve = [&](const std::vector<SourceEntry>& entries,
                        std::vector<ResolvedSource>& destination) -> Result<void> {
         auto sources = resolve_sources(root, entries);
         if (!sources) return std::unexpected{sources.error()};
         destination = std::move(*sources);
-        auto& all = result.semantic_sources[target_name];
-        all.insert(all.end(), destination.begin(), destination.end());
         return {};
     };
     for (const auto& [name, target] : project.targets) {
         auto& rendered = result.rendered_sources[name];
-        if (auto r = resolve(name, target.sources, rendered.common); !r) return std::unexpected{r.error()};
-        if (auto r = resolve(name, target.platform.macos.sources, rendered.macos); !r) return std::unexpected{r.error()};
-        if (auto r = resolve(name, target.platform.linux.sources, rendered.linux); !r) return std::unexpected{r.error()};
-        if (auto r = resolve(name, target.platform.windows.sources, rendered.windows); !r) return std::unexpected{r.error()};
-        auto& all = result.semantic_sources[name];
-        std::ranges::sort(all, {}, &ResolvedSource::path);
+        if (auto r = resolve(target.sources, rendered.common); !r) return std::unexpected{r.error()};
+        if (auto r = resolve(target.platform.macos.sources, rendered.macos); !r) return std::unexpected{r.error()};
+        if (auto r = resolve(target.platform.linux.sources, rendered.linux); !r) return std::unexpected{r.error()};
+        if (auto r = resolve(target.platform.windows.sources, rendered.windows); !r) return std::unexpected{r.error()};
+        for (auto* sources : {&rendered.common, &rendered.macos, &rendered.linux, &rendered.windows})
+            std::ranges::sort(*sources, {}, &ResolvedSource::path);
     }
     return result;
 }
@@ -258,11 +255,12 @@ int run_cli(const std::vector<std::string>& arguments, std::ostream& output, std
             resolved = std::move(*result);
             if (options.verbose) {
                 std::size_t source_count = 0;
-                for (const auto& [target, sources] : resolved.semantic_sources) source_count += sources.size();
+                for (const auto& [target, sources] : resolved.rendered_sources)
+                    source_count += sources.common.size() + sources.macos.size() + sources.linux.size() + sources.windows.size();
                 error << "verbose: resolved " << source_count << " source files\n";
             }
         }
-        auto graph = validate_project(*project, need_sources ? resolved.semantic_sources : ResolvedSourcesByTarget{});
+        auto graph = validate_project(*project, need_sources ? resolved.rendered_sources : ResolvedSourcesByTarget{});
         if (!graph) { print_diagnostics(graph.error(), !options.no_color, error); return diagnostic_exit(graph.error()); }
         if (options.verbose) error << "verbose: validated " << project->name << " (" << project->targets.size() << " targets)\n";
         if (options.command == "validate") { if (!options.quiet) output << "Valid.\n"; return 0; }
