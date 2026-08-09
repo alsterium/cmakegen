@@ -77,6 +77,10 @@ cmakegen dump --format json
 cmakegen dump --format yaml
 ```
 
+Without `--format`, `dump` emits the normalized JSON representation. The
+default is deliberately machine-readable while `--format yaml` is available
+for a YAML view.
+
 Useful for debugging both humans and AI coding agents.
 
 ## `cmakegen graph`
@@ -86,9 +90,8 @@ Print target dependency graph.
 Default tree-ish text:
 
 ```text
-App
-└── Core
-    └── fmt::fmt
+└── App
+    └── Core
 ```
 
 Options:
@@ -100,6 +103,10 @@ Options:
 ```
 
 Default should include project targets and may visually distinguish imported targets.
+
+`--verbose` writes command context and progress (including source-resolution
+and validation summaries) to standard error. It does not alter `dump` or
+`graph` standard output, so those formats remain consumable by tools.
 
 ## `cmakegen clean`
 
