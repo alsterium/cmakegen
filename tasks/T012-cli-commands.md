@@ -44,3 +44,10 @@ T006 through T011, inclusive.
 - Verification: `cmake -S bootstrap -B build/t012 -DCMAKEGEN_BOOTSTRAP_TESTS=ON`,
   `cmake --build build/t012 --parallel 4`, and
   `ctest --test-dir build/t012 --output-on-failure` (90/90 passed).
+- 2026-08-09: Review follow-up: command-specific flags are rejected for every
+  non-owning command (including help/version); source resolution is anchored to
+  the specification directory while `--root` remains output-only; DOT output
+  escapes quoted identifiers; and rootless platform-union graphs remain
+  visible. Added CLI coverage for these cases.
+- Verification: `cmake --build build/review-t012 --parallel 2` and
+  `ctest --test-dir build/review-t012 --output-on-failure` (109/109 passed).

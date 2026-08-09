@@ -175,18 +175,39 @@ void print_graph_text(const TargetGraph& graph, bool include_external, std::ostr
     };
     std::vector<std::string> roots;
     for (const auto& [target, unused] : graph.internal_adjacency) if (!children.contains(target)) roots.push_back(target);
+    // The graph displayed here is the union of the common and platform-specific
+    // dependencies.  That union can have no root even though every effective
+    // platform graph is acyclic, so still give the user a useful view instead
+    // of printing nothing.
+    if (roots.empty()) for (const auto& [target, unused] : graph.internal_adjacency) roots.push_back(target);
     std::ranges::sort(roots);
     for (std::size_t index = 0; index < roots.size(); ++index) {
         std::set<std::string> seen; visit(roots[index], {}, index + 1 == roots.size(), seen);
     }
 }
 
+[[nodiscard]] std::string dot_identifier(std::string_view value) {
+    std::string escaped;
+    escaped.reserve(value.size() + 2);
+    for (const char character : value) {
+        switch (character) {
+        case '\\': escaped += "\\\\"; break;
+        case '\"': escaped += "\\\""; break;
+        case '\n': escaped += "\\n"; break;
+        case '\r': escaped += "\\r"; break;
+        case '\t': escaped += "\\t"; break;
+        default: escaped += character; break;
+        }
+    }
+    return '\"' + escaped + '\"';
+}
+
 void print_graph_dot(const TargetGraph& graph, bool include_external, std::ostream& output) {
     output << "digraph cmakegen {\n";
     for (const auto& [target, dependencies] : graph.dependencies) {
-        output << "  \"" << target << "\";\n";
+        output << "  " << dot_identifier(target) << ";\n";
         for (const auto& dependency : dependencies) if (include_external || dependency.kind == LinkDependency::Kind::project_target)
-            output << "  \"" << target << "\" -> \"" << dependency.name << "\";\n";
+            output << "  " << dot_identifier(target) << " -> " << dot_identifier(dependency.name) << ";\n";
     }
     output << "}\n";
 }
@@ -198,12 +219,12 @@ int run_cli(const std::vector<std::string>& arguments, std::ostream& output, std
         auto parsed = parse_options(arguments, error);
         if (!parsed) return 1;
         auto& options = *parsed;
+        if (!validate_command_options(options, error)) return 1;
         if (options.command == "help" || options.command.empty()) { print_help(output); return options.command.empty() ? 1 : 0; }
         if (options.command == "version") { output << "cmakegen " << version() << '\n'; return 0; }
         if (options.command != "generate" && options.command != "validate" && options.command != "dump" && options.command != "graph" && options.command != "clean") {
             error << "error: unknown command " << options.command << '\n'; return 1;
         }
-        if (!validate_command_options(options, error)) return 1;
         const auto spec = std::filesystem::absolute(options.project);
         const auto root = options.root ? std::filesystem::absolute(*options.root) : spec.parent_path();
         if (options.verbose) error << "verbose: command=" << options.command << " project=" << spec.generic_string()
@@ -219,7 +240,10 @@ int run_cli(const std::vector<std::string>& arguments, std::ostream& output, std
         const bool need_sources = options.command == "generate" || options.resolved;
         ResolvedProject resolved;
         if (need_sources) {
-            auto result = resolve_project_sources(*project, root);
+            // Sources are part of the specification and therefore are always
+            // resolved relative to that specification.  --root only controls
+            // where generated output and its ownership manifest are written.
+            auto result = resolve_project_sources(*project, spec.parent_path());
             if (!result) { print_diagnostics(result.error(), !options.no_color, error); return diagnostic_exit(result.error()); }
             resolved = std::move(*result);
             if (options.verbose) {

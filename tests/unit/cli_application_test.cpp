@@ -82,6 +82,12 @@ TEST_CASE("CLI rejects command-only options on commands that do not support them
     CHECK(error == "error: --force is only valid with generate\n");
     CHECK(run({"clean", "--format", "json"}, output, error) == 1);
     CHECK(error == "error: --format is only valid with dump or graph\n");
+    CHECK(run({"dump", "--include-external"}, output, error) == 1);
+    CHECK(error == "error: --include-external is only valid with graph\n");
+    CHECK(run({"graph", "--resolved"}, output, error) == 1);
+    CHECK(error == "error: --resolved is only valid with validate\n");
+    CHECK(run({"--version", "--check"}, output, error) == 1);
+    CHECK(error == "error: --check is only valid with generate\n");
 }
 
 TEST_CASE("CLI verbose mode reports command context and validation progress") {
@@ -98,8 +104,8 @@ TEST_CASE("CLI verbose mode reports command context and validation progress") {
 TEST_CASE("CLI generate honors check, force, root, and clean dry run safety behavior") {
     FixtureDirectory fixture;
     fixture.file("config/spec.yml", valid_project);
-    fixture.file("src/main.cpp", "int main() {}\n");
-    fixture.file("src/core.cpp", "void core() {}\n");
+    fixture.file("config/src/main.cpp", "int main() {}\n");
+    fixture.file("config/src/core.cpp", "void core() {}\n");
     std::string output, error;
     const auto spec = (fixture.path() / "config/spec.yml").string();
     const auto root = fixture.path().string();
@@ -108,12 +114,64 @@ TEST_CASE("CLI generate honors check, force, root, and clean dry run safety beha
     CHECK(std::filesystem::exists(fixture.path() / ".cmakegen/manifest.json"));
     CHECK(run({"--project", spec, "--root", root, "generate", "--check"}, output, error) == 0);
     CHECK(output == "No changes.\n");
-    fixture.file("CMakeLists.txt", "user-owned\n");
+    std::filesystem::remove(fixture.path() / "CMakeLists.txt");
     CHECK(run({"--project", spec, "--root", root, "generate", "--check"}, output, error) == 1);
+    CHECK(run({"--project", spec, "--root", root, "generate"}, output, error) == 0);
     CHECK(run({"--root", root, "clean", "--dry-run"}, output, error) == 0);
     CHECK(std::filesystem::exists(fixture.path() / "CMakeLists.txt"));
     CHECK(run({"--root", root, "clean"}, output, error) == 0);
     CHECK_FALSE(std::filesystem::exists(fixture.path() / "CMakeLists.txt"));
+}
+
+TEST_CASE("CLI resolves sources relative to the specification, not the output root") {
+    FixtureDirectory fixture;
+    fixture.file("spec/project.yml", valid_project);
+    fixture.file("spec/src/main.cpp", "int main() {}\n");
+    fixture.file("spec/src/core.cpp", "void core() {}\n");
+    const auto output_root = fixture.path() / "generated";
+    std::filesystem::create_directories(output_root);
+    std::string output, error;
+    CHECK(run({"--project", (fixture.path() / "spec/project.yml").string(), "--root", output_root.string(),
+               "generate"}, output, error) == 0);
+    CHECK(std::filesystem::exists(output_root / "CMakeLists.txt"));
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / "spec/CMakeLists.txt"));
+}
+
+TEST_CASE("CLI graph escapes DOT strings and prints a platform-union graph without roots") {
+    FixtureDirectory fixture;
+    fixture.file("project.yml", R"(schemaVersion: 1
+name: Example
+targets:
+  App:
+    type: executable
+    platform:
+      macos:
+        dependencies:
+          private: [Core]
+  Core:
+    type: staticLibrary
+    platform:
+      windows:
+        dependencies:
+          private: [App]
+)");
+    std::string output, error;
+    const auto project = (fixture.path() / "project.yml").string();
+    CHECK(run({"--project", project, "graph", "--format", "text"}, output, error) == 0);
+    CHECK(output.find("App") != std::string::npos);
+    CHECK(output.find("Core") != std::string::npos);
+
+    fixture.file("escaped.yml", R"(schemaVersion: 1
+name: Example
+targets:
+  App:
+    type: executable
+    dependencies:
+      private: ['Pkg"Quote\\Name']
+)");
+    CHECK(run({"--project", (fixture.path() / "escaped.yml").string(), "graph", "--format", "dot",
+               "--include-external"}, output, error) == 0);
+    CHECK(output.find("Pkg\\\"Quote") != std::string::npos);
 }
 
 TEST_CASE("CLI maps invalid specifications and filesystem failures to documented statuses") {
