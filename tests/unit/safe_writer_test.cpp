@@ -127,6 +127,21 @@ TEST_CASE("stale cleanup and clean affect only manifest-owned files") {
     CHECK(std::filesystem::exists(fixture.path() / "user.txt"));
 }
 
+TEST_CASE("disabling stale cleanup retains ownership of files omitted from this run") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"old.txt", "old\n"}, {"keep.txt", "keep\n"}})));
+
+    const auto updated = writer.write(file_set({{"keep.txt", "keep\n"}}), {.cleanup_stale = false});
+    REQUIRE(updated);
+    CHECK(std::filesystem::exists(fixture.path() / "old.txt"));
+    const auto manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+    CHECK(manifest.find("\"path\": \"old.txt\"") != std::string::npos);
+    REQUIRE(writer.clean());
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / "old.txt"));
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / "keep.txt"));
+}
+
 TEST_CASE("stale cleanup and clean preserve manifest-owned files modified by users") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};
@@ -155,6 +170,10 @@ TEST_CASE("safe writer rejects portable metadata aliases and output collisions d
     cmakegen::GeneratedFileSet ancestors;
     REQUIRE(ancestors.add({"directory", "file\n"}));
     CHECK_FALSE(ancestors.add({"directory/child.txt", "child\n"}));
+
+    cmakegen::GeneratedFileSet case_folded_ancestors;
+    REQUIRE(case_folded_ancestors.add({"Directory", "file\n"}));
+    CHECK_FALSE(case_folded_ancestors.add({"directory/child.txt", "child\n"}));
 }
 
 TEST_CASE("safe writer rejects an existing file ancestor before writing") {
@@ -163,6 +182,15 @@ TEST_CASE("safe writer rejects an existing file ancestor before writing") {
     cmakegen::SafeWriter writer{fixture.path()};
     CHECK_FALSE(writer.write(file_set({{"directory/child.txt", "generated\n"}})));
     CHECK(read_file(fixture.path() / "directory") == "user file\n");
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/manifest.json"));
+}
+
+TEST_CASE("safe writer rejects case-folded existing file ancestors before writing") {
+    TemporaryDirectory fixture;
+    write_file(fixture.path() / "Directory", "user file\n");
+    cmakegen::SafeWriter writer{fixture.path()};
+    CHECK_FALSE(writer.write(file_set({{"directory/child.txt", "generated\n"}})));
+    CHECK(read_file(fixture.path() / "Directory") == "user file\n");
     CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/manifest.json"));
 }
 

@@ -67,15 +67,40 @@ struct Manifest {
 
 [[nodiscard]] Result<void> reject_file_ancestor(const std::filesystem::path& root,
                                                  const std::filesystem::path& relative) {
+    // Resolve each existing ancestor using a case-folded name.  This keeps a
+    // generated tree safe when it is produced on a case-sensitive host and
+    // then used on the default filesystems of macOS or Windows.
+    auto existing_component = [](const std::filesystem::path& parent,
+                                 const std::filesystem::path& component)
+        -> Result<std::optional<std::filesystem::path>> {
+        std::error_code ec;
+        const auto exact = parent / component;
+        const auto exact_status = std::filesystem::symlink_status(exact, ec);
+        if (!ec && exact_status.type() != std::filesystem::file_type::not_found) return exact;
+        if (ec && ec != std::errc::no_such_file_or_directory) {
+            return std::unexpected{error("cannot inspect destination ancestor: " + ec.message(), exact.generic_string())};
+        }
+        ec.clear();
+        std::filesystem::directory_iterator entries(parent, ec);
+        if (ec == std::errc::no_such_file_or_directory) return std::optional<std::filesystem::path>{};
+        if (ec) return std::unexpected{error("cannot inspect destination ancestor: " + ec.message(), parent.generic_string())};
+        for (const auto& entry : entries) {
+            if (case_insensitive_key(entry.path().filename().generic_string()) ==
+                case_insensitive_key(component.generic_string())) {
+                return entry.path();
+            }
+        }
+        return std::optional<std::filesystem::path>{};
+    };
+
     std::error_code ec;
     auto current = root;
     for (const auto& component : relative.parent_path()) {
-        current /= component;
+        auto matched = existing_component(current, component);
+        if (!matched) return std::unexpected{matched.error()};
+        if (!*matched) return {};
+        current = **matched;
         const auto status = std::filesystem::symlink_status(current, ec);
-        if (ec == std::errc::no_such_file_or_directory) {
-            ec.clear();
-            return {};
-        }
         if (ec) return std::unexpected{error("cannot inspect destination ancestor: " + ec.message(), current.generic_string())};
         if (std::filesystem::is_regular_file(status)) {
             return std::unexpected{error("generated path collides with an existing file ancestor", current.generic_string())};
@@ -89,12 +114,30 @@ struct Manifest {
     std::error_code ec;
     auto current = root;
     for (const auto& component : relative.parent_path()) {
-        current /= component;
-        const auto status = std::filesystem::symlink_status(current, ec);
-        if (ec == std::errc::no_such_file_or_directory) {
+        const auto exact = current / component;
+        const auto exact_status = std::filesystem::symlink_status(exact, ec);
+        if (!ec && exact_status.type() != std::filesystem::file_type::not_found) {
+            current = exact;
+        } else {
+            if (ec && ec != std::errc::no_such_file_or_directory) {
+                return std::unexpected{error("cannot inspect destination: " + ec.message(), exact.generic_string())};
+            }
             ec.clear();
-            break;
+            std::filesystem::directory_iterator entries(current, ec);
+            if (ec == std::errc::no_such_file_or_directory) break;
+            if (ec) return std::unexpected{error("cannot inspect destination: " + ec.message(), current.generic_string())};
+            std::optional<std::filesystem::path> matched;
+            for (const auto& entry : entries) {
+                if (case_insensitive_key(entry.path().filename().generic_string()) ==
+                    case_insensitive_key(component.generic_string())) {
+                    matched = entry.path();
+                    break;
+                }
+            }
+            if (!matched) break;
+            current = *matched;
         }
+        const auto status = std::filesystem::symlink_status(current, ec);
         if (ec) {
             return std::unexpected{error("cannot inspect destination: " + ec.message(), current.generic_string())};
         }
@@ -234,9 +277,10 @@ Result<void> GeneratedFileSet::add(GeneratedFile file) {
         if (case_insensitive_key(existing_path) == key) {
             return std::unexpected{error("generated file set contains duplicate paths on a case-insensitive filesystem", *normalized)};
         }
-        const auto separator = existing_path + "/";
-        const auto new_separator = *normalized + "/";
-        if (normalized->starts_with(separator) || existing_path.starts_with(new_separator)) {
+        const auto insensitive_existing = case_insensitive_key(existing_path);
+        const auto separator = insensitive_existing + "/";
+        const auto new_separator = key + "/";
+        if (key.starts_with(separator) || insensitive_existing.starts_with(new_separator)) {
             return std::unexpected{error("generated file set contains file/ancestor path collisions", *normalized)};
         }
     }
@@ -260,7 +304,7 @@ Result<WriteResult> SafeWriter::write(const GeneratedFileSet& files, const Write
     auto manifest_parent = reject_symlink_parents(project_root_, manifest_relative_path);
     if (!manifest_parent) return std::unexpected{manifest_parent.error()};
     auto old_manifest = load_manifest(manifest_path); if (!old_manifest) return std::unexpected{old_manifest.error()};
-    Manifest next_manifest;
+    Manifest next_manifest = options.cleanup_stale ? Manifest{} : *old_manifest;
     std::map<std::string, const GeneratedFile*, std::less<>> next_files;
     for (const auto& file : files.files()) {
         auto normalized=normalize_relative_path(file.path); if(!normalized) return std::unexpected{normalized.error()};
