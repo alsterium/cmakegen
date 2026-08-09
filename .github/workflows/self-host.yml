@@ -57,8 +57,6 @@ jobs:
           cmake --version
           if [ -n '${{ matrix.cxx }}' ]; then
             '${{ matrix.cxx }}' --version
-          else
-            cl.exe
           fi
 
       - name: Select compiler
