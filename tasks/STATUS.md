@@ -23,7 +23,7 @@ in parallel after their dependencies are complete.
 | [T012](T012-cli-commands.md) | Complete MVP CLI | done | L | medium | T006–T011 | 9 |
 | [T013](T013-integration-and-determinism-tests.md) | Integration and determinism test suite | done | L | medium | T009, T010, T011, T012 | 10 |
 | [T014](T014-self-host-project-definition.md) | Self-hosted project definition and generated files | done | L | high | T012, T013 | 11 |
-| [T015](T015-self-host-ci-matrix.md) | Cross-platform self-host CI matrix | done | M | medium | T014 | 12 |
+| [T015](T015-self-host-ci-matrix.md) | Cross-platform self-host CI matrix | doing | M | medium | T014 | 12 |
 | [T016](T016-mvp-documentation-and-release-readiness.md) | MVP documentation and release readiness | todo | M | medium | T015 | 13 |
 
 `T012` depends on every task from `T006` through `T011`, inclusive.

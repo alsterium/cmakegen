@@ -47,3 +47,5 @@ T014.
   stale generated-file fixture is rejected by `generate --check`; both CI
   checks then use `git diff --exit-code` to verify that they did not modify the
   checkout.
+- 2026-08-09: T015 remains `doing` until the hosted Linux, macOS, and Windows
+  matrix has completed successfully and its run URLs are recorded here.

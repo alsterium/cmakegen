@@ -3,7 +3,7 @@
 tests/fixtures/integration/**/expected/** -text
 
 # The self-host manifest stores SHA-256 hashes of the generated LF bytes.
-# Preserve those bytes on Windows checkouts as well.
+# Preserve canonical bytes on Windows checkouts as well.
 /CMakeLists.txt text eol=lf
 /CMakePresets.json text eol=lf
 /cmake/cmakegen.generated.cmake text eol=lf
