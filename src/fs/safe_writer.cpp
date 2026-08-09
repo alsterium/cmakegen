@@ -74,6 +74,9 @@ struct Manifest {
 }
 
 [[nodiscard]] Result<std::string> normalize_relative_path(const std::filesystem::path& path) {
+    if (path.native().find('\\') != std::filesystem::path::string_type::npos) {
+        return std::unexpected{error("generated path must use forward slashes", path.generic_string())};
+    }
     if (path.native().find('\0') != std::filesystem::path::string_type::npos) {
         return std::unexpected{error("generated path must not contain NUL bytes", path.generic_string())};
     }
