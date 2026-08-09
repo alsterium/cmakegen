@@ -138,6 +138,21 @@ TEST_CASE("semantic validation reports independent platform cycles with the same
     CHECK(result.error().diagnostics()[1].path == "targets.Core.platform.windows.dependencies");
 }
 
+TEST_CASE("semantic validation suppresses rotated common cycles in platform graphs") {
+    auto app = target("App");
+    app.platform.macos.dependencies.private_values.push_back(
+        {LinkDependency::Kind::imported_target, "Core"});
+    auto core = target("Core");
+    add_dependency(core, "Platform");
+    auto platform = target("Platform");
+    add_dependency(platform, "Core");
+
+    const auto result = validate_project(project_with_targets({app, core, platform}));
+    REQUIRE_FALSE(result);
+    REQUIRE(result.error().diagnostics().size() == 1);
+    CHECK(result.error().diagnostics().front().message == "internal dependency cycle: Core -> Platform -> Core");
+}
+
 TEST_CASE("semantic validation reports the closing edge provenance in a mixed cycle") {
     auto app = target("App");
     app.platform.macos.dependencies.private_values.push_back(

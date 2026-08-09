@@ -212,12 +212,26 @@ void detect_dependency_cycles(DiagnosticSet& diagnostics,
                 visit(dependency.name);
             } else if (state[dependency.name] == 1) {
                 const auto first = std::find(stack.begin(), stack.end(), dependency.name);
-                std::string cycle;
-                for (auto iterator = first; iterator != stack.end(); ++iterator) {
-                    if (!cycle.empty()) cycle += " -> ";
-                    cycle += *iterator;
+                std::vector<std::string> cycle_nodes(first, stack.end());
+                // The same directed cycle can be encountered from a different
+                // entry point in a platform graph.  Normalize rotations before
+                // deduplicating common and platform-effective passes.
+                std::size_t canonical_index = 0;
+                for (std::size_t candidate = 1; candidate < cycle_nodes.size(); ++candidate) {
+                    for (std::size_t offset = 0; offset < cycle_nodes.size(); ++offset) {
+                        const auto& lhs = cycle_nodes[(candidate + offset) % cycle_nodes.size()];
+                        const auto& rhs = cycle_nodes[(canonical_index + offset) % cycle_nodes.size()];
+                        if (lhs == rhs) continue;
+                        if (lhs < rhs) canonical_index = candidate;
+                        break;
+                    }
                 }
-                cycle += " -> " + dependency.name;
+                std::string cycle;
+                for (std::size_t offset = 0; offset < cycle_nodes.size(); ++offset) {
+                    if (!cycle.empty()) cycle += " -> ";
+                    cycle += cycle_nodes[(canonical_index + offset) % cycle_nodes.size()];
+                }
+                cycle += " -> " + cycle_nodes[canonical_index];
                 const ReportedCycle reported_cycle{
                     cycle, platform ? std::optional{std::string(*platform)} : std::nullopt};
                 // A common cycle is present in every platform graph and has
