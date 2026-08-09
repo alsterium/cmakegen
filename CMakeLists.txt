@@ -11,10 +11,10 @@ project(
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(cmake/dependencies.cmake OPTIONAL)
-find_package(CLI11 2.6.2 REQUIRED)
-find_package(Catch2 3.15.3 REQUIRED)
-find_package(nlohmann_json 3.12.0 REQUIRED)
-find_package(yaml-cpp 0.8.0 REQUIRED)
+find_package("CLI11" 2.6.2 REQUIRED)
+find_package("Catch2" 3.15.3 REQUIRED)
+find_package("nlohmann_json" 3.12.0 REQUIRED)
+find_package("yaml-cpp" 0.8.0 REQUIRED)
 
 include(cmake/cmakegen.generated.cmake)
-include(cmake/custom.cmake)
+include("cmake/custom.cmake")
