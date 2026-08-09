@@ -347,7 +347,11 @@ int run_cli(const std::vector<std::string>& arguments, std::ostream& output, std
         (void)files.add({"CMakeLists.txt", cmake.root_cmake_lists});
         (void)files.add({"cmake/cmakegen.generated.cmake", cmake.generated_cmake});
         (void)files.add({"CMakePresets.json", render_presets(render_project)});
-        auto written = SafeWriter(root).write(files, {.check = options.check, .force = options.force});
+        // Check mode is observational: an ownership conflict is a generation
+        // mismatch, not a filesystem write failure. SafeWriter still performs
+        // no replacement when check is set.
+        auto written = SafeWriter(root).write(files, {.check = options.check,
+                                                       .force = options.force || options.check});
         if (!written) { print_diagnostics(written.error(), !options.no_color, error); return diagnostic_exit(written.error()); }
         if (options.check && written->would_change) return 1;
         if (!options.quiet) output << (written->would_change ? "Generated " + std::to_string(written->files_written) + " files.\n" : "No changes.\n");
