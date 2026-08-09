@@ -9,9 +9,16 @@
 namespace cmakegen {
 
 // Resolved sources are optional because logical validation is useful before a
-// source tree is available. When supplied, they allow interface-library source
-// rules to be checked against the actual expanded file set.
-using ResolvedSourcesByTarget = std::map<std::string, std::vector<ResolvedSource>>;
+// source tree is available. Keep platform buckets separate: a target that is
+// compilable on Windows only must not make validation succeed for Linux.
+struct ResolvedTargetSources {
+    std::vector<ResolvedSource> common;
+    std::vector<ResolvedSource> macos;
+    std::vector<ResolvedSource> linux;
+    std::vector<ResolvedSource> windows;
+};
+
+using ResolvedSourcesByTarget = std::map<std::string, ResolvedTargetSources>;
 
 struct TargetGraph {
     // Both maps are sorted by target name. Dependency vectors are sorted and

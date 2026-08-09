@@ -228,7 +228,7 @@ TEST_CASE("interface libraries reject non-interface scopes and implementation so
         {LinkDependency::Kind::imported_target, "Threads::Threads"});
     interface_target.sources.push_back({"src/implementation.cpp", true, {}, SourceKind::source});
 
-    ResolvedSourcesByTarget resolved{{"Headers", {{"src/automatic.cpp", SourceKind::source}}}};
+    ResolvedSourcesByTarget resolved{{"Headers", {{{"src/automatic.cpp", SourceKind::source}}, {}, {}, {}}}};
     const auto result = validate_project(project_with_targets({interface_target}), resolved);
     REQUIRE_FALSE(result);
     const auto& diagnostics = result.error().diagnostics();
@@ -368,10 +368,10 @@ TEST_CASE("semantic validation enforces the CMake 3.28 baseline and ordered poli
 
 TEST_CASE("semantic validation requires implementation sources and rejects reserved target names") {
     auto headers_only = target("Core");
-    ResolvedSourcesByTarget resolved{{"Core", {{"include/core.hpp", SourceKind::header}}}};
+    ResolvedSourcesByTarget resolved{{"Core", {{{"include/core.hpp", SourceKind::header}}, {}, {}, {}}}};
     const auto missing_source = validate_project(project_with_targets({headers_only}), resolved);
     REQUIRE_FALSE(missing_source);
-    CHECK(missing_source.error().diagnostics().front().path == "targets.Core.sources");
+    CHECK(missing_source.error().diagnostics().front().path == "targets.Core.platform.linux.sources");
 
     auto reserved = target("all");
     const auto reserved_result = validate_project(project_with_targets({reserved}));
@@ -382,8 +382,8 @@ TEST_CASE("semantic validation requires implementation sources and rejects reser
 TEST_CASE("semantic validation requires explicit platform-only sources on every platform") {
     auto core = target("Core");
     core.platform.windows.sources.push_back({"src/windows.cpp", true, {}, SourceKind::source});
-    ResolvedSourcesByTarget resolved{{"Core", {{"include/core.hpp", SourceKind::header},
-                                                   {"src/windows.cpp", SourceKind::source}}}};
+    ResolvedSourcesByTarget resolved{{"Core", {{{"include/core.hpp", SourceKind::header}}, {}, {},
+                                                   {{"src/windows.cpp", SourceKind::source}}}}};
 
     const auto result = validate_project(project_with_targets({core}), resolved);
     REQUIRE_FALSE(result);

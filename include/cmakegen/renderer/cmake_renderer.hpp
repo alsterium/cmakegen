@@ -11,13 +11,6 @@ namespace cmakegen {
 
 // Sources have already been expanded by SourceResolver. The renderer keeps
 // platform-specific sources separate so it can emit native CMake conditions.
-struct ResolvedTargetSources {
-    std::vector<ResolvedSource> common;
-    std::vector<ResolvedSource> macos;
-    std::vector<ResolvedSource> linux;
-    std::vector<ResolvedSource> windows;
-};
-
 using RenderedSourcesByTarget = std::map<std::string, ResolvedTargetSources>;
 
 struct RenderedCmakeFiles {

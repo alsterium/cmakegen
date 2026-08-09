@@ -204,8 +204,17 @@ void validate_sources(DiagnosticSet& diagnostics, const Target& target, const st
                             path + ".platform.windows.sources");
     const auto resolved = resolved_sources.find(target.name);
     if (resolved == resolved_sources.end()) return;
+    const auto& resolved_target = resolved->second;
+    const auto all_sources = [&]() {
+        std::vector<ResolvedSource> sources = resolved_target.common;
+        for (const auto* platform : {&resolved_target.macos, &resolved_target.linux,
+                                     &resolved_target.windows}) {
+            sources.insert(sources.end(), platform->begin(), platform->end());
+        }
+        return sources;
+    }();
     if (target.type == TargetType::interface_library) {
-        for (const auto& source : resolved->second) {
+        for (const auto& source : all_sources) {
             if (source.kind == SourceKind::source) {
                 add_resolved_source_semantic_error(diagnostics, source, path + ".sources",
                             "interface libraries cannot contain implementation sources: " + source.path);
@@ -213,47 +222,23 @@ void validate_sources(DiagnosticSet& diagnostics, const Target& target, const st
         }
         return;
     }
-    if (std::ranges::none_of(resolved->second, [](const ResolvedSource& source) {
+    const auto has_implementation = [](const std::vector<ResolvedSource>& sources) {
+        return std::ranges::any_of(sources, [](const ResolvedSource& source) {
             return source.kind == SourceKind::source;
-        })) {
-        add_semantic_error(diagnostics, path + ".sources",
-                           "non-interface targets require at least one implementation source");
-    }
-}
-
-[[nodiscard]] bool contains_implementation_source(const std::vector<SourceEntry>& sources) {
-    return std::ranges::any_of(sources, [](const SourceEntry& source) {
-        return source.kind == SourceKind::source;
-    });
-}
-
-// At this stage the resolver supplies one flattened vector for a target.  Its
-// aggregate check above catches empty and header-only expansions.  Explicit
-// implementation entries must additionally be present in every generated
-// common-plus-platform source set: a source only in a Windows override cannot
-// make the Linux target compilable.
-void validate_platform_source_sets(DiagnosticSet& diagnostics, const Target& target,
-                                   const std::string& path) {
-    if (target.type == TargetType::interface_library) return;
-    const bool has_explicit_implementation =
-        contains_implementation_source(target.sources) ||
-        contains_implementation_source(target.platform.macos.sources) ||
-        contains_implementation_source(target.platform.linux.sources) ||
-        contains_implementation_source(target.platform.windows.sources);
-    // Automatic entries are classified only after expansion, where this
-    // compact validation input deliberately does not retain their platform
-    // provenance.  The flattened resolved-set check still validates those.
-    if (!has_explicit_implementation || contains_implementation_source(target.sources)) return;
-
-    const auto validate_platform = [&](const TargetOverride& override, std::string_view platform) {
-        if (!contains_implementation_source(override.sources)) {
+        });
+    };
+    const auto validate_platform = [&](const std::vector<ResolvedSource>& platform_sources,
+                                       std::string_view platform) {
+        std::vector<ResolvedSource> effective = resolved_target.common;
+        effective.insert(effective.end(), platform_sources.begin(), platform_sources.end());
+        if (!has_implementation(effective)) {
             add_semantic_error(diagnostics, path + ".platform." + std::string{platform} + ".sources",
-                               "non-interface targets require an implementation source on every platform");
+                               "non-interface targets require at least one implementation source");
         }
     };
-    validate_platform(target.platform.macos, "macos");
-    validate_platform(target.platform.linux, "linux");
-    validate_platform(target.platform.windows, "windows");
+    validate_platform(resolved_target.macos, "macos");
+    validate_platform(resolved_target.linux, "linux");
+    validate_platform(resolved_target.windows, "windows");
 }
 
 [[nodiscard]] bool is_link_mode_keyword(std::string_view value) {
@@ -498,7 +483,6 @@ Result<TargetGraph> validate_project(const Project& project,
             add_semantic_error(diagnostics, path, "duplicate logical target definition '" + target.name + "'");
         }
         validate_sources(diagnostics, target, path, resolved_sources);
-        validate_platform_source_sets(diagnostics, target, path);
         validate_dependencies(diagnostics, target.dependencies, path + ".dependencies");
         validate_dependencies(diagnostics, target.platform.macos.dependencies,
                               path + ".platform.macos.dependencies");
