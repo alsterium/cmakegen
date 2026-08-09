@@ -142,6 +142,10 @@ void validate_literal_cmake_argument(DiagnosticSet& diagnostics, const std::stri
         add_semantic_error(diagnostics, path,
                            "literal CMake arguments must not contain evaluated dollar syntax");
     }
+    if (value.contains('\n') || value.contains('\r')) {
+        add_semantic_error(diagnostics, path,
+                           "literal CMake arguments must not contain line breaks");
+    }
 }
 
 template <typename T, typename Value>
@@ -164,6 +168,23 @@ void validate_scoped_literal_cmake_arguments(DiagnosticSet& diagnostics, const S
     validate_scope(values.private_values, "private");
     validate_scope(values.public_values, "public");
     validate_scope(values.interface_values, "interface");
+}
+
+void validate_compile_definitions(DiagnosticSet& diagnostics, const ScopedValues<std::string>& values,
+                                  const std::string& path) {
+    const auto validate = [&](const std::vector<std::string>& entries, std::string_view scope) {
+        for (std::size_t index = 0; index < entries.size(); ++index) {
+            const auto& entry = entries[index];
+            if (entry.contains('#') || entry.find('(') < entry.find('=')) {
+                add_semantic_error(diagnostics, path + "." + std::string{scope} + "[" +
+                                                   std::to_string(index) + "]",
+                                   "compile definitions must not contain '#' or function-style syntax");
+            }
+        }
+    };
+    validate(values.private_values, "private");
+    validate(values.public_values, "public");
+    validate(values.interface_values, "interface");
 }
 
 void validate_interface_scopes(DiagnosticSet& diagnostics, const Target& target,
@@ -584,6 +605,7 @@ Result<TargetGraph> validate_project(const Project& project,
         validate_scoped_literal_cmake_arguments(
             diagnostics, target.definitions, path + ".definitions",
             [](const std::string& value) -> std::string_view { return value; });
+        validate_compile_definitions(diagnostics, target.definitions, path + ".definitions");
         validate_scoped_literal_cmake_arguments(
             diagnostics, target.compile_options, path + ".compileOptions",
             [](const std::string& value) -> std::string_view { return value; });
@@ -599,6 +621,8 @@ Result<TargetGraph> validate_project(const Project& project,
             validate_scoped_literal_cmake_arguments(
                 diagnostics, override.definitions, platform_path + ".definitions",
                 [](const std::string& value) -> std::string_view { return value; });
+            validate_compile_definitions(diagnostics, override.definitions,
+                                         platform_path + ".definitions");
             validate_scoped_literal_cmake_arguments(
                 diagnostics, override.compile_options, platform_path + ".compileOptions",
                 [](const std::string& value) -> std::string_view { return value; });
