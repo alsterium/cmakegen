@@ -170,6 +170,42 @@ TEST_CASE("stale cleanup and clean preserve manifest-owned files modified by use
     CHECK_FALSE(std::filesystem::exists(fixture.path() / "clean.txt"));
 }
 
+TEST_CASE("stale owned files can become output directories after verified cleanup") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"generated", "first\n"}})));
+
+    const auto transitioned = writer.write(file_set({{"generated/child.txt", "child\n"}}));
+    REQUIRE(transitioned);
+    CHECK(transitioned->files_removed == 1);
+    CHECK(read_file(fixture.path() / "generated/child.txt") == "child\n");
+
+    TemporaryDirectory modified_fixture;
+    cmakegen::SafeWriter modified_writer{modified_fixture.path()};
+    REQUIRE(modified_writer.write(file_set({{"generated", "first\n"}})));
+    write_file(modified_fixture.path() / "generated", "user edit\n");
+    CHECK_FALSE(modified_writer.write(file_set({{"generated/child.txt", "child\n"}})));
+    REQUIRE(modified_writer.write(file_set({{"generated/child.txt", "child\n"}}), {.force = true}));
+    CHECK(read_file(modified_fixture.path() / "generated/child.txt") == "child\n");
+}
+
+TEST_CASE("safe writer rejects portable aliases of its manifest path") {
+    TemporaryDirectory fixture;
+    const auto alias = fixture.path() / ".CmakeGen/Manifest.JSON";
+    write_file(alias, "{\"version\": 1, \"files\": []}\n");
+
+    bool distinct_alias = false;
+    for (const auto& entry : std::filesystem::directory_iterator(fixture.path())) {
+        distinct_alias = entry.path().filename() == ".CmakeGen";
+    }
+    if (!distinct_alias) SKIP("filesystem does not support distinct portable metadata aliases");
+
+    cmakegen::SafeWriter writer{fixture.path()};
+    CHECK_FALSE(writer.write(file_set({{"generated.txt", "contents\n"}})));
+    CHECK_FALSE(writer.clean());
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/manifest.json"));
+}
+
 TEST_CASE("safe writer rejects portable metadata aliases and output collisions during preflight") {
     cmakegen::GeneratedFileSet metadata_alias;
     CHECK_FALSE(metadata_alias.add({".CMakeGen/manifest.json", "bad\n"}));
