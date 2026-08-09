@@ -35,3 +35,14 @@ T012 and T013.
 
 Follow stages A–D in `docs/09_TEST_STRATEGY.md`, run all tests, and inspect the
 final Git diff for generated-file consistency.
+
+## Execution record
+
+- 2026-08-09: Added the schema-v1 root `project.yml` for the core library,
+  CLI, and Catch2 test executable. Generated and committed the root CMake
+  files and ownership manifest from the bootstrap binary. Kept CTest/Catch2
+  discovery, bootstrap source-drift, and stage-binary equivalence checks in
+  the documented hand-maintained `cmake/custom.cmake` escape hatch.
+  Bootstrap now builds only the functional generator and skips the
+  normal-build-only Catch2 acquisition.
+- Verification: Stage A `cmake -S bootstrap -B /private/tmp/cmakegen-T014-build-bootstrap -G 'Unix Makefiles'` and `cmake --build /private/tmp/cmakegen-T014-build-bootstrap --parallel 4`; stage B bootstrap `cmakegen generate --check --no-color`; stage C `cmake --preset debug` and `cmake --build --preset debug --parallel 4`; stage D `build/debug/cmakegen generate --check --no-color`; `ctest --test-dir build/debug --output-on-failure` (97/97 passed, including bootstrap drift and equivalence); direct stage-binary equivalence script passed.

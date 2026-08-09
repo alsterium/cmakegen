@@ -1,3 +1,10 @@
 # Golden files are compared byte-for-byte by the integration suite.  Keep
 # their checked-out line endings stable on Windows as well as POSIX hosts.
 tests/fixtures/integration/**/expected/** -text
+
+# The self-host manifest stores SHA-256 hashes of the generated LF bytes.
+# Preserve those bytes on Windows checkouts as well.
+/CMakeLists.txt text eol=lf
+/CMakePresets.json text eol=lf
+/cmake/cmakegen.generated.cmake text eol=lf
+/.cmakegen/manifest.json text eol=lf

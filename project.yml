@@ -1,0 +1,75 @@
+schemaVersion: 1
+
+name: cmakegen
+
+cmake:
+  minimumVersion: "3.28"
+  languages: [CXX]
+  cxxStandard: 23
+  extensions: false
+  include:
+    - cmake/custom.cmake
+
+packages:
+  yaml_cpp:
+    name: yaml-cpp
+    version: "0.8.0"
+    required: true
+
+  nlohmann_json:
+    name: nlohmann_json
+    version: "3.12.0"
+    required: true
+
+  CLI11:
+    name: CLI11
+    version: "2.6.2"
+    required: true
+
+  Catch2:
+    name: Catch2
+    version: "3.15.3"
+    required: true
+
+targets:
+  cmakegen_core:
+    type: staticLibrary
+    sources:
+      - path: src
+        exclude:
+          - main.cpp
+      - include
+    includeDirectories:
+      public:
+        - include
+    dependencies:
+      public:
+        - yaml-cpp::yaml-cpp
+        - nlohmann_json::nlohmann_json
+
+  cmakegen:
+    type: executable
+    sources:
+      - src/main.cpp
+    dependencies:
+      private:
+        - cmakegen_core
+        - CLI11::CLI11
+
+  cmakegen_tests:
+    type: executable
+    sources:
+      - path: tests
+        exclude:
+          - fixtures/**
+    dependencies:
+      private:
+        - cmakegen_core
+        - Catch2::Catch2WithMain
+
+presets:
+  debug:
+    buildType: Debug
+
+  release:
+    buildType: Release

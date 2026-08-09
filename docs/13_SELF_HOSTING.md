@@ -147,6 +147,19 @@ For normal development:
 
 Because source directories are expanded by cmakegen, adding a `.cpp` file requires regeneration before CMake sees the explicit source entry.
 
+### 6.1 Schema-v1 custom CMake boundary
+
+`project.yml` owns the normal targets, their sources, and their declared
+dependencies. Schema version 1 does not model CTest registration or
+Catch2 discovery, so this repository keeps those operations in the
+hand-maintained `cmake/custom.cmake` hook referenced by `cmake.include`.
+
+The generator includes this hook after `cmake/cmakegen.generated.cmake`.
+It is never generated, tracked in the ownership manifest, or removed by
+`cmakegen clean`. Use this same hook for standard CMake behavior that the
+schema does not yet express; do not encode project-name special cases in the
+generator.
+
 ## 7. Optional developer convenience
 
 Post-MVP, implement:
@@ -180,6 +193,14 @@ normal generator output
 ```
 
 byte-for-byte.
+
+The normal test configuration provides two explicit self-host checks:
+
+- `cmakegen-bootstrap-source-drift` verifies that every `src/**/*.cpp` file
+  remains listed by the hand-maintained bootstrap project.
+- `cmakegen-bootstrap-normal-output-equivalence` runs both stage binaries in
+  `generate --check` mode against the same canonical files. CI enables it by
+  configuring the normal build with `-DCMAKEGEN_BOOTSTRAP_BINARY=<stage-0 binary>`.
 
 ## 9. Upgrade safety
 
