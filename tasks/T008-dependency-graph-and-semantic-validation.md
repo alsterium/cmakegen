@@ -46,3 +46,9 @@ T006 and T007.
 - Generated files: unchanged; normal generated CMake does not exist until T014.
 - Follow-ups: T009 and T012 should consume `validate_project` before rendering
   or writing generated output.
+- Review follow-up (2026-08-09): Permit `.` as a source-directory entry and
+  retain each effective dependency edge's provenance, so mixed common/platform
+  cycles point to the edge that closes the cycle.
+- Review verification: `cmake -S bootstrap -B build/bootstrap && cmake --build
+  build/bootstrap --parallel 2 && ctest --test-dir build/bootstrap
+  --output-on-failure && git diff --check` (pass; 77/77 tests).

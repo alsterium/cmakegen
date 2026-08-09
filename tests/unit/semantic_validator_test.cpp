@@ -79,6 +79,13 @@ TEST_CASE("semantic validation does not combine mutually exclusive platform depe
     REQUIRE(result);
 }
 
+TEST_CASE("semantic validation accepts the source directory as a source path") {
+    auto app = target("App", TargetType::executable);
+    app.sources.push_back({".", true, {}, SourceKind::automatic});
+
+    CHECK(validate_project(project_with_targets({app})));
+}
+
 TEST_CASE("semantic validation detects cycles in a common or single platform graph") {
     SECTION("common dependencies") {
         auto app = target("App");
@@ -108,6 +115,21 @@ TEST_CASE("semantic validation detects cycles in a common or single platform gra
         CHECK(result.error().diagnostics().front().message == "internal dependency cycle: App -> Core -> App");
         CHECK(result.error().diagnostics().front().path == "targets.Core.platform.macos.dependencies");
     }
+}
+
+TEST_CASE("semantic validation reports the closing edge provenance in a mixed cycle") {
+    auto app = target("App");
+    app.platform.macos.dependencies.private_values.push_back(
+        {LinkDependency::Kind::imported_target, "Core"});
+    auto core = target("Core");
+    add_dependency(core, "App");
+
+    const auto result = validate_project(project_with_targets({app, core}));
+    REQUIRE_FALSE(result);
+    REQUIRE(result.error().diagnostics().size() == 1);
+    const auto& diagnostic = result.error().diagnostics().front();
+    CHECK(diagnostic.message == "internal dependency cycle: App -> Core -> App");
+    CHECK(diagnostic.path == "targets.Core.dependencies");
 }
 
 TEST_CASE("semantic validation accepts an acyclic dependency diamond") {

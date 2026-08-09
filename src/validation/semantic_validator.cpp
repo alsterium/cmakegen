@@ -59,9 +59,9 @@ void validate_source_entries(DiagnosticSet& diagnostics, const std::vector<Sourc
                              TargetType target_type, const std::string& sources_path) {
     for (std::size_t index = 0; index < sources.size(); ++index) {
         const auto& source = sources[index];
-        if (source.path.empty() || source.path == ".") {
+        if (source.path.empty()) {
             add_semantic_error(diagnostics, sources_path + "[" + std::to_string(index) + "]",
-                               "source path must not be empty or current directory");
+                               "source path must not be empty");
         }
         if (target_type == TargetType::interface_library && source.kind == SourceKind::source) {
             add_semantic_error(diagnostics, sources_path + "[" + std::to_string(index) + "]",
@@ -138,32 +138,61 @@ void classify_and_deduplicate(std::vector<LinkDependency>& dependencies, const P
     return dependencies;
 }
 
+struct InternalDependencyEdge {
+    std::string name;
+    std::string provenance_path;
+};
+
+[[nodiscard]] std::vector<InternalDependencyEdge> effective_internal_dependencies(
+    const std::string& target_name, const Target& target, const Project& project,
+    const TargetOverride* platform_override = nullptr,
+    const std::optional<std::string_view> platform = std::nullopt) {
+    std::map<std::string, std::string> edges;
+    const auto append = [&](const auto& dependencies, const std::string& provenance_path) {
+        for (const auto& dependency : dependencies) {
+            if (dependency.kind == LinkDependency::Kind::project_target) {
+                edges.try_emplace(dependency.name, provenance_path);
+            }
+        }
+    };
+
+    append(effective_dependencies(target, project), target_path(target_name) + ".dependencies");
+    if (platform_override != nullptr) {
+        append(effective_dependencies(target, project, platform_override),
+               target_path(target_name) + ".platform." + std::string(*platform) + ".dependencies");
+    }
+
+    std::vector<InternalDependencyEdge> result;
+    result.reserve(edges.size());
+    for (auto& [name, provenance_path] : edges) {
+        result.push_back({std::move(name), std::move(provenance_path)});
+    }
+    return result;
+}
+
 void detect_dependency_cycles(DiagnosticSet& diagnostics,
-                              const std::map<std::string, std::vector<std::string>>& adjacency,
-                              std::set<std::string>& reported_cycles,
-                              const std::optional<std::string_view> platform = std::nullopt) {
+                              const std::map<std::string, std::vector<InternalDependencyEdge>>& adjacency,
+                              std::set<std::string>& reported_cycles) {
     std::map<std::string, int> state;
     std::vector<std::string> stack;
     std::function<void(const std::string&)> visit = [&](const std::string& node) {
         state[node] = 1;
         stack.push_back(node);
         for (const auto& dependency : adjacency.at(node)) {
-            if (state[dependency] == 0) {
-                visit(dependency);
-            } else if (state[dependency] == 1) {
-                const auto first = std::find(stack.begin(), stack.end(), dependency);
+            if (state[dependency.name] == 0) {
+                visit(dependency.name);
+            } else if (state[dependency.name] == 1) {
+                const auto first = std::find(stack.begin(), stack.end(), dependency.name);
                 std::string cycle;
                 for (auto iterator = first; iterator != stack.end(); ++iterator) {
                     if (!cycle.empty()) cycle += " -> ";
                     cycle += *iterator;
                 }
-                cycle += " -> " + dependency;
+                cycle += " -> " + dependency.name;
                 if (reported_cycles.insert(cycle).second) {
                     diagnostics.add({std::string{diagnostic_codes::dependency_cycle},
                                      DiagnosticSeverity::error, "internal dependency cycle: " + cycle,
-                                     target_path(node) +
-                                         (platform ? ".platform." + std::string(*platform) + ".dependencies"
-                                                   : ".dependencies"),
+                                     dependency.provenance_path,
                                      std::nullopt});
                 }
             }
@@ -220,7 +249,7 @@ Result<TargetGraph> validate_project(const Project& project,
     constexpr std::array<std::string_view, 3> platform_names{"macos", "linux", "windows"};
     for (const auto platform_index : std::array<std::optional<std::size_t>, 4>{
              std::nullopt, 0, 1, 2}) {
-        std::map<std::string, std::vector<std::string>> effective_adjacency;
+        std::map<std::string, std::vector<InternalDependencyEdge>> effective_adjacency;
         for (const auto& [name, target] : project.targets) {
             const TargetOverride* override = nullptr;
             if (platform_index) {
@@ -228,15 +257,11 @@ Result<TargetGraph> validate_project(const Project& project,
                                                     &target.platform.windows};
                 override = overrides[*platform_index];
             }
-            auto& internal = effective_adjacency[name];
-            for (const auto& dependency : effective_dependencies(target, project, override)) {
-                if (dependency.kind == LinkDependency::Kind::project_target) {
-                    internal.push_back(dependency.name);
-                }
-            }
+            effective_adjacency[name] = effective_internal_dependencies(
+                name, target, project, override,
+                platform_index ? std::optional{platform_names[*platform_index]} : std::nullopt);
         }
-        detect_dependency_cycles(diagnostics, effective_adjacency, reported_cycles,
-                                 platform_index ? std::optional{platform_names[*platform_index]} : std::nullopt);
+        detect_dependency_cycles(diagnostics, effective_adjacency, reported_cycles);
     }
 
     if (diagnostics.has_errors()) return std::unexpected{std::move(diagnostics)};
