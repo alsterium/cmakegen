@@ -351,6 +351,11 @@ void validate_dependencies(DiagnosticSet& diagnostics, const ScopedValues<LinkDe
                            const std::string& path) {
     const auto validate_scope = [&](const std::vector<LinkDependency>& values, std::string_view scope) {
         for (std::size_t index = 0; index < values.size(); ++index) {
+            if (values[index].name.contains(';')) {
+                add_semantic_error(diagnostics, path + "." + std::string{scope} + "[" +
+                                                   std::to_string(index) + "]",
+                                   "dependency names must not contain semicolons");
+            }
             if (is_link_mode_keyword(values[index].name)) {
                 add_semantic_error(diagnostics, path + "." + std::string{scope} + "[" +
                                                    std::to_string(index) + "]",
