@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <filesystem>
 #include <functional>
 #include <set>
 #include <string_view>
@@ -15,6 +16,94 @@ namespace {
         return std::isalnum(character) || character == '_' || character == '.' ||
                character == '+' || character == '-';
     });
+}
+
+[[nodiscard]] bool is_valid_cmake_version(std::string_view version) {
+    if (version.empty()) return false;
+
+    std::size_t components = 1;
+    bool expect_digit = true;
+    for (const auto character : version) {
+        if (std::isdigit(static_cast<unsigned char>(character))) {
+            expect_digit = false;
+        } else if (character == '.' && !expect_digit && components < 4) {
+            ++components;
+            expect_digit = true;
+        } else {
+            return false;
+        }
+    }
+    return !expect_digit;
+}
+
+// Compare after grammar validation without narrowing arbitrary-length numeric
+// components. This avoids both lexicographic ordering mistakes (3.10 vs 3.9)
+// and integer overflow in valid CMake version text.
+[[nodiscard]] bool version_at_least(std::string_view value, std::string_view minimum) {
+    const auto next_component = [](std::string_view& remaining) {
+        const auto separator = remaining.find('.');
+        const auto component = remaining.substr(0, separator);
+        remaining = separator == std::string_view::npos ? std::string_view{}
+                                                         : remaining.substr(separator + 1);
+        const auto significant = component.find_first_not_of('0');
+        return significant == std::string_view::npos ? std::string_view{"0"}
+                                                      : component.substr(significant);
+    };
+
+    for (std::size_t index = 0; index < 4; ++index) {
+        const auto left = value.empty() ? std::string_view{"0"} : next_component(value);
+        const auto right = minimum.empty() ? std::string_view{"0"} : next_component(minimum);
+        if (left.size() != right.size()) return left.size() > right.size();
+        if (left != right) return left > right;
+    }
+    return true;
+}
+
+// project(VERSION) accepts a numeric version, while find_package() additionally
+// accepts a closed or half-open numeric range.  Keep these grammars separate:
+// accepting a range for project(VERSION), or rejecting it for find_package(),
+// would make an otherwise validated model fail when CMake configures it.
+[[nodiscard]] bool is_valid_package_version(std::string_view version) {
+    const auto separator = version.find("...");
+    if (separator == std::string_view::npos) return is_valid_cmake_version(version);
+
+    const auto minimum = version.substr(0, separator);
+    auto maximum = version.substr(separator + 3);
+    const bool exclusive_upper_bound = maximum.starts_with('<');
+    if (exclusive_upper_bound) maximum.remove_prefix(1);
+    if (!is_valid_cmake_version(minimum) || !is_valid_cmake_version(maximum)) return false;
+
+    // CMake rejects backwards ranges and an exclusive range whose endpoints
+    // coincide.  A closed range with equal endpoints is still meaningful.
+    return exclusive_upper_bound ? !version_at_least(minimum, maximum)
+                                 : version_at_least(maximum, minimum);
+}
+
+// cmake_minimum_required() requires at least a major and minor component, and
+// optionally permits a policy-version range with the same component grammar.
+[[nodiscard]] bool is_valid_cmake_minimum_version(std::string_view version) {
+    const auto has_major_and_minor = [](std::string_view value) {
+        return is_valid_cmake_version(value) && value.find('.') != std::string_view::npos;
+    };
+
+    const auto separator = version.find("...");
+    if (separator == std::string_view::npos)
+        return has_major_and_minor(version) && version_at_least(version, "3.28");
+
+    const auto minimum = version.substr(0, separator);
+    const auto policy_maximum = version.substr(separator + 3);
+    return has_major_and_minor(minimum) && has_major_and_minor(policy_maximum) &&
+           version_at_least(minimum, "3.28") && version_at_least(policy_maximum, minimum);
+}
+
+[[nodiscard]] bool is_supported_c_standard(std::string_view standard) {
+    return standard == "90" || standard == "99" || standard == "11" || standard == "17" ||
+           standard == "23";
+}
+
+[[nodiscard]] bool is_supported_cxx_standard(std::string_view standard) {
+    return standard == "98" || standard == "11" || standard == "14" || standard == "17" ||
+           standard == "20" || standard == "23";
 }
 
 [[nodiscard]] std::string target_path(const std::string& name) {
@@ -40,6 +129,62 @@ void add_resolved_source_semantic_error(DiagnosticSet& diagnostics, const Resolv
                      std::move(message), source.diagnostic_path.empty() ? std::move(fallback_path)
                                                                         : source.diagnostic_path,
                      source.diagnostic_location});
+}
+
+void validate_literal_cmake_argument(DiagnosticSet& diagnostics, const std::string& path,
+                                     std::string_view value) {
+    // `\$` stops CMake from expanding a variable while it reads its script, but
+    // CMake passes the resulting `${name}` through to Ninja. Ninja then expands
+    // it as one of its own variables. There is no portable literal encoding for
+    // this value across CMake generators, so reject the ambiguous syntax rather
+    // than producing a build file with a changed compiler argument.
+    if (value.contains("${") || value.contains("$<") || value.contains("$(")) {
+        add_semantic_error(diagnostics, path,
+                           "literal CMake arguments must not contain evaluated dollar syntax");
+    }
+    if (value.contains('\n') || value.contains('\r')) {
+        add_semantic_error(diagnostics, path,
+                           "literal CMake arguments must not contain line breaks");
+    }
+}
+
+template <typename T, typename Value>
+void validate_scoped_literal_cmake_arguments(DiagnosticSet& diagnostics, const ScopedValues<T>& values,
+                                             const std::string& path, Value value) {
+    const auto validate_scope = [&](const std::vector<T>& scope_values, std::string_view scope) {
+        for (std::size_t index = 0; index < scope_values.size(); ++index) {
+            const auto item = value(scope_values[index]);
+            validate_literal_cmake_argument(diagnostics,
+                                            path + "." + std::string{scope} + "[" +
+                                                std::to_string(index) + "]",
+                                            item);
+            if (item == "PUBLIC" || item == "PRIVATE" || item == "INTERFACE") {
+                add_semantic_error(diagnostics, path + "." + std::string{scope} + "[" +
+                                                   std::to_string(index) + "]",
+                                   "literal CMake arguments must not equal a scope keyword");
+            }
+        }
+    };
+    validate_scope(values.private_values, "private");
+    validate_scope(values.public_values, "public");
+    validate_scope(values.interface_values, "interface");
+}
+
+void validate_compile_definitions(DiagnosticSet& diagnostics, const ScopedValues<std::string>& values,
+                                  const std::string& path) {
+    const auto validate = [&](const std::vector<std::string>& entries, std::string_view scope) {
+        for (std::size_t index = 0; index < entries.size(); ++index) {
+            const auto& entry = entries[index];
+            if (entry.contains('#') || entry.find('(') < entry.find('=')) {
+                add_semantic_error(diagnostics, path + "." + std::string{scope} + "[" +
+                                                   std::to_string(index) + "]",
+                                   "compile definitions must not contain '#' or function-style syntax");
+            }
+        }
+    };
+    validate(values.private_values, "private");
+    validate(values.public_values, "public");
+    validate(values.interface_values, "interface");
 }
 
 void validate_interface_scopes(DiagnosticSet& diagnostics, const Target& target,
@@ -105,8 +250,38 @@ void validate_source_entries(DiagnosticSet& diagnostics, const std::vector<Sourc
     }
 }
 
+[[nodiscard]] std::optional<Language> source_language(std::string_view path) {
+    const auto extension = std::filesystem::path{path}.extension().string();
+    // CMake determines languages from case-sensitive suffixes: `.c` is C,
+    // while `.C` is C++. Do not lowercase these before validating the model.
+    if (extension == ".c") return Language::c;
+    if (extension == ".C" || extension == ".c++" || extension == ".cc" ||
+        extension == ".cpp" || extension == ".cxx") {
+        return Language::cxx;
+    }
+    return std::nullopt;
+}
+
+void validate_source_languages(DiagnosticSet& diagnostics, const Project& project,
+                               const std::vector<ResolvedSource>& sources,
+                               const std::string& fallback_path) {
+    for (const auto& source : sources) {
+        if (source.kind != SourceKind::source) continue;
+        const auto language = source_language(source.path);
+        if (!language) {
+            add_resolved_source_semantic_error(
+                diagnostics, source, fallback_path,
+                "implementation source has no supported CMake language: " + source.path);
+        } else if (std::ranges::find(project.cmake.languages, *language) == project.cmake.languages.end()) {
+            add_resolved_source_semantic_error(
+                diagnostics, source, fallback_path,
+                "implementation source language is not enabled by cmake.languages: " + source.path);
+        }
+    }
+}
+
 void validate_sources(DiagnosticSet& diagnostics, const Target& target, const std::string& path,
-                      const ResolvedSourcesByTarget& resolved_sources) {
+                      const Project& project, const ResolvedSourcesByTarget& resolved_sources) {
     validate_source_entries(diagnostics, target.sources, target.type, path + ".sources");
     validate_source_entries(diagnostics, target.platform.macos.sources, target.type,
                             path + ".platform.macos.sources");
@@ -115,14 +290,99 @@ void validate_sources(DiagnosticSet& diagnostics, const Target& target, const st
     validate_source_entries(diagnostics, target.platform.windows.sources, target.type,
                             path + ".platform.windows.sources");
     const auto resolved = resolved_sources.find(target.name);
-    if (target.type != TargetType::interface_library || resolved == resolved_sources.end()) return;
-    for (const auto& source : resolved->second) {
-        if (source.kind == SourceKind::source) {
+    if (resolved == resolved_sources.end()) return;
+    const auto& resolved_target = resolved->second;
+    const auto all_sources = [&]() {
+        std::vector<ResolvedSource> sources = resolved_target.common;
+        for (const auto* platform : {&resolved_target.macos, &resolved_target.linux,
+                                     &resolved_target.windows}) {
+            sources.insert(sources.end(), platform->begin(), platform->end());
+        }
+        return sources;
+    }();
+    validate_source_languages(diagnostics, project, all_sources, path + ".sources");
+    for (const auto& source : all_sources) {
+        if (source.path.contains(';')) {
             add_resolved_source_semantic_error(
                 diagnostics, source, path + ".sources",
-                "interface libraries cannot contain implementation sources: " + source.path);
+                "source paths must not contain semicolons because CMake cannot render them portably");
         }
+        validate_literal_cmake_argument(diagnostics,
+                                        source.diagnostic_path.empty() ? path + ".sources"
+                                                                       : source.diagnostic_path,
+                                        source.path);
     }
+    if (target.type == TargetType::interface_library) {
+        for (const auto& source : all_sources) {
+            if (source.kind == SourceKind::source) {
+                add_resolved_source_semantic_error(diagnostics, source, path + ".sources",
+                            "interface libraries cannot contain implementation sources: " + source.path);
+            }
+        }
+        return;
+    }
+    const auto has_implementation = [](const std::vector<ResolvedSource>& sources) {
+        return std::ranges::any_of(sources, [](const ResolvedSource& source) {
+            return source.kind == SourceKind::source;
+        });
+    };
+    const auto validate_platform = [&](const std::vector<ResolvedSource>& platform_sources,
+                                       std::string_view platform) {
+        std::vector<ResolvedSource> effective = resolved_target.common;
+        effective.insert(effective.end(), platform_sources.begin(), platform_sources.end());
+        if (!has_implementation(effective)) {
+            add_semantic_error(diagnostics, path + ".platform." + std::string{platform} + ".sources",
+                               "non-interface targets require at least one implementation source");
+        }
+    };
+    validate_platform(resolved_target.macos, "macos");
+    validate_platform(resolved_target.linux, "linux");
+    validate_platform(resolved_target.windows, "windows");
+}
+
+[[nodiscard]] bool is_link_mode_keyword(std::string_view value) {
+    return value == "debug" || value == "optimized" || value == "general" ||
+           value == "PUBLIC" || value == "PRIVATE" || value == "INTERFACE" ||
+           value == "LINK_PUBLIC" || value == "LINK_PRIVATE" ||
+           value == "LINK_INTERFACE_LIBRARIES";
+}
+
+void validate_dependencies(DiagnosticSet& diagnostics, const ScopedValues<LinkDependency>& dependencies,
+                           const std::string& path) {
+    const auto validate_scope = [&](const std::vector<LinkDependency>& values, std::string_view scope) {
+        for (std::size_t index = 0; index < values.size(); ++index) {
+            if (values[index].name.contains(';')) {
+                add_semantic_error(diagnostics, path + "." + std::string{scope} + "[" +
+                                                   std::to_string(index) + "]",
+                                   "dependency names must not contain semicolons");
+            }
+            if (is_link_mode_keyword(values[index].name)) {
+                add_semantic_error(diagnostics, path + "." + std::string{scope} + "[" +
+                                                   std::to_string(index) + "]",
+                                   "dependency name is reserved as a CMake link-mode keyword: " +
+                                       values[index].name);
+            }
+        }
+    };
+    validate_scope(dependencies.private_values, "private");
+    validate_scope(dependencies.public_values, "public");
+    validate_scope(dependencies.interface_values, "interface");
+}
+
+[[nodiscard]] bool is_find_package_keyword(std::string_view value) {
+    static constexpr std::array keywords{"EXACT", "QUIET", "MODULE", "REQUIRED", "COMPONENTS",
+                                         "OPTIONAL_COMPONENTS", "CONFIG", "NO_MODULE", "NAMES", "CONFIGS",
+                                         "HINTS", "PATHS", "PATH_SUFFIXES", "REGISTRY_VIEW", "GLOBAL",
+                                         "BYPASS_PROVIDER", "NO_POLICY_SCOPE",
+                                         "NO_DEFAULT_PATH", "NO_PACKAGE_ROOT_PATH",
+                                         "NO_CMAKE_PATH", "NO_CMAKE_ENVIRONMENT_PATH",
+                                         "NO_SYSTEM_ENVIRONMENT_PATH", "NO_CMAKE_PACKAGE_REGISTRY",
+                                         "NO_CMAKE_BUILDS_PATH", "NO_CMAKE_INSTALL_PREFIX",
+                                         "NO_CMAKE_SYSTEM_PATH", "NO_CMAKE_SYSTEM_PACKAGE_REGISTRY",
+                                         "NO_PACKAGE_REGISTRY", "NO_SYSTEM_PACKAGE_REGISTRY",
+                                         "CMAKE_FIND_ROOT_PATH_BOTH",
+                                         "ONLY_CMAKE_FIND_ROOT_PATH", "NO_CMAKE_FIND_ROOT_PATH"};
+    return std::ranges::find(keywords, value) != keywords.end();
 }
 
 void classify_and_deduplicate(std::vector<LinkDependency>& dependencies, const Project& project) {
@@ -284,6 +544,42 @@ Result<TargetGraph> validate_project(const Project& project,
     if (!is_valid_logical_name(project.name)) {
         add_semantic_error(diagnostics, "name", "project name contains unsupported characters");
     }
+    if (project.version && !is_valid_cmake_version(*project.version)) {
+        add_semantic_error(diagnostics, "version",
+                           "project version must be one to four non-negative integer components");
+    }
+    if (!is_valid_cmake_minimum_version(project.cmake.minimum_version)) {
+        add_semantic_error(diagnostics, "cmake.minimumVersion",
+                           "CMake minimum version must be two to four non-negative integer components"
+                           " or a range of such versions");
+    }
+    if (project.cmake.c_standard && !is_supported_c_standard(*project.cmake.c_standard)) {
+        add_semantic_error(diagnostics, "cmake.cStandard",
+                           "C standard must be one of 90, 99, 11, 17, or 23");
+    }
+    if (project.cmake.cxx_standard && !is_supported_cxx_standard(*project.cmake.cxx_standard)) {
+        add_semantic_error(diagnostics, "cmake.cxxStandard",
+                           "C++ standard must be one of 98, 11, 14, 17, 20, or 23");
+    }
+    for (const auto& [key, package] : project.packages) {
+        if (package.version && !is_valid_package_version(*package.version)) {
+            add_semantic_error(diagnostics, "packages." + key + ".version",
+                               "package version must be a numeric version or numeric version range");
+        }
+        for (std::size_t index = 0; index < package.components.size(); ++index) {
+            if (is_find_package_keyword(package.components[index])) {
+                add_semantic_error(diagnostics, "packages." + key + ".components[" +
+                                                   std::to_string(index) + "]",
+                                   "package component name is reserved by find_package: " +
+                                       package.components[index]);
+            }
+        }
+    }
+    for (std::size_t index = 0; index < project.cmake.include_files.size(); ++index) {
+        validate_literal_cmake_argument(diagnostics,
+                                        "cmake.include[" + std::to_string(index) + "]",
+                                        project.cmake.include_files[index]);
+    }
 
     std::set<std::string> logical_names;
     for (const auto& [key, target] : project.targets) {
@@ -297,10 +593,58 @@ Result<TargetGraph> validate_project(const Project& project,
         if (target.name != key) {
             add_semantic_error(diagnostics, path, "target key and logical target name must match");
         }
+        static constexpr std::array reserved_target_names{
+            "all", "clean", "help", "install", "package", "test", "edit_cache", "rebuild_cache",
+            "preinstall", "ALL_BUILD", "INSTALL", "RUN_TESTS", "ZERO_CHECK"};
+        if (std::ranges::find(reserved_target_names, target.name) != reserved_target_names.end()) {
+            add_semantic_error(diagnostics, path,
+                               "target name is reserved by CMake: " + target.name);
+        }
         if (!logical_names.insert(target.name).second) {
             add_semantic_error(diagnostics, path, "duplicate logical target definition '" + target.name + "'");
         }
-        validate_sources(diagnostics, target, path, resolved_sources);
+        validate_sources(diagnostics, target, path, project, resolved_sources);
+        validate_scoped_literal_cmake_arguments(
+            diagnostics, target.include_directories, path + ".includeDirectories",
+            [](const std::string& value) -> std::string_view { return value; });
+        validate_scoped_literal_cmake_arguments(
+            diagnostics, target.definitions, path + ".definitions",
+            [](const std::string& value) -> std::string_view { return value; });
+        validate_compile_definitions(diagnostics, target.definitions, path + ".definitions");
+        validate_scoped_literal_cmake_arguments(
+            diagnostics, target.compile_options, path + ".compileOptions",
+            [](const std::string& value) -> std::string_view { return value; });
+        validate_scoped_literal_cmake_arguments(
+            diagnostics, target.dependencies, path + ".dependencies",
+            [](const LinkDependency& value) -> std::string_view { return value.name; });
+        const auto validate_platform_literals = [&](const TargetOverride& override,
+                                                    std::string_view platform) {
+            const auto platform_path = path + ".platform." + std::string{platform};
+            validate_scoped_literal_cmake_arguments(
+                diagnostics, override.include_directories, platform_path + ".includeDirectories",
+                [](const std::string& value) -> std::string_view { return value; });
+            validate_scoped_literal_cmake_arguments(
+                diagnostics, override.definitions, platform_path + ".definitions",
+                [](const std::string& value) -> std::string_view { return value; });
+            validate_compile_definitions(diagnostics, override.definitions,
+                                         platform_path + ".definitions");
+            validate_scoped_literal_cmake_arguments(
+                diagnostics, override.compile_options, platform_path + ".compileOptions",
+                [](const std::string& value) -> std::string_view { return value; });
+            validate_scoped_literal_cmake_arguments(
+                diagnostics, override.dependencies, platform_path + ".dependencies",
+                [](const LinkDependency& value) -> std::string_view { return value.name; });
+        };
+        validate_platform_literals(target.platform.macos, "macos");
+        validate_platform_literals(target.platform.linux, "linux");
+        validate_platform_literals(target.platform.windows, "windows");
+        validate_dependencies(diagnostics, target.dependencies, path + ".dependencies");
+        validate_dependencies(diagnostics, target.platform.macos.dependencies,
+                              path + ".platform.macos.dependencies");
+        validate_dependencies(diagnostics, target.platform.linux.dependencies,
+                              path + ".platform.linux.dependencies");
+        validate_dependencies(diagnostics, target.platform.windows.dependencies,
+                              path + ".platform.windows.dependencies");
         if (target.type == TargetType::interface_library) {
             validate_interface_scopes(diagnostics, target, path);
         }

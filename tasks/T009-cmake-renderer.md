@@ -32,3 +32,47 @@ T006, T007, and T008.
 - Run byte-for-byte golden tests for all examples and combined-feature
   fixtures.
 - Configure representative rendered projects with CMake without network access.
+
+## Execution record
+
+- Date: 2026-08-09
+- Summary: Added a pure deterministic CMake renderer that consumes the
+  normalized project, T008 validation graph, and explicitly resolved common
+  and platform source lists. It renders the root `CMakeLists.txt` and
+  `cmake/cmakegen.generated.cmake`, including metadata, packages, custom
+  includes, all target types, scoped properties, target language features,
+  and native macOS/Linux/Windows conditions.
+- Verification: `cmake -S bootstrap -B build/t009c
+  -DCMAKEGEN_BOOTSTRAP_TESTS=ON ... && cmake --build build/t009c -j2 &&
+  ctest --test-dir build/t009c --output-on-failure && git diff --check`
+  (pass; 76/76 tests). The renderer tests compare full byte-for-byte root and
+  combined-feature output, assert repeat-render equality and final newlines,
+  and configure a representative generated project without packages or
+  network access.
+- Generated files: unchanged; normal generated CMake is introduced when T014
+  establishes the self-hosted project definition.
+- Follow-ups: T012 must resolve common and platform source entries, call
+  `validate_project`, then pass its `TargetGraph` and resolved source map to
+  `render_cmake` before T011 writes the returned files.
+
+- Date: 2026-08-09
+- Summary: Hardened the renderable-model validation against CMake 3.28's
+  supported minimum-version baseline and policy-range ordering, reserved target
+  names, and non-interface targets with no implementation source. Literal CMake
+  arguments now also preserve dollar signs rather than expanding user-provided
+  variable syntax.
+- Verification: `clang++ -std=c++23 -Iinclude -fsyntax-only
+  src/validation/semantic_validator.cpp src/renderer/cmake_renderer.cpp && git
+  diff --check` (pass). A bootstrap configure was attempted but could not
+  complete in this isolated worktree because its FetchContent dependencies are
+  unavailable in the sandbox.
+
+- Date: 2026-08-09
+- Summary: Completed `find_package()` component keyword rejection, rejected
+  generator-reserved target names, rejected braced literal variables that
+  cannot survive Ninja build-file evaluation, and checked resolved
+  implementation source extensions against enabled CMake languages.
+- Verification: `clang++ -std=c++23 -Iinclude -fsyntax-only
+  src/validation/semantic_validator.cpp src/renderer/cmake_renderer.cpp && git
+  diff --check` (pass). The focused bootstrap build could not be configured in
+  this isolated worktree because FetchContent dependencies are unavailable.

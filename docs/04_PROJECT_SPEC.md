@@ -107,9 +107,10 @@ Must match:
 
 ### version
 
-Optional semantic-ish version string.
-
-Do not strictly enforce SemVer in MVP.
+Optional CMake project version: one to four dot-separated, non-negative integer
+components (for example, `0.1.0` or `1.2.3.4`). CMake emits this value through
+`project(VERSION ...)`, which does not accept SemVer prerelease or build
+metadata such as `1.2.3-beta`.
 
 ### cmake
 
@@ -161,6 +162,15 @@ type: staticLibrary
 type: sharedLibrary
 type: interfaceLibrary
 ```
+
+Target keys use the same name grammar as `name`, except CMake-reserved target
+names `all`, `clean`, `help`, `install`, `package`, `test`, `edit_cache`,
+`rebuild_cache`, `preinstall`, `ALL_BUILD`, `INSTALL`, `RUN_TESTS`, and
+`ZERO_CHECK` are not allowed. Dependency names `debug`, `optimized`, `general`,
+`PUBLIC`, `PRIVATE`, `INTERFACE`, `LINK_PUBLIC`, `LINK_PRIVATE`, and
+`LINK_INTERFACE_LIBRARIES` are also forbidden because CMake parses them as
+link-mode or scope keywords.
+Non-interface targets must resolve to at least one implementation source.
 
 ## 6. Sources
 

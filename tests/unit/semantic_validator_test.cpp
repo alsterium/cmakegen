@@ -228,7 +228,7 @@ TEST_CASE("interface libraries reject non-interface scopes and implementation so
         {LinkDependency::Kind::imported_target, "Threads::Threads"});
     interface_target.sources.push_back({"src/implementation.cpp", true, {}, SourceKind::source});
 
-    ResolvedSourcesByTarget resolved{{"Headers", {{"src/automatic.cpp", SourceKind::source}}}};
+    ResolvedSourcesByTarget resolved{{"Headers", {{{"src/automatic.cpp", SourceKind::source}}, {}, {}, {}}}};
     const auto result = validate_project(project_with_targets({interface_target}), resolved);
     REQUIRE_FALSE(result);
     const auto& diagnostics = result.error().diagnostics();
@@ -247,8 +247,10 @@ TEST_CASE("source semantic diagnostics retain declaration provenance") {
         {"src/implementation.cpp", true, {}, SourceKind::source,
          "targets.Headers.platform.linux.sources[0]", location});
     ResolvedSourcesByTarget resolved{{"Headers",
-                                      {{"src/discovered.cpp", SourceKind::source,
-                                        "targets.Headers.platform.linux.sources[0]", location}}}};
+                                      {{}, {},
+                                       {{"src/discovered.cpp", SourceKind::source,
+                                         "targets.Headers.platform.linux.sources[0]", location}},
+                                       {}}}};
 
     const auto result = validate_project(project_with_targets({interface_target}), resolved);
     REQUIRE_FALSE(result);
@@ -298,4 +300,209 @@ TEST_CASE("semantic validation diagnoses malformed manually constructed logical 
     CHECK(diagnostics[1].path == "targets.not/a-target");
     CHECK(diagnostics[2].path == "targets.not/a-target");
     CHECK(diagnostics[3].path == "targets.not/a-target.sources[0]");
+}
+
+TEST_CASE("semantic validation rejects versions that project and find_package cannot accept") {
+    auto project = project_with_targets({target("Core")});
+    project.version = "1.2.3.4.5";
+    project.packages.emplace("bad-prerelease", Package{"Bad", "2.0-rc1", true, {}});
+    project.packages.emplace("bad-empty-component", Package{"Empty", "1..2", true, {}});
+
+    const auto result = validate_project(project);
+    REQUIRE_FALSE(result);
+    const auto& diagnostics = result.error().diagnostics();
+    REQUIRE(diagnostics.size() == 3);
+    CHECK(diagnostics[0].path == "packages.bad-empty-component.version");
+    CHECK(diagnostics[1].path == "packages.bad-prerelease.version");
+    CHECK(diagnostics[2].path == "version");
+}
+
+TEST_CASE("semantic validation accepts CMake numeric versions and find_package ranges") {
+    auto project = project_with_targets({target("Core")});
+    project.version = "0.1.2.3";
+    project.cmake.minimum_version = "3.28.1.2...3.31.0.0";
+    project.packages.emplace("fmt", Package{"fmt", "11...<12.0", true, {}});
+    project.packages.emplace("zlib", Package{"ZLIB", "1.2.3...1.3.0", true, {}});
+
+    REQUIRE(validate_project(project));
+}
+
+TEST_CASE("semantic validation rejects empty and backwards package version ranges") {
+    auto project = project_with_targets({target("Core")});
+    project.packages.emplace("backwards", Package{"Backwards", "2.0...1.0", true, {}});
+    project.packages.emplace("empty-exclusive", Package{"Empty", "1.0...<1.0", true, {}});
+    project.packages.emplace("closed-point", Package{"Point", "1.0...1.0", true, {}});
+
+    const auto result = validate_project(project);
+    REQUIRE_FALSE(result);
+    const auto& diagnostics = result.error().diagnostics();
+    REQUIRE(diagnostics.size() == 2);
+    CHECK(diagnostics[0].path == "packages.backwards.version");
+    CHECK(diagnostics[1].path == "packages.empty-exclusive.version");
+}
+
+TEST_CASE("semantic validation rejects CMake values that cannot be emitted as meta-features") {
+    auto project = project_with_targets({target("Core")});
+    project.cmake.minimum_version = "banana";
+    project.cmake.c_standard = "20";
+    project.cmake.cxx_standard = "24";
+
+    const auto result = validate_project(project);
+    REQUIRE_FALSE(result);
+    const auto& diagnostics = result.error().diagnostics();
+    REQUIRE(diagnostics.size() == 3);
+    CHECK(diagnostics[0].path == "cmake.cStandard");
+    CHECK(diagnostics[1].path == "cmake.cxxStandard");
+    CHECK(diagnostics[2].path == "cmake.minimumVersion");
+}
+
+TEST_CASE("semantic validation enforces the CMake 3.28 baseline and ordered policy ranges") {
+    auto project = project_with_targets({target("Core")});
+    project.cmake.minimum_version = "3.27";
+    REQUIRE_FALSE(validate_project(project));
+
+    project.cmake.minimum_version = "3.28...3.27";
+    REQUIRE_FALSE(validate_project(project));
+
+    project.cmake.minimum_version = "3.28...3.31.0.0";
+    REQUIRE(validate_project(project));
+}
+
+TEST_CASE("semantic validation requires implementation sources and rejects reserved target names") {
+    auto headers_only = target("Core");
+    ResolvedSourcesByTarget resolved{{"Core", {{{"include/core.hpp", SourceKind::header}}, {}, {}, {}}}};
+    const auto missing_source = validate_project(project_with_targets({headers_only}), resolved);
+    REQUIRE_FALSE(missing_source);
+    CHECK(missing_source.error().diagnostics().front().path == "targets.Core.platform.linux.sources");
+
+    auto reserved = target("all");
+    const auto reserved_result = validate_project(project_with_targets({reserved}));
+    REQUIRE_FALSE(reserved_result);
+    CHECK(reserved_result.error().diagnostics().front().message == "target name is reserved by CMake: all");
+}
+
+TEST_CASE("semantic validation requires explicit platform-only sources on every platform") {
+    auto core = target("Core");
+    core.platform.windows.sources.push_back({"src/windows.cpp", true, {}, SourceKind::source});
+    ResolvedSourcesByTarget resolved{{"Core", {{{"include/core.hpp", SourceKind::header}}, {}, {},
+                                                   {{"src/windows.cpp", SourceKind::source}}}}};
+
+    const auto result = validate_project(project_with_targets({core}), resolved);
+    REQUIRE_FALSE(result);
+    const auto& diagnostics = result.error().diagnostics();
+    REQUIRE(diagnostics.size() == 2);
+    CHECK(diagnostics[0].path == "targets.Core.platform.linux.sources");
+    CHECK(diagnostics[1].path == "targets.Core.platform.macos.sources");
+}
+
+TEST_CASE("semantic validation rejects CMake command keywords in model values") {
+    auto app = target("App");
+    add_dependency(app, "debug");
+    app.platform.linux.dependencies.public_values.push_back(
+        {LinkDependency::Kind::imported_target, "optimized"});
+    auto project = project_with_targets({app});
+    project.packages.emplace("pkg", Package{"Pkg", std::nullopt, true, {"REQUIRED", "Core"}});
+
+    const auto result = validate_project(project);
+    REQUIRE_FALSE(result);
+    const auto& diagnostics = result.error().diagnostics();
+    REQUIRE(diagnostics.size() == 3);
+    CHECK(diagnostics[0].path == "packages.pkg.components[0]");
+    CHECK(diagnostics[1].path == "targets.App.dependencies.private[0]");
+    CHECK(diagnostics[2].path == "targets.App.platform.linux.dependencies.public[0]");
+
+    auto generator_reserved = target("edit_cache");
+    const auto reserved = validate_project(project_with_targets({generator_reserved}));
+    REQUIRE_FALSE(reserved);
+    CHECK(reserved.error().diagnostics().front().message ==
+          "target name is reserved by CMake: edit_cache");
+
+    auto scoped_keyword = target("ScopedKeyword");
+    add_dependency(scoped_keyword, "PUBLIC");
+    const auto keyword_result = validate_project(project_with_targets({scoped_keyword}));
+    REQUIRE_FALSE(keyword_result);
+    CHECK(keyword_result.error().diagnostics().front().path ==
+          "targets.ScopedKeyword.dependencies.private[0]");
+}
+
+TEST_CASE("semantic validation rejects all find_package option keywords as components") {
+    auto project = project_with_targets({target("Core")});
+    project.packages.emplace("pkg", Package{"Pkg", std::nullopt, true,
+                                            {"NO_POLICY_SCOPE", "NO_DEFAULT_PATH",
+                                             "NO_CMAKE_PACKAGE_REGISTRY", "Core"}});
+
+    const auto result = validate_project(project);
+    REQUIRE_FALSE(result);
+    const auto& diagnostics = result.error().diagnostics();
+    REQUIRE(diagnostics.size() == 3);
+    CHECK(diagnostics[0].path == "packages.pkg.components[0]");
+    CHECK(diagnostics[1].path == "packages.pkg.components[1]");
+    CHECK(diagnostics[2].path == "packages.pkg.components[2]");
+}
+
+TEST_CASE("semantic validation rejects generator-reserved target names") {
+    auto project = project_with_targets(
+        {target("preinstall"), target("ALL_BUILD"), target("INSTALL"), target("RUN_TESTS"),
+         target("ZERO_CHECK")});
+
+    const auto result = validate_project(project);
+    REQUIRE_FALSE(result);
+    REQUIRE(result.error().diagnostics().size() == 5);
+    for (const auto& diagnostic : result.error().diagnostics()) {
+        CHECK(diagnostic.message.starts_with("target name is reserved by CMake: "));
+    }
+}
+
+TEST_CASE("semantic validation rejects braced variables in literal build arguments") {
+    auto app = target("App");
+    app.definitions.private_values = {"VALUE=${FOO}"};
+    app.platform.linux.compile_options.private_values = {"-DOTHER=${BAR}"};
+
+    const auto result = validate_project(project_with_targets({app}));
+    REQUIRE_FALSE(result);
+    const auto& diagnostics = result.error().diagnostics();
+    REQUIRE(diagnostics.size() == 2);
+    CHECK(diagnostics[0].path == "targets.App.definitions.private[0]");
+    CHECK(diagnostics[1].path == "targets.App.platform.linux.compileOptions.private[0]");
+}
+
+TEST_CASE("semantic validation requires implementation languages enabled by CMake") {
+    auto core = target("Core");
+    auto project = project_with_targets({core});
+    project.cmake.languages = {Language::cxx};
+    ResolvedSourcesByTarget resolved{{"Core", {{{"src/main.c", SourceKind::source}}, {}, {}, {}}}};
+
+    const auto disabled_language = validate_project(project, resolved);
+    REQUIRE_FALSE(disabled_language);
+    REQUIRE(disabled_language.error().diagnostics().size() == 1);
+    CHECK(disabled_language.error().diagnostics().front().path == "targets.Core.sources");
+    CHECK(disabled_language.error().diagnostics().front().message ==
+          "implementation source language is not enabled by cmake.languages: src/main.c");
+
+    resolved.at("Core").common = {{"src/shader.metal", SourceKind::source}};
+    const auto unknown_language = validate_project(project, resolved);
+    REQUIRE_FALSE(unknown_language);
+    REQUIRE(unknown_language.error().diagnostics().size() == 1);
+    CHECK(unknown_language.error().diagnostics().front().message ==
+          "implementation source has no supported CMake language: src/shader.metal");
+
+    resolved.at("Core").common = {{"src/main.C", SourceKind::source}};
+    REQUIRE(validate_project(project, resolved));
+
+    resolved.at("Core").common = {{"src/main.CC", SourceKind::source}};
+    const auto invalid_case = validate_project(project, resolved);
+    REQUIRE_FALSE(invalid_case);
+    CHECK(invalid_case.error().diagnostics().front().message ==
+          "implementation source has no supported CMake language: src/main.CC");
+}
+
+TEST_CASE("semantic validation rejects semicolons in source paths") {
+    auto core = target("Core");
+    auto project = project_with_targets({core});
+    ResolvedSourcesByTarget resolved{{"Core", {{{"src/main;part.cpp", SourceKind::source}}, {}, {}, {}}}};
+
+    const auto result = validate_project(project, resolved);
+    REQUIRE_FALSE(result);
+    CHECK(result.error().diagnostics().front().message ==
+          "source paths must not contain semicolons because CMake cannot render them portably");
 }
