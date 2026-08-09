@@ -32,3 +32,15 @@ T003.
 - Run isolated temporary-directory tests for conflicts, force, no-op writes,
   stale files, clean, failed replacement, and manifest ordering.
 - Verify no test can delete outside its fixture root.
+
+## Execution record
+
+- 2026-08-09: Implemented the `SafeWriter` library with a deterministic,
+  versioned JSON ownership manifest, SHA-256 content hashes, preflight
+  ownership and path checks, temporary sibling writes, manifest-last updates,
+  stale cleanup, clean, check, force, and dry-run behavior. Added isolated
+  filesystem tests covering conflicts, no-op writes, dry runs, stale cleanup,
+  clean, deterministic manifest ordering, and root-escape protection.
+- Verification: `cmake -S bootstrap -B build/t011 -DCMAKEGEN_BOOTSTRAP_TESTS=ON`,
+  `cmake --build build/t011 --parallel 4`, and
+  `ctest --test-dir build/t011 --output-on-failure` (73/73 passed).
