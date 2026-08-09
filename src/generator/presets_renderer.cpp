@@ -45,9 +45,10 @@ using Json = nlohmann::ordered_json;
 } // namespace
 
 std::string render_presets(const Project& project) {
+    const auto [major, minor, patch] = cmake_version_components(project.cmake.minimum_version);
     Json document = {
         {"version", preset_schema_version_for(project.cmake.minimum_version)},
-        {"cmakeMinimumRequired", {{"major", 3}, {"minor", 28}, {"patch", 0}}},
+        {"cmakeMinimumRequired", {{"major", major}, {"minor", minor}, {"patch", patch}}},
     };
 
     Json configure_presets = Json::array();

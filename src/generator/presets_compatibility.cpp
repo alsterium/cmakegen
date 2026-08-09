@@ -45,4 +45,9 @@ std::uint32_t preset_schema_version_for(const std::string_view cmake_minimum_ver
     return 8;
 }
 
+std::array<std::uint32_t, 3> cmake_version_components(const std::string_view version) {
+    const auto parsed = parse_version(version);
+    return {parsed.major, parsed.minor, parsed.patch};
+}
+
 } // namespace cmakegen

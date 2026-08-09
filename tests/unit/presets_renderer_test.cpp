@@ -6,6 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <nlohmann/json.hpp>
 
+#include <array>
 #include <stdexcept>
 
 using namespace cmakegen;
@@ -133,6 +134,7 @@ targets:
 TEST_CASE("presets compatibility mapping requires the documented CMake baseline") {
     CHECK(preset_schema_version_for("3.28") == 8);
     CHECK(preset_schema_version_for("4.0.1") == 8);
+    CHECK(cmake_version_components("4.0.1") == std::array<std::uint32_t, 3>{4, 0, 1});
     CHECK_THROWS_AS(preset_schema_version_for("3.27"), std::invalid_argument);
     CHECK_THROWS_AS(preset_schema_version_for("3"), std::invalid_argument);
     CHECK_THROWS_AS(preset_schema_version_for("not-a-version"), std::invalid_argument);
