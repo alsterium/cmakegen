@@ -52,3 +52,7 @@ T014.
   CMake's populate metadata is not retained alongside the cached `*-src`
   directories, so each job repopulated dependencies anyway. CI now uses a
   cold dependency population and continues to avoid caching build outputs.
+- Handoff (2026-08-09): Latest hosted run is green on GCC/Linux and
+  AppleClang/macOS but failing on Clang/Linux and MSVC/Windows. Capture the
+  failing job logs and fix the platform-specific bootstrap/normal invariant
+  before marking T015 done or merging the CI matrix PR.
