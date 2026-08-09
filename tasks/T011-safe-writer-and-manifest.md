@@ -44,3 +44,8 @@ T003.
 - Verification: `cmake -S bootstrap -B build/t011 -DCMAKEGEN_BOOTSTRAP_TESTS=ON`,
   `cmake --build build/t011 --parallel 4`, and
   `ctest --test-dir build/t011 --output-on-failure` (73/73 passed).
+- Handoff (2026-08-09): Portable path equivalence currently folds ASCII and
+  Win32 aliases but cannot safely emulate filesystem-specific Unicode case and
+  normalization without a Unicode/filesystem capability layer. Add that layer
+  (and macOS case-insensitive coverage) in a dedicated follow-up before
+  claiming Unicode-equivalent output names are collision-safe.
