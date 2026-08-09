@@ -166,8 +166,10 @@ type: interfaceLibrary
 Target keys use the same name grammar as `name`, except CMake-reserved target
 names `all`, `clean`, `help`, `install`, `package`, `test`, `edit_cache`,
 `rebuild_cache`, `preinstall`, `ALL_BUILD`, `INSTALL`, `RUN_TESTS`, and
-`ZERO_CHECK` are not allowed. Dependency names `debug`, `optimized`, and
-`general` are also forbidden because CMake parses them as link-mode keywords.
+`ZERO_CHECK` are not allowed. Dependency names `debug`, `optimized`, `general`,
+`PUBLIC`, `PRIVATE`, `INTERFACE`, `LINK_PUBLIC`, `LINK_PRIVATE`, and
+`LINK_INTERFACE_LIBRARIES` are also forbidden because CMake parses them as
+link-mode or scope keywords.
 Non-interface targets must resolve to at least one implementation source.
 
 ## 6. Sources
