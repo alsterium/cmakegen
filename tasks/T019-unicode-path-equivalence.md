@@ -2,20 +2,20 @@
 
 ## Purpose
 
-Make SafeWriter path equivalence and collision checks reflect the target
-filesystem's case and Unicode behavior before claiming that equivalent output
-names are collision-safe.
+Make SafeWriter path equivalence and collision checks preserve the portable
+ASCII/Win32 collision invariant while handling filesystem-specific Unicode case
+and normalization behavior safely.
 
 ## Scope
 
-- Define a filesystem-capability boundary for case sensitivity, Unicode
-  normalization, and platform aliases instead of relying on a universal string
-  folding rule.
+- Preserve the portable ASCII case-folding and Win32 alias rules on every host,
+  and define a filesystem-capability boundary only for additional Unicode case
+  and normalization behavior.
 - Apply the capability-aware equivalence rules to SafeWriter preflight,
   ownership lookup, manifest comparison, stale cleanup, and output collision
   checks.
-- Preserve the existing handling of ASCII and Win32 aliases while covering
-  filesystem-specific Unicode behavior where it can be detected safely.
+- Cover filesystem-specific Unicode behavior where it can be detected safely
+  without weakening the portable ASCII/Win32 invariant.
 - Add coverage for macOS case-insensitive filesystems and document behavior
   when a capability cannot be detected or supported.
 - Keep manifest ordering and generated output deterministic.
@@ -28,9 +28,11 @@ T011.
 
 - Equivalent path spellings cannot bypass ownership, conflict, or collision
   checks on supported target filesystems.
-- Distinct names on a case-sensitive filesystem remain distinct.
-- Unicode composed/decomposed and case-equivalent names follow the documented
-  capability of the target filesystem rather than locale-dependent guesses.
+- ASCII case aliases remain equivalent for portable ownership and collision
+  checks on every host, including a case-sensitive host; generated output cannot
+  contain both portable spellings.
+- Non-ASCII composed/decomposed and case-equivalent names follow the documented
+  filesystem capability rather than locale-dependent guesses.
 - macOS case-insensitive behavior and existing Windows alias behavior have
   regression coverage.
 - Unsupported or indeterminate filesystem capabilities fail safely and are
@@ -50,4 +52,6 @@ T011.
 
 Recorded in [T011](T011-safe-writer-and-manifest.md): the current portable
 comparison handles ASCII and Win32 aliases but cannot safely emulate
-filesystem-specific Unicode case and normalization.
+filesystem-specific Unicode case and normalization. The invariant and its
+Unicode-only extension are defined in
+[ADR-012](../docs/11_DECISIONS_AND_TRADEOFFS.md#adr-012--preserve-portable-output-identity-across-filesystems).

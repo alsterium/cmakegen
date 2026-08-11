@@ -21,7 +21,7 @@ manifest.
 
 ## Dependencies
 
-T011 and T020.
+T011, T019, and T020.
 
 ## Acceptance criteria
 
@@ -29,8 +29,11 @@ T011 and T020.
   on supported filesystems.
 - The old spelling is not left as an owned stale path, and the manifest points
   only to the new spelling with the correct hash.
-- The operation is atomic from SafeWriter's perspective and rollback restores
-  both the physical path and manifest when a later step fails.
+- If a later step fails and rollback succeeds, the operation restores both the
+  physical path and manifest atomically from SafeWriter's perspective.
+- If rollback or recovery also fails, follow T020's deterministic uncommitted
+  recovery state: retain the journal/backups and pre/post metadata needed for
+  recovery, and do not advance the manifest as if the rename were committed.
 - Unowned conflicting paths are protected according to existing force rules.
 - Tests cover case-sensitive and case-insensitive filesystems, unchanged
   spelling, conflict, stale cleanup, and rollback behavior.
@@ -46,4 +49,6 @@ T011 and T020.
 
 Recorded in [T011](T011-safe-writer-and-manifest.md): an owned case-only path
 rename currently retains the existing physical spelling and needs an
-alias-aware atomic rename transaction with manifest migration.
+alias-aware atomic rename transaction with manifest migration. The operation
+must use the finalized equivalence semantics from [T019](T019-unicode-path-equivalence.md)
+and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).

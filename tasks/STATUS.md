@@ -38,7 +38,7 @@ intentionally not included here.
 | [T018](T018-interface-diagnostic-provenance.md) | Provenance-carrying interface diagnostics | todo | L | medium | T008 | 14 |
 | [T019](T019-unicode-path-equivalence.md) | Unicode-aware path equivalence and collision safety | todo | L | high | T011 | 14 |
 | [T020](T020-safe-writer-transaction-recovery.md) | SafeWriter transaction rollback and recovery | todo | L | high | T011 | 14 |
-| [T021](T021-case-only-rename-and-manifest-migration.md) | Case-only rename and manifest migration | todo | M | medium | T011, T020 | 15 |
+| [T021](T021-case-only-rename-and-manifest-migration.md) | Case-only rename and manifest migration | todo | M | medium | T011, T019, T020 | 15 |
 
 `T012` depends on every task from `T006` through `T011`, inclusive.
 
@@ -56,6 +56,8 @@ are:
 - filesystem lane after the model exists: T007 and T011
 - generation lane after normalization: T009 and T010
 - integration lane: T012 → T013 → T014 → T015
+- handoff filesystem lane: T011 → T019 and T020 → T021, with T021 depending
+  on both preceding follow-ups
 
 ## Deferred post-MVP candidates
 
