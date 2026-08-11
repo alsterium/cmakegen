@@ -27,6 +27,19 @@ in parallel after their dependencies are complete.
 | [T016](T016-mvp-documentation-and-release-readiness.md) | MVP documentation and release readiness | todo | M | medium | T015 | 13 |
 | [T017](T017-example-projects.md) | Usage example projects | done | S | low | T012, T014 | 13 |
 
+## Handoff follow-up tasks
+
+These tasks capture explicit follow-up work recorded in completed task
+execution records. CI failures and the optional CI exercise for examples are
+intentionally not included here.
+
+| ID | Task | Status | Difficulty | Uncertainty | Depends on | Wave |
+|---|---|---|---|---|---|---|
+| [T018](T018-interface-diagnostic-provenance.md) | Provenance-carrying interface diagnostics | todo | L | medium | T008 | 14 |
+| [T019](T019-unicode-path-equivalence.md) | Unicode-aware path equivalence and collision safety | todo | L | high | T011 | 14 |
+| [T020](T020-safe-writer-transaction-recovery.md) | SafeWriter transaction rollback and recovery | todo | L | high | T011 | 14 |
+| [T021](T021-case-only-rename-and-manifest-migration.md) | Case-only rename and manifest migration | todo | M | medium | T011, T020 | 15 |
+
 `T012` depends on every task from `T006` through `T011`, inclusive.
 
 ## Suggested allocation by difficulty
