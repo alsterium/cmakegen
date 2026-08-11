@@ -38,7 +38,7 @@ intentionally not included here.
 | [T018](T018-interface-diagnostic-provenance.md) | Provenance-carrying interface diagnostics | done | L | medium | T008 | 14 |
 | [T019](T019-unicode-path-equivalence.md) | Unicode-aware path equivalence and collision safety | done | L | high | T011 | 14 |
 | [T020](T020-safe-writer-transaction-recovery.md) | SafeWriter transaction rollback and recovery | done | L | high | T011 | 14 |
-| [T021](T021-case-only-rename-and-manifest-migration.md) | Case-only rename and manifest migration | todo | M | medium | T011, T019, T020 | 15 |
+| [T021](T021-case-only-rename-and-manifest-migration.md) | Case-only rename and manifest migration | done | M | medium | T011, T019, T020 | 15 |
 
 `T012` depends on every task from `T006` through `T011`, inclusive.
 

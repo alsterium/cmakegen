@@ -52,3 +52,29 @@ rename currently retains the existing physical spelling and needs an
 alias-aware atomic rename transaction with manifest migration. The operation
 must use the finalized equivalence semantics from [T019](T019-unicode-path-equivalence.md)
 and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).
+
+## Execution record
+
+- Date: 2026-08-12
+- Summary: Added an internal SafeWriter rename transaction entry carrying the
+  old physical source spelling and requested destination. Owned equivalent
+  paths now use a direct rename on case-sensitive filesystems and a sibling
+  temporary spelling when both aliases resolve to one case-insensitive entry.
+  Rename backups, manifest migration, stale cleanup exclusion, reverse rename
+  rollback, and retained recovery state are journaled with the existing T020
+  transaction lifecycle.
+- Tests: Added Foo.txt to foo.txt and reverse migration coverage with exact
+  directory-entry spelling checks, unchanged-spelling no-op coverage, unowned
+  alias conflict protection, rollback after physical rename, and injected
+  rollback/recovery failure retry coverage. Existing T019 Unicode and T020
+  transaction tests remain green.
+- Verification: Normal and bootstrap builds passed. Focused case-only tests
+  passed (3 cases, 1 platform-appropriate skip, 50 assertions); the isolated
+  SafeWriter suite passed (20 cases, 4 platform-appropriate skips, 205
+  assertions). Bootstrap CTest had no registered tests. Normal CTest passed
+  157/158 tests with the unrelated existing CMake renderer dynamic-values
+  test #14 failing; `git diff --check` passed.
+- Generated files: unchanged; normal CTest's bootstrap source-drift check
+  passed.
+- Follow-ups: The unrelated CMake renderer test #14 remains outside T021 and
+  was not modified.

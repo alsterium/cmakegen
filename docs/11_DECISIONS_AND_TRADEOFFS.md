@@ -284,6 +284,16 @@ Generated destinations are also checked against every deterministic staging
 path before a transaction starts, so one output can never overwrite another
 output's staging file.
 
+An owned output whose requested spelling is equivalent to, but differs from,
+the current physical spelling is represented by an explicit rename entry in
+the same transaction. The entry copies the pre-state into its numbered
+backup, performs a direct rename on case-sensitive filesystems, and uses a
+distinct sibling temporary spelling when the source and destination are one
+case-insensitive directory entry. The manifest removes the old logical
+spelling and publishes the requested spelling only after that physical rename
+and any content replacement succeed; rollback restores both spelling and
+content.
+
 Why:
 
 - sequential filesystem replacement can expose a partial generated tree

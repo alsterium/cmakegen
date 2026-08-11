@@ -274,9 +274,10 @@ Write pattern:
    create the numbered backup directory before moving existing outputs
 4. record ownership of each sibling temporary path in the journal, then write
    the temporary file and flush/close
-5. move existing owned outputs into the transaction backups
-6. atomically replace outputs where supported
-7. update the manifest last
+5. move or copy existing owned outputs into the transaction backups
+6. rename equivalent case/alias spellings through an alias-aware atomic
+   operation, then atomically replace content where supported
+7. update the manifest last, including any logical path migration
 8. remove journal, backups, and temporary files only after commit verification;
    remove the journal before its metadata so terminal recovery remains
    loadable, and validate journal-less artifacts before removing any of them
