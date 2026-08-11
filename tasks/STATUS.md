@@ -25,6 +25,7 @@ in parallel after their dependencies are complete.
 | [T014](T014-self-host-project-definition.md) | Self-hosted project definition and generated files | done | L | high | T012, T013 | 11 |
 | [T015](T015-self-host-ci-matrix.md) | Cross-platform self-host CI matrix | todo | M | medium | T014 | 12 |
 | [T016](T016-mvp-documentation-and-release-readiness.md) | MVP documentation and release readiness | todo | M | medium | T015 | 13 |
+| [T017](T017-example-projects.md) | Usage example projects | done | S | low | T012, T014 | 13 |
 
 `T012` depends on every task from `T006` through `T011`, inclusive.
 

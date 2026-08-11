@@ -1,0 +1,38 @@
+schemaVersion: 1
+name: PlatformExample
+
+cmake:
+  cxxStandard: 23
+
+targets:
+  platform:
+    type: staticLibrary
+    sources:
+      - src/common
+    includeDirectories:
+      public:
+        - include
+    platform:
+      macos:
+        sources:
+          - src/macos
+        definitions:
+          - PLATFORM_MACOS
+      linux:
+        sources:
+          - src/linux
+        definitions:
+          - PLATFORM_LINUX
+      windows:
+        sources:
+          - src/windows
+        definitions:
+          - PLATFORM_WINDOWS
+
+  app:
+    type: executable
+    sources:
+      - app
+    dependencies:
+      - platform
+

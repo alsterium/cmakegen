@@ -1,0 +1,25 @@
+schemaVersion: 1
+name: ExclusionsExample
+
+cmake:
+  cxxStandard: 23
+
+targets:
+  Engine:
+    type: staticLibrary
+    sources:
+      - path: src
+        exclude:
+          - "**/*_test.cpp"
+          - "**/bench/**"
+    includeDirectories:
+      public:
+        - include
+
+  app:
+    type: executable
+    sources:
+      - app
+    dependencies:
+      - Engine
+

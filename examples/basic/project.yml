@@ -1,0 +1,9 @@
+schemaVersion: 1
+name: hello_example
+
+targets:
+  hello:
+    type: executable
+    sources:
+      - src
+

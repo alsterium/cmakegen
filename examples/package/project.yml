@@ -1,0 +1,20 @@
+schemaVersion: 1
+name: PackageExample
+
+cmake:
+  cxxStandard: 23
+
+packages:
+  fmt:
+    name: fmt
+    version: "11"
+    required: true
+
+targets:
+  formatter:
+    type: executable
+    sources:
+      - src
+    dependencies:
+      - fmt::fmt
+

@@ -1,0 +1,6 @@
+# These files are produced when an example is run with cmakegen.
+**/CMakeLists.txt
+**/CMakePresets.json
+**/cmake/cmakegen.generated.cmake
+**/.cmakegen/
+**/build/
