@@ -175,3 +175,31 @@ version, archive URL, and SHA-256 together in one reviewable commit.
 Hashing for generated-file ownership uses an in-tree, audited SHA-256
 implementation rather than adding a cryptography dependency. Its source and
 license must be recorded when T011 introduces it.
+
+## ADR-012 — Preserve portable output identity across filesystems
+
+Decision:
+
+SafeWriter treats ASCII case aliases and Win32 trailing-dot/space aliases as
+equivalent for generated-file ownership and collision checks on every host.
+This is a portability invariant: `Foo.txt` and `foo.txt` are
+collision-equivalent even on a case-sensitive host, so generated output cannot
+contain both portable spellings.
+
+T019 may add filesystem-capability-aware handling for additional Unicode case
+and normalization equivalences, but it must not replace or relax the portable
+ASCII/Win32 invariant. If Unicode capability cannot be detected safely, the
+implementation must fail safe rather than claim collision safety.
+
+Why:
+
+- generated trees may be moved between case-sensitive and case-insensitive
+  filesystems
+- ownership and collision checks must remain deterministic across hosts
+- locale-dependent Unicode folding would make manifests and safety decisions
+  non-deterministic
+
+Consequence:
+
+Case-only rename and manifest migration use the portable ASCII/Win32 identity
+first, then apply the finalized Unicode capability rules from T019.
