@@ -1,0 +1,22 @@
+schemaVersion: 1
+name: CalculatorExample
+
+cmake:
+  cxxStandard: 23
+
+targets:
+  CalculatorCore:
+    type: staticLibrary
+    sources:
+      - Sources/Core
+    includeDirectories:
+      public:
+        - include
+
+  calculator:
+    type: executable
+    sources:
+      - Sources/App
+    dependencies:
+      - CalculatorCore
+
