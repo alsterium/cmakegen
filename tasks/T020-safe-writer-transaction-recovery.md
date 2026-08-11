@@ -25,11 +25,15 @@ T011.
 
 ## Acceptance criteria
 
-- Fault injection at each replacement point leaves either the complete new
-  output set or the complete previous output set; no partial set is reported
-  as committed.
-- A failed transaction restores the previous manifest and output contents, or
-  leaves a deterministic recovery state with documented operator behavior.
+- For an injected replacement failure where rollback succeeds, the complete
+  previous output set and previous manifest are restored; a partial set is
+  never reported as committed. A successful transaction may instead expose
+  the complete new output set with its new manifest.
+- If rollback or recovery itself fails (for example because a file is locked),
+  the writer leaves an explicitly uncommitted, deterministic recovery state:
+  the journal/backups and pre/post metadata needed for recovery are retained,
+  the manifest is not advanced as if the new set were committed, and the
+  operator recovery procedure is documented.
 - A successful transaction removes temporary journals and backups and writes a
   deterministic manifest last.
 - Locked-file and replacement failures produce structured diagnostics and do
