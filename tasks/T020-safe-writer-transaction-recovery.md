@@ -57,3 +57,47 @@ T011.
 Recorded in [T011](T011-safe-writer-and-manifest.md): SafeWriter currently does
 not roll back already-replaced outputs and needs transaction journal/backups
 with recovery semantics.
+
+## Operator recovery
+
+When a write reports that rollback or recovery is required, stop concurrent
+writers and preserve `.cmakegen/transaction/` as a unit. The directory contains
+`journal.json`, `pre-manifest.json`, `post-manifest.json`, and numbered files in
+`backups/`; do not delete or rename those artifacts manually. Resolve the
+reported filesystem problem first, especially a locked or read-only output,
+then rerun the same generation or `clean` command. SafeWriter validates the
+journal, restores the pre-state when the post-state is incomplete, or finalizes
+the post-state only when every output and the manifest match their recorded
+hashes. The manifest is not advanced during an unresolved recovery state.
+
+If the retry still reports recovery-required, keep the artifacts and have an
+operator inspect the journal entry statuses and compare the pre/post metadata
+with the output tree. Restore only the numbered backups to their recorded
+destinations after the outputs are quiescent, then rerun the command; never
+remove an unowned file to force recovery. A successful retry removes the
+transaction directory automatically.
+
+## Execution record
+
+- Date: 2026-08-12
+- Summary: Added deterministic journal/pre-post metadata and numbered backups
+  for multi-file replacement and clean; manifest publication remains last;
+  reverse-order rollback verifies the old output/manifest state; unresolved
+  rollback or recovery retains an explicit `recovery_required` state. Added a
+  small internal failure-injection seam and isolated tests for before/during/
+  after replacement, manifest update, rollback/recovery failure, and the
+  Windows locked-file behavior (skipped on POSIX where open files can be
+  renamed), and a file-to-directory rollback transition. Check/dry-run paths
+  do not create transaction artifacts.
+- Verification: `cmake --build build/t020-bootstrap --parallel 4` (pass);
+  `cmake --build build/t020-normal --target cmakegen_tests --parallel 4`
+  (pass); `build/t020-normal/cmakegen_tests "safe writer*" --reporter compact`
+  (12 passed, 2 platform-dependent skips, 128 assertions passed); `ctest
+  --test-dir build/t020-normal --output-on-failure` (SafeWriter tests pass;
+  144 passed, 2 skipped, and unrelated CMake renderer test #14 failed in the
+  local run; not investigated per task instruction); `git diff --check`
+  (pass).
+- Generated files: unchanged; the existing source list already includes the
+  modified SafeWriter files.
+- Follow-ups: none for T020; the full-suite CMake renderer failure #14 is
+  outside this task and remains a local verification residual.

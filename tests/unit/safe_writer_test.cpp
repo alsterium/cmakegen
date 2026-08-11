@@ -8,6 +8,10 @@
 #include <fstream>
 #include <string_view>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace {
 
 class TemporaryDirectory {
@@ -62,6 +66,18 @@ void write_file(const std::filesystem::path& path, std::string_view content) {
     return result;
 }
 
+class FailureInjectionScope {
+public:
+    explicit FailureInjectionScope(cmakegen::detail::safe_writer_testing::FailureInjection injection) {
+        cmakegen::detail::safe_writer_testing::set_failure_injection(injection);
+    }
+    ~FailureInjectionScope() { cmakegen::detail::safe_writer_testing::clear_failure_injection(); }
+    FailureInjectionScope(const FailureInjectionScope&) = delete;
+    FailureInjectionScope& operator=(const FailureInjectionScope&) = delete;
+};
+
+using FailurePoint = cmakegen::detail::safe_writer_testing::FailurePoint;
+
 TEST_CASE("safe writer writes deterministic manifests and skips no-op writes") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};
@@ -90,6 +106,117 @@ TEST_CASE("manifest safely serializes valid paths that require JSON escaping") {
     const auto rerun = writer.write(files);
     REQUIRE(rerun);
     CHECK_FALSE(rerun->would_change);
+}
+
+TEST_CASE("safe writer rolls back before, during, and after replacement failures") {
+    const auto run = [](FailurePoint point, std::size_t operation_index) {
+        TemporaryDirectory fixture;
+        cmakegen::SafeWriter writer{fixture.path()};
+        const auto previous = file_set({{"first.txt", "first-old\n"}, {"second.txt", "second-old\n"}});
+        REQUIRE(writer.write(previous));
+        const auto previous_manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+        const auto next = file_set({{"first.txt", "first-new\n"}, {"second.txt", "second-new\n"}});
+
+        FailureInjectionScope injection{{point, operation_index}};
+        const auto result = writer.write(next);
+        REQUIRE_FALSE(result);
+        CHECK(read_file(fixture.path() / "first.txt") == "first-old\n");
+        CHECK(read_file(fixture.path() / "second.txt") == "second-old\n");
+        CHECK(read_file(fixture.path() / ".cmakegen/manifest.json") == previous_manifest);
+        CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+        CHECK(result.error().diagnostics().front().message.find("rollback completed") != std::string::npos);
+    };
+
+    SECTION("before replacement") { run(FailurePoint::before_replacement, 0); }
+    SECTION("during the second replacement") { run(FailurePoint::during_replacement, 1); }
+    SECTION("after the first replacement") { run(FailurePoint::after_replacement, 0); }
+}
+
+TEST_CASE("safe writer rolls back output replacements when manifest update fails") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"first.txt", "first-old\n"}, {"second.txt", "second-old\n"}})));
+    const auto previous_manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+
+    FailureInjectionScope injection{{FailurePoint::manifest_update, 0}};
+    const auto result = writer.write(file_set({{"first.txt", "first-new\n"}, {"second.txt", "second-new\n"}}));
+    REQUIRE_FALSE(result);
+    CHECK(read_file(fixture.path() / "first.txt") == "first-old\n");
+    CHECK(read_file(fixture.path() / "second.txt") == "second-old\n");
+    CHECK(read_file(fixture.path() / ".cmakegen/manifest.json") == previous_manifest);
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+}
+
+TEST_CASE("safe writer rolls back a file-to-directory transition") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"generated", "old\n"}})));
+    const auto previous_manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+
+    {
+        FailureInjectionScope injection{{FailurePoint::during_replacement, 0}};
+        const auto result = writer.write(file_set({{"generated/child.txt", "new\n"}}));
+        REQUIRE_FALSE(result);
+        CHECK(result.error().diagnostics().front().message.find("rollback completed") != std::string::npos);
+    }
+
+    CHECK(read_file(fixture.path() / "generated") == "old\n");
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / "generated/child.txt"));
+    CHECK(read_file(fixture.path() / ".cmakegen/manifest.json") == previous_manifest);
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+}
+
+TEST_CASE("safe writer reports platform-specific locked-file replacement failures") {
+#ifndef _WIN32
+    SKIP("POSIX permits renaming an open file; Windows share-mode locking is tested on Windows");
+#else
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"locked.txt", "old\n"}})));
+    const auto locked_path = fixture.path() / "locked.txt";
+    const auto handle = ::CreateFileW(locked_path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+                                      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) SKIP("could not acquire a Windows share-mode lock");
+    const auto result = writer.write(file_set({{"locked.txt", "new\n"}}));
+    ::CloseHandle(handle);
+    CHECK_FALSE(result);
+    CHECK(read_file(locked_path) == "old\n");
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+#endif
+}
+
+TEST_CASE("safe writer retains deterministic recovery artifacts when rollback fails") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"first.txt", "first-old\n"}, {"second.txt", "second-old\n"}})));
+    const auto next = file_set({{"first.txt", "first-new\n"}, {"second.txt", "second-new\n"}});
+
+    {
+        FailureInjectionScope injection{{FailurePoint::during_replacement, 1}};
+        cmakegen::detail::safe_writer_testing::queue_failure_injection({FailurePoint::rollback, 0});
+        const auto result = writer.write(next);
+        REQUIRE_FALSE(result);
+    }
+
+    const auto transaction = fixture.path() / ".cmakegen/transaction";
+    REQUIRE(std::filesystem::exists(transaction / "journal.json"));
+    REQUIRE(std::filesystem::exists(transaction / "pre-manifest.json"));
+    REQUIRE(std::filesystem::exists(transaction / "post-manifest.json"));
+    CHECK(read_file(transaction / "journal.json").find("\"state\": \"recovery_required\"") != std::string::npos);
+    CHECK(std::filesystem::exists(transaction / "backups"));
+
+    {
+        FailureInjectionScope recovery_injection{{FailurePoint::recovery, 0}};
+        const auto recovery = writer.write(next);
+        REQUIRE_FALSE(recovery);
+        CHECK(std::filesystem::exists(transaction / "journal.json"));
+        CHECK(recovery.error().diagnostics().front().message.find("requires operator recovery") != std::string::npos);
+    }
+
+    REQUIRE(writer.write(next));
+    CHECK(read_file(fixture.path() / "first.txt") == "first-new\n");
+    CHECK(read_file(fixture.path() / "second.txt") == "second-new\n");
+    CHECK_FALSE(std::filesystem::exists(transaction));
 }
 
 TEST_CASE("safe writer protects unowned files unless force is requested") {

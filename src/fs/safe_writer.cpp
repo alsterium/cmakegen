@@ -5,15 +5,17 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <climits>
 #include <cstdint>
 #include <cstring>
 #include <cwchar>
+#include <cctype>
+#include <deque>
 #include <fstream>
 #include <iomanip>
 #include <iterator>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <sstream>
@@ -1004,19 +1006,47 @@ Result<bool> FilesystemCapabilities::equivalent(std::string_view left, std::stri
     return destination.parent_path() / name;
 }
 
-[[nodiscard]] Result<std::filesystem::path> write_temporary(const std::filesystem::path& destination,
-                                                             std::string_view content) {
-    const auto temporary = temporary_path(destination);
-    std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+[[nodiscard]] std::filesystem::path transaction_temp_path(const std::filesystem::path& destination) {
+    std::filesystem::path name{"."};
+    name += destination.filename();
+    name += ".cmakegen-transaction.tmp";
+    return destination.parent_path() / name;
+}
+
+[[nodiscard]] std::string transaction_backup_name(std::size_t index) {
+    std::ostringstream output;
+    output << "backups/" << std::setw(6) << std::setfill('0') << index << ".bak";
+    return output.str();
+}
+
+[[nodiscard]] bool is_not_found(std::error_code error_code) {
+    return error_code == std::errc::no_such_file_or_directory;
+}
+
+[[nodiscard]] Result<void> write_file_without_replacement(const std::filesystem::path& path,
+                                                           std::string_view content) {
+    std::error_code ec;
+    const auto status = std::filesystem::symlink_status(path, ec);
+    if (!ec && status.type() != std::filesystem::file_type::not_found) {
+        return std::unexpected{error("transaction artifact already exists", path.generic_string())};
+    }
+    if (ec && !is_not_found(ec)) {
+        return std::unexpected{error("cannot inspect transaction artifact: " + ec.message(), path.generic_string())};
+    }
+
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    if (!output) {
+        return std::unexpected{error("cannot create transaction artifact", path.generic_string())};
+    }
     output.write(content.data(), static_cast<std::streamsize>(content.size()));
     output.flush();
     output.close();
     if (!output) {
         std::error_code ignored;
-        std::filesystem::remove(temporary, ignored);
-        return std::unexpected{error("cannot write temporary output", temporary.generic_string())};
+        std::filesystem::remove(path, ignored);
+        return std::unexpected{error("cannot write transaction artifact", path.generic_string())};
     }
-    return temporary;
+    return {};
 }
 
 [[nodiscard]] Result<void> replace_file(const std::filesystem::path& temporary,
@@ -1038,12 +1068,42 @@ Result<bool> FilesystemCapabilities::equivalent(std::string_view left, std::stri
 #else
     std::filesystem::rename(temporary, destination, ec);
 #endif
-    if (ec) return std::unexpected{error("cannot replace output atomically: " + ec.message(), destination.generic_string())};
+    if (ec) {
+        return std::unexpected{error("cannot replace output atomically: " + ec.message(),
+                                     destination.generic_string())};
+    }
     return {};
 }
 
-[[nodiscard]] bool is_not_found(std::error_code error_code) {
-    return error_code == std::errc::no_such_file_or_directory;
+[[nodiscard]] Result<void> move_to_backup(const std::filesystem::path& source,
+                                          const std::filesystem::path& backup) {
+    std::error_code ec;
+#ifdef _WIN32
+    if (!::MoveFileExW(source.c_str(), backup.c_str(), MOVEFILE_WRITE_THROUGH)) {
+        ec = {static_cast<int>(::GetLastError()), std::system_category()};
+    }
+#else
+    std::filesystem::rename(source, backup, ec);
+#endif
+    if (ec) {
+        return std::unexpected{error("cannot move generated file into transaction backup: " + ec.message(),
+                                     source.generic_string())};
+    }
+    return {};
+}
+
+[[nodiscard]] Result<void> atomic_write_text(const std::filesystem::path& destination,
+                                              std::string_view content) {
+    const auto temporary = destination.string() + ".tmp";
+    auto written = write_file_without_replacement(temporary, content);
+    if (!written) return std::unexpected{written.error()};
+    auto replaced = replace_file(temporary, destination);
+    if (!replaced) {
+        std::error_code ignored;
+        std::filesystem::remove(temporary, ignored);
+        return std::unexpected{replaced.error()};
+    }
+    return {};
 }
 
 constexpr std::array<std::uint32_t, 64> sha_constants = {
@@ -1101,7 +1161,1472 @@ constexpr std::array<std::uint32_t, 64> sha_constants = {
     return {};
 }
 
+enum class TransactionEntryKind {
+    remove,
+    replace,
+    manifest,
+};
+
+enum class TransactionEntryStatus {
+    pending,
+    backing_up,
+    backed_up,
+    in_progress,
+    applied,
+    restored,
+};
+
+[[nodiscard]] std::string_view entry_kind_name(TransactionEntryKind kind) {
+    switch (kind) {
+    case TransactionEntryKind::remove:
+        return "remove";
+    case TransactionEntryKind::replace:
+        return "replace";
+    case TransactionEntryKind::manifest:
+        return "manifest";
+    }
+    return "replace";
+}
+
+[[nodiscard]] std::string_view entry_status_name(TransactionEntryStatus status) {
+    switch (status) {
+    case TransactionEntryStatus::pending:
+        return "pending";
+    case TransactionEntryStatus::backing_up:
+        return "backing_up";
+    case TransactionEntryStatus::backed_up:
+        return "backed_up";
+    case TransactionEntryStatus::in_progress:
+        return "in_progress";
+    case TransactionEntryStatus::applied:
+        return "applied";
+    case TransactionEntryStatus::restored:
+        return "restored";
+    }
+    return "pending";
+}
+
+[[nodiscard]] Result<TransactionEntryKind> parse_entry_kind(std::string_view value) {
+    if (value == "remove") return TransactionEntryKind::remove;
+    if (value == "replace") return TransactionEntryKind::replace;
+    if (value == "manifest") return TransactionEntryKind::manifest;
+    return std::unexpected{error("transaction journal contains an unknown entry kind")};
+}
+
+[[nodiscard]] Result<TransactionEntryStatus> parse_entry_status(std::string_view value) {
+    if (value == "pending") return TransactionEntryStatus::pending;
+    if (value == "backing_up") return TransactionEntryStatus::backing_up;
+    if (value == "backed_up") return TransactionEntryStatus::backed_up;
+    if (value == "in_progress") return TransactionEntryStatus::in_progress;
+    if (value == "applied") return TransactionEntryStatus::applied;
+    if (value == "restored") return TransactionEntryStatus::restored;
+    return std::unexpected{error("transaction journal contains an unknown entry status")};
+}
+
+struct ManifestMetadata {
+    bool present = false;
+    std::string content;
+};
+
+[[nodiscard]] std::string render_manifest_metadata(const ManifestMetadata& metadata) {
+    nlohmann::ordered_json json;
+    json["version"] = 1;
+    json["present"] = metadata.present;
+    json["content"] = metadata.content;
+    return json.dump(2) + "\n";
+}
+
+[[nodiscard]] Result<ManifestMetadata> load_manifest_metadata(const std::filesystem::path& path) {
+    auto source = read_file(path);
+    if (!source) return std::unexpected{source.error()};
+    try {
+        const auto json = nlohmann::json::parse(*source);
+        if (!json.is_object() || json.value("version", 0) != 1 ||
+            !json.contains("present") || !json["present"].is_boolean() ||
+            !json.contains("content") || !json["content"].is_string()) {
+            return std::unexpected{error("transaction metadata has an unsupported format", path.generic_string())};
+        }
+        return ManifestMetadata{json["present"].get<bool>(), json["content"].get<std::string>()};
+    } catch (const nlohmann::json::exception&) {
+        return std::unexpected{error("transaction metadata is not valid JSON", path.generic_string())};
+    }
+}
+
+struct PlannedEntry {
+    TransactionEntryKind kind = TransactionEntryKind::replace;
+    std::string logical_path;
+    std::filesystem::path destination;
+    bool had_original = false;
+    std::string pre_hash;
+    bool post_exists = false;
+    std::string post_hash;
+    std::string content;
+};
+
+struct TransactionEntry {
+    TransactionEntryKind kind = TransactionEntryKind::replace;
+    TransactionEntryStatus status = TransactionEntryStatus::pending;
+    std::string logical_path;
+    std::filesystem::path destination;
+    std::filesystem::path temporary;
+    std::filesystem::path backup;
+    bool had_original = false;
+    std::string pre_hash;
+    bool post_exists = false;
+    std::string post_hash;
+    std::string content;
+};
+
+struct Transaction {
+    std::filesystem::path root;
+    std::filesystem::path directory;
+    std::filesystem::path journal;
+    std::filesystem::path pre_metadata_path;
+    std::filesystem::path post_metadata_path;
+    std::filesystem::path backups_directory;
+    std::string state = "prepared";
+    std::string phase = "prepared";
+    bool pre_manifest_exists = false;
+    std::string pre_manifest_content;
+    bool post_manifest_exists = false;
+    std::string post_manifest_content;
+    std::vector<TransactionEntry> entries;
+    std::vector<std::filesystem::path> created_directories;
+    FilesystemCapabilities capabilities;
+};
+
+struct PreparedPlan {
+    ManifestMetadata pre_manifest;
+    ManifestMetadata post_manifest;
+    std::vector<PlannedEntry> entries;
+    WriteResult result;
+    FilesystemCapabilities capabilities;
+};
+
+[[nodiscard]] std::string relative_path(const std::filesystem::path& root,
+                                        const std::filesystem::path& path) {
+    return path.lexically_relative(root).generic_string();
+}
+
+[[nodiscard]] std::string backup_relative_path(const Transaction& transaction,
+                                               const std::filesystem::path& path) {
+    return path.lexically_relative(transaction.directory).generic_string();
+}
+
+[[nodiscard]] std::string temporary_relative_path(const Transaction& transaction,
+                                                  const std::filesystem::path& path) {
+    return path.lexically_relative(transaction.root).generic_string();
+}
+
+[[nodiscard]] nlohmann::ordered_json render_journal_json(const Transaction& transaction) {
+    nlohmann::ordered_json json;
+    json["version"] = 1;
+    json["state"] = transaction.state;
+    json["phase"] = transaction.phase;
+    json["pre_manifest"] = "pre-manifest.json";
+    json["post_manifest"] = "post-manifest.json";
+    json["created_directories"] = nlohmann::ordered_json::array();
+    for (const auto& directory : transaction.created_directories) {
+        json["created_directories"].push_back(relative_path(transaction.root, directory));
+    }
+    json["entries"] = nlohmann::ordered_json::array();
+    for (const auto& entry : transaction.entries) {
+        nlohmann::ordered_json serialized;
+        serialized["kind"] = entry_kind_name(entry.kind);
+        serialized["status"] = entry_status_name(entry.status);
+        serialized["path"] = entry.logical_path;
+        serialized["destination"] = relative_path(transaction.root, entry.destination);
+        serialized["temporary"] = entry.temporary.empty()
+                                        ? ""
+                                        : temporary_relative_path(transaction, entry.temporary);
+        serialized["backup"] = backup_relative_path(transaction, entry.backup);
+        serialized["had_original"] = entry.had_original;
+        serialized["pre_sha256"] = entry.pre_hash;
+        serialized["post_exists"] = entry.post_exists;
+        serialized["post_sha256"] = entry.post_hash;
+        json["entries"].push_back(std::move(serialized));
+    }
+    return json;
+}
+
+[[nodiscard]] Result<void> write_journal(Transaction& transaction) {
+    return atomic_write_text(transaction.journal, render_journal_json(transaction).dump(2) + "\n");
+}
+
+std::mutex failure_injection_mutex;
+std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
+
+[[nodiscard]] bool consume_failure(detail::safe_writer_testing::FailurePoint point,
+                                   std::size_t operation_index) {
+    std::scoped_lock lock{failure_injection_mutex};
+    if (failure_injections.empty() || failure_injections.front().point != point ||
+        failure_injections.front().operation_index != operation_index) {
+        return false;
+    }
+    failure_injections.pop_front();
+    return true;
+}
+
+[[nodiscard]] std::string failure_point_name(detail::safe_writer_testing::FailurePoint point) {
+    using Point = detail::safe_writer_testing::FailurePoint;
+    switch (point) {
+    case Point::before_replacement:
+        return "before replacement";
+    case Point::during_replacement:
+        return "during replacement";
+    case Point::after_replacement:
+        return "after replacement";
+    case Point::manifest_update:
+        return "manifest update";
+    case Point::rollback:
+        return "rollback";
+    case Point::recovery:
+        return "recovery";
+    }
+    return "transaction";
+}
+
+[[nodiscard]] DiagnosticSet injected_failure(std::string_view point,
+                                             const std::filesystem::path& path) {
+    return error("injected SafeWriter failure " + std::string{point}, path.generic_string());
+}
+
+[[nodiscard]] std::filesystem::path transaction_directory(const std::filesystem::path& root) {
+    return root / ".cmakegen/transaction";
+}
+
+[[nodiscard]] Result<bool> transaction_directory_present(const std::filesystem::path& root,
+                                                         const FilesystemCapabilities& capabilities) {
+    const auto directory = transaction_directory(root);
+    auto resolved = resolve_existing_alias(root, ".cmakegen/transaction", capabilities);
+    if (!resolved) return std::unexpected{resolved.error()};
+    if (*resolved != directory) {
+        return std::unexpected{error("transaction metadata has a portable path alias",
+                                     resolved->generic_string())};
+    }
+
+    std::error_code ec;
+    const auto status = std::filesystem::symlink_status(directory, ec);
+    if (ec && !is_not_found(ec)) {
+        return std::unexpected{error("cannot inspect transaction metadata: " + ec.message(),
+                                     directory.generic_string())};
+    }
+    if (is_not_found(ec) || status.type() == std::filesystem::file_type::not_found) return false;
+    if (std::filesystem::is_symlink(status) || !std::filesystem::is_directory(status)) {
+        return std::unexpected{error("transaction metadata path is not a directory",
+                                     directory.generic_string())};
+    }
+    return true;
+}
+
+[[nodiscard]] Result<void> ensure_manifest_path_is_safe(const std::filesystem::path& root,
+                                                        const std::filesystem::path& manifest,
+                                                        const FilesystemCapabilities& capabilities) {
+    auto resolved = resolve_existing_alias(root, manifest_relative_path, capabilities);
+    if (!resolved) return std::unexpected{resolved.error()};
+    if (*resolved != manifest) {
+        return std::unexpected{error("manifest has a portable path alias", resolved->generic_string())};
+    }
+    auto parents = reject_symlink_parents(root, manifest_relative_path, capabilities);
+    if (!parents) return std::unexpected{parents.error()};
+
+    std::error_code ec;
+    const auto status = std::filesystem::symlink_status(manifest, ec);
+    if (ec && !is_not_found(ec)) {
+        return std::unexpected{error("cannot inspect manifest: " + ec.message(), manifest.generic_string())};
+    }
+    if (!is_not_found(ec) && status.type() != std::filesystem::file_type::not_found &&
+        (std::filesystem::is_symlink(status) || !std::filesystem::is_regular_file(status))) {
+        return std::unexpected{error("manifest must be a regular file", manifest.generic_string())};
+    }
+    return {};
+}
+
+[[nodiscard]] Result<void> validate_transaction_destination(const std::string& value,
+                                                             bool allow_manifest,
+                                                             const std::filesystem::path& journal,
+                                                             const FilesystemCapabilities& capabilities) {
+    if (allow_manifest && value == manifest_relative_path) return {};
+    auto normalized = normalize_relative_path(std::filesystem::path{value});
+    if (!normalized || *normalized != value) {
+        return std::unexpected{error("transaction journal contains an unsafe destination", journal.generic_string())};
+    }
+    return capabilities.validate_path(*normalized);
+}
+
+[[nodiscard]] Result<Transaction> load_transaction(const std::filesystem::path& root,
+                                                   const FilesystemCapabilities& capabilities) {
+    const auto directory = transaction_directory(root);
+    const auto journal = directory / "journal.json";
+    const auto pre_metadata_path = directory / "pre-manifest.json";
+    const auto post_metadata_path = directory / "post-manifest.json";
+    const auto backups_directory = directory / "backups";
+
+    auto source = read_file(journal);
+    if (!source) return std::unexpected{source.error()};
+
+    Transaction transaction{root, directory, journal, pre_metadata_path, post_metadata_path,
+                            backups_directory};
+    transaction.capabilities = capabilities;
+    try {
+        const auto json = nlohmann::json::parse(*source);
+        if (!json.is_object() || json.value("version", 0) != 1 ||
+            !json.contains("state") || !json["state"].is_string() ||
+            !json.contains("phase") || !json["phase"].is_string() ||
+            json.value("pre_manifest", "") != "pre-manifest.json" ||
+            json.value("post_manifest", "") != "post-manifest.json" ||
+            !json.contains("entries") || !json["entries"].is_array() ||
+            !json.contains("created_directories") || !json["created_directories"].is_array()) {
+            return std::unexpected{error("transaction journal has an unsupported format", journal.generic_string())};
+        }
+        transaction.state = json["state"].get<std::string>();
+        transaction.phase = json["phase"].get<std::string>();
+        if (transaction.state != "prepared" && transaction.state != "applying" &&
+            transaction.state != "manifest_pending" && transaction.state != "committed" &&
+            transaction.state != "rolled_back" && transaction.state != "recovery_required") {
+            return std::unexpected{error("transaction journal has an unknown state", journal.generic_string())};
+        }
+
+        auto pre_metadata = load_manifest_metadata(pre_metadata_path);
+        if (!pre_metadata) return std::unexpected{pre_metadata.error()};
+        auto post_metadata = load_manifest_metadata(post_metadata_path);
+        if (!post_metadata) return std::unexpected{post_metadata.error()};
+        transaction.pre_manifest_exists = pre_metadata->present;
+        transaction.pre_manifest_content = std::move(pre_metadata->content);
+        transaction.post_manifest_exists = post_metadata->present;
+        transaction.post_manifest_content = std::move(post_metadata->content);
+
+        for (const auto& value : json["created_directories"]) {
+            if (!value.is_string()) {
+                return std::unexpected{error("transaction journal contains an invalid created directory",
+                                             journal.generic_string())};
+            }
+            auto normalized = normalize_relative_path(std::filesystem::path{value.get<std::string>()});
+            if (!normalized || *normalized != value.get<std::string>() ||
+                portable_equivalence_key(*normalized).starts_with(".cmakegen")) {
+                return std::unexpected{error("transaction journal contains an unsafe created directory",
+                                             journal.generic_string())};
+            }
+            auto unicode_valid = capabilities.validate_path(*normalized);
+            if (!unicode_valid) return std::unexpected{unicode_valid.error()};
+            transaction.created_directories.push_back(root / *normalized);
+        }
+
+        std::size_t index = 0;
+        for (const auto& value : json["entries"]) {
+            if (!value.is_object() || !value.contains("kind") || !value["kind"].is_string() ||
+                !value.contains("status") || !value["status"].is_string() ||
+                !value.contains("path") || !value["path"].is_string() ||
+                !value.contains("destination") || !value["destination"].is_string() ||
+                !value.contains("temporary") || !value["temporary"].is_string() ||
+                !value.contains("backup") || !value["backup"].is_string() ||
+                !value.contains("had_original") || !value["had_original"].is_boolean() ||
+                !value.contains("pre_sha256") || !value["pre_sha256"].is_string() ||
+                !value.contains("post_exists") || !value["post_exists"].is_boolean() ||
+                !value.contains("post_sha256") || !value["post_sha256"].is_string()) {
+                return std::unexpected{error("transaction journal contains an invalid entry",
+                                             journal.generic_string())};
+            }
+            auto kind = parse_entry_kind(value["kind"].get<std::string>());
+            if (!kind) return std::unexpected{kind.error()};
+            auto status = parse_entry_status(value["status"].get<std::string>());
+            if (!status) return std::unexpected{status.error()};
+
+            const auto logical_path = value["path"].get<std::string>();
+            const auto destination = value["destination"].get<std::string>();
+            const bool is_manifest = *kind == TransactionEntryKind::manifest;
+            auto safe_destination = validate_transaction_destination(destination, is_manifest, journal, capabilities);
+            if (!safe_destination) return std::unexpected{safe_destination.error()};
+            if (is_manifest && (logical_path != manifest_relative_path || destination != manifest_relative_path)) {
+                return std::unexpected{error("transaction journal contains an invalid manifest entry",
+                                             journal.generic_string())};
+            }
+            if (!is_manifest) {
+                auto safe_logical = normalize_relative_path(std::filesystem::path{logical_path});
+                if (!safe_logical || *safe_logical != logical_path) {
+                    return std::unexpected{error("transaction journal contains an unsafe logical path",
+                                                 journal.generic_string())};
+                }
+                auto unicode_valid = capabilities.validate_path(*safe_logical);
+                if (!unicode_valid) return std::unexpected{unicode_valid.error()};
+            }
+            for (const auto& existing : transaction.entries) {
+                auto equivalent = capabilities.equivalent(existing.logical_path, logical_path);
+                if (!equivalent) return std::unexpected{equivalent.error()};
+                if (*equivalent) {
+                    return std::unexpected{error("transaction journal contains duplicate destinations",
+                                                 journal.generic_string())};
+                }
+            }
+
+            const auto expected_backup = transaction_backup_name(index);
+            if (value["backup"].get<std::string>() != expected_backup) {
+                return std::unexpected{error("transaction journal contains an invalid backup path",
+                                             journal.generic_string())};
+            }
+            const auto temporary_value = value["temporary"].get<std::string>();
+            std::filesystem::path temporary;
+            if (*kind == TransactionEntryKind::replace ||
+                (is_manifest && value["post_exists"].get<bool>())) {
+                temporary = root / temporary_value;
+                if (temporary_value != transaction_temp_path(root / destination).lexically_relative(root).generic_string()) {
+                    return std::unexpected{error("transaction journal contains an invalid temporary path",
+                                                 journal.generic_string())};
+                }
+            } else if (!temporary_value.empty()) {
+                return std::unexpected{error("transaction journal contains an unexpected temporary path",
+                                             journal.generic_string())};
+            }
+
+            const auto pre_hash = value["pre_sha256"].get<std::string>();
+            const auto post_hash = value["post_sha256"].get<std::string>();
+            if ((value["had_original"].get<bool>() && pre_hash.size() != 64) ||
+                (value["post_exists"].get<bool>() && post_hash.size() != 64)) {
+                return std::unexpected{error("transaction journal contains an invalid content hash",
+                                             journal.generic_string())};
+            }
+            transaction.entries.push_back(TransactionEntry{
+                *kind,
+                *status,
+                logical_path,
+                root / destination,
+                temporary,
+                directory / expected_backup,
+                value["had_original"].get<bool>(),
+                pre_hash,
+                value["post_exists"].get<bool>(),
+                post_hash,
+                {}});
+            ++index;
+        }
+    } catch (const nlohmann::json::exception&) {
+        return std::unexpected{error("transaction journal is not valid JSON", journal.generic_string())};
+    }
+    return transaction;
+}
+
+[[nodiscard]] Result<void> remove_if_present(const std::filesystem::path& path,
+                                              std::string_view description) {
+    std::error_code ec;
+    const auto status = std::filesystem::symlink_status(path, ec);
+    if (is_not_found(ec) || (!ec && status.type() == std::filesystem::file_type::not_found)) return {};
+    if (ec) return std::unexpected{error("cannot inspect " + std::string{description} + ": " + ec.message(),
+                                         path.generic_string())};
+    if (!std::filesystem::remove(path, ec) && ec) {
+        return std::unexpected{error("cannot remove " + std::string{description} + ": " + ec.message(),
+                                     path.generic_string())};
+    }
+    return {};
+}
+
+[[nodiscard]] Result<void> remove_directory_if_empty(const std::filesystem::path& path) {
+    std::error_code ec;
+    const auto status = std::filesystem::symlink_status(path, ec);
+    if (is_not_found(ec) || (!ec && status.type() == std::filesystem::file_type::not_found)) return {};
+    if (ec) return std::unexpected{error("cannot inspect transaction directory: " + ec.message(), path.generic_string())};
+    if (!std::filesystem::is_directory(status) || std::filesystem::is_symlink(status)) {
+        return std::unexpected{error("transaction path is not a directory", path.generic_string())};
+    }
+    if (!std::filesystem::is_empty(path, ec)) {
+        if (ec) return std::unexpected{error("cannot inspect transaction directory: " + ec.message(), path.generic_string())};
+        return std::unexpected{error("transaction directory contains unexpected artifacts", path.generic_string())};
+    }
+    std::filesystem::remove(path, ec);
+    if (ec) return std::unexpected{error("cannot remove transaction directory: " + ec.message(), path.generic_string())};
+    return {};
+}
+
+[[nodiscard]] Result<void> remove_metadata_directory_if_empty(const std::filesystem::path& path) {
+    std::error_code ec;
+    const auto status = std::filesystem::symlink_status(path, ec);
+    if (is_not_found(ec) || (!ec && status.type() == std::filesystem::file_type::not_found)) return {};
+    if (ec) return std::unexpected{error("cannot inspect metadata directory: " + ec.message(), path.generic_string())};
+    if (std::filesystem::is_symlink(status) || !std::filesystem::is_directory(status)) {
+        return std::unexpected{error("metadata path is not a directory", path.generic_string())};
+    }
+    if (!std::filesystem::is_empty(path, ec)) {
+        if (ec) return std::unexpected{error("cannot inspect metadata directory: " + ec.message(), path.generic_string())};
+        return {};
+    }
+    std::filesystem::remove(path, ec);
+    if (ec) return std::unexpected{error("cannot remove metadata directory: " + ec.message(), path.generic_string())};
+    return {};
+}
+
+[[nodiscard]] Result<void> remove_staged_file(const TransactionEntry& entry) {
+    if (entry.temporary.empty()) return {};
+    std::error_code ec;
+    const auto status = std::filesystem::symlink_status(entry.temporary, ec);
+    if (is_not_found(ec) || ec == std::errc::not_a_directory ||
+        (!ec && status.type() == std::filesystem::file_type::not_found)) return {};
+    if (ec) return std::unexpected{error("cannot inspect staged output: " + ec.message(),
+                                         entry.temporary.generic_string())};
+    if (std::filesystem::is_symlink(status) || !std::filesystem::is_regular_file(status)) {
+        return std::unexpected{error("staged output is not a regular file", entry.temporary.generic_string())};
+    }
+    auto content = read_file(entry.temporary);
+    if (!content) return std::unexpected{content.error()};
+    if (SafeWriter::sha256(*content) != entry.post_hash) {
+        return std::unexpected{error("staged output changed outside the active transaction",
+                                     entry.temporary.generic_string())};
+    }
+    return remove_if_present(entry.temporary, "staged output");
+}
+
+[[nodiscard]] Result<void> cleanup_transaction(Transaction& transaction) {
+    for (const auto& entry : transaction.entries) {
+        auto staged = remove_staged_file(entry);
+        if (!staged) return std::unexpected{staged.error()};
+    }
+    for (const auto& entry : transaction.entries) {
+        auto backup = remove_if_present(entry.backup, "transaction backup");
+        if (!backup) return std::unexpected{backup.error()};
+    }
+    auto journal_tmp = remove_if_present(transaction.journal.string() + ".tmp", "transaction journal temporary");
+    if (!journal_tmp) return std::unexpected{journal_tmp.error()};
+    auto pre_tmp = remove_if_present(transaction.pre_metadata_path.string() + ".tmp",
+                                     "pre-manifest metadata temporary");
+    if (!pre_tmp) return std::unexpected{pre_tmp.error()};
+    auto post_tmp = remove_if_present(transaction.post_metadata_path.string() + ".tmp",
+                                      "post-manifest metadata temporary");
+    if (!post_tmp) return std::unexpected{post_tmp.error()};
+    auto journal = remove_if_present(transaction.journal, "transaction journal");
+    if (!journal) return std::unexpected{journal.error()};
+    auto pre = remove_if_present(transaction.pre_metadata_path, "pre-manifest metadata");
+    if (!pre) return std::unexpected{pre.error()};
+    auto post = remove_if_present(transaction.post_metadata_path, "post-manifest metadata");
+    if (!post) return std::unexpected{post.error()};
+    auto backups = remove_directory_if_empty(transaction.backups_directory);
+    if (!backups) return std::unexpected{backups.error()};
+    auto directory = remove_directory_if_empty(transaction.directory);
+    if (!directory) return std::unexpected{directory.error()};
+    // clean() removes the manifest, and a rollback may restore the state where
+    // no manifest ever existed.  Remove only an empty metadata directory so
+    // unowned files under .cmakegen are never touched.
+    return remove_metadata_directory_if_empty(transaction.root / ".cmakegen");
+}
+
+[[nodiscard]] Result<void> safe_status(const std::filesystem::path& path,
+                                       std::filesystem::file_status& status) {
+    std::error_code ec;
+    status = std::filesystem::symlink_status(path, ec);
+    if (ec && !is_not_found(ec)) {
+        if (ec == std::errc::not_a_directory) {
+            status = std::filesystem::file_status{};
+            return {};
+        }
+        return std::unexpected{error("cannot inspect transaction path: " + ec.message(), path.generic_string())};
+    }
+    if (is_not_found(ec)) status = std::filesystem::file_status{};
+    return {};
+}
+
+[[nodiscard]] Result<void> remove_new_destination(const TransactionEntry& entry,
+                                                  bool may_have_been_applied) {
+    std::filesystem::file_status status;
+    auto inspected = safe_status(entry.destination, status);
+    if (!inspected) return std::unexpected{inspected.error()};
+    if (!std::filesystem::exists(status)) return {};
+
+    if (!may_have_been_applied) {
+        return std::unexpected{error("destination changed while transaction was being rolled back",
+                                     entry.destination.generic_string())};
+    }
+    if (std::filesystem::is_symlink(status) || !std::filesystem::is_regular_file(status)) {
+        return std::unexpected{error("cannot safely rollback a non-regular destination",
+                                     entry.destination.generic_string())};
+    }
+    auto content = read_file(entry.destination);
+    if (!content) return std::unexpected{content.error()};
+    if (SafeWriter::sha256(*content) != entry.post_hash) {
+        return std::unexpected{error("destination changed while transaction recovery was pending",
+                                     entry.destination.generic_string())};
+    }
+    return remove_if_present(entry.destination, "transaction output");
+}
+
+[[nodiscard]] Result<void> restore_backup(TransactionEntry& entry,
+                                          std::size_t rollback_index,
+                                          bool recovery_mode) {
+    using Point = detail::safe_writer_testing::FailurePoint;
+    if (recovery_mode && consume_failure(Point::recovery, rollback_index)) {
+        return std::unexpected{injected_failure(failure_point_name(Point::recovery), entry.destination)};
+    }
+    if (!recovery_mode && consume_failure(Point::rollback, rollback_index)) {
+        return std::unexpected{injected_failure(failure_point_name(Point::rollback), entry.destination)};
+    }
+
+    std::filesystem::file_status backup_status;
+    auto inspected_backup = safe_status(entry.backup, backup_status);
+    if (!inspected_backup) return std::unexpected{inspected_backup.error()};
+    const bool backup_exists = std::filesystem::exists(backup_status);
+
+    std::filesystem::file_status destination_status;
+    auto inspected_destination = safe_status(entry.destination, destination_status);
+    if (!inspected_destination) return std::unexpected{inspected_destination.error()};
+    const bool destination_exists = std::filesystem::exists(destination_status);
+
+    if (entry.status == TransactionEntryStatus::restored) {
+        if (entry.had_original && !destination_exists) {
+            return std::unexpected{error("restored transaction output is missing",
+                                         entry.destination.generic_string())};
+        }
+        return {};
+    }
+
+    if (!entry.had_original) {
+        const bool may_have_been_applied = entry.status == TransactionEntryStatus::in_progress ||
+                                           entry.status == TransactionEntryStatus::applied;
+        if (destination_exists) {
+            auto removed = remove_new_destination(entry, may_have_been_applied);
+            if (!removed) return std::unexpected{removed.error()};
+        }
+        if (backup_exists) {
+            return std::unexpected{error("unexpected backup for a previously absent destination",
+                                         entry.backup.generic_string())};
+        }
+        entry.status = TransactionEntryStatus::restored;
+        return {};
+    }
+
+    if (!backup_exists) {
+        if (destination_exists && entry.status == TransactionEntryStatus::restored) return {};
+        if (destination_exists && std::filesystem::is_regular_file(destination_status)) {
+            auto content = read_file(entry.destination);
+            if (content && SafeWriter::sha256(*content) == entry.pre_hash) {
+                entry.status = TransactionEntryStatus::restored;
+                return {};
+            }
+        }
+        return std::unexpected{error("transaction backup is missing; manual recovery is required",
+                                     entry.backup.generic_string())};
+    }
+
+    if (destination_exists) {
+        const bool may_have_been_applied = entry.status == TransactionEntryStatus::in_progress ||
+                                           entry.status == TransactionEntryStatus::applied;
+        auto removed = remove_new_destination(entry, may_have_been_applied);
+        if (!removed) return std::unexpected{removed.error()};
+    }
+    std::filesystem::file_status after_remove;
+    auto inspected_after_remove = safe_status(entry.destination, after_remove);
+    if (!inspected_after_remove) return std::unexpected{inspected_after_remove.error()};
+    if (std::filesystem::exists(after_remove)) {
+        return std::unexpected{error("cannot restore transaction backup over an existing destination",
+                                     entry.destination.generic_string())};
+    }
+    auto restored = move_to_backup(entry.backup, entry.destination);
+    if (!restored) return std::unexpected{restored.error()};
+    entry.status = TransactionEntryStatus::restored;
+    return {};
+}
+
+[[nodiscard]] Result<void> verify_pre_state(const Transaction& transaction) {
+    for (const auto& entry : transaction.entries) {
+        std::filesystem::file_status status;
+        auto inspected = safe_status(entry.destination, status);
+        if (!inspected) return std::unexpected{inspected.error()};
+        const bool exists = std::filesystem::exists(status);
+        if (!entry.had_original) {
+            if (exists) return std::unexpected{error("rollback left a newly-created destination",
+                                                    entry.destination.generic_string())};
+            continue;
+        }
+        if (!exists || std::filesystem::is_symlink(status) || !std::filesystem::is_regular_file(status)) {
+            return std::unexpected{error("rollback did not restore the previous destination",
+                                         entry.destination.generic_string())};
+        }
+        auto content = read_file(entry.destination);
+        if (!content || SafeWriter::sha256(*content) != entry.pre_hash) {
+            return std::unexpected{error("rollback restored unexpected destination content",
+                                         entry.destination.generic_string())};
+        }
+    }
+
+    const auto manifest = transaction.root / manifest_relative_path;
+    std::filesystem::file_status manifest_status;
+    auto inspected_manifest = safe_status(manifest, manifest_status);
+    if (!inspected_manifest) return std::unexpected{inspected_manifest.error()};
+    const bool manifest_exists = std::filesystem::exists(manifest_status);
+    if (manifest_exists != transaction.pre_manifest_exists) {
+        return std::unexpected{error("rollback did not restore the previous manifest", manifest.generic_string())};
+    }
+    if (manifest_exists) {
+        auto content = read_file(manifest);
+        if (!content || *content != transaction.pre_manifest_content) {
+            return std::unexpected{error("rollback restored unexpected manifest content", manifest.generic_string())};
+        }
+    }
+    return {};
+}
+
+[[nodiscard]] Result<void> remove_created_directories(Transaction& transaction) {
+    auto directories = transaction.created_directories;
+    std::ranges::sort(directories, [](const auto& left, const auto& right) {
+        return left.native().size() > right.native().size();
+    });
+    for (const auto& directory : directories) {
+        std::filesystem::file_status status;
+        auto inspected = safe_status(directory, status);
+        if (!inspected) return std::unexpected{inspected.error()};
+        if (!std::filesystem::exists(status)) continue;
+        if (std::filesystem::is_symlink(status)) {
+            return std::unexpected{error("created transaction directory changed unexpectedly",
+                                         directory.generic_string())};
+        }
+        if (!std::filesystem::is_directory(status)) {
+            const auto restored_file = std::ranges::find_if(transaction.entries,
+                                                             [&directory](const auto& entry) {
+                                                                 return entry.kind == TransactionEntryKind::remove &&
+                                                                        entry.destination == directory &&
+                                                                        entry.had_original;
+                                                             });
+            if (restored_file != transaction.entries.end() &&
+                std::filesystem::is_regular_file(status)) {
+                auto content = read_file(directory);
+                if (content && SafeWriter::sha256(*content) == restored_file->pre_hash) continue;
+            }
+            return std::unexpected{error("created transaction directory changed unexpectedly",
+                                         directory.generic_string())};
+        }
+        std::error_code ec;
+        if (!std::filesystem::is_empty(directory, ec)) {
+            if (ec) return std::unexpected{error("cannot inspect created directory: " + ec.message(),
+                                                 directory.generic_string())};
+            return std::unexpected{error("cannot remove a created directory containing an unowned file",
+                                         directory.generic_string())};
+        }
+        std::filesystem::remove(directory, ec);
+        if (ec) return std::unexpected{error("cannot rollback created directory: " + ec.message(),
+                                             directory.generic_string())};
+    }
+    return {};
+}
+
+[[nodiscard]] Result<void> rollback_transaction(Transaction& transaction, bool recovery_mode) {
+    // Staged files can live below a directory that is being recreated for a
+    // file-to-directory transition. Remove them before removing that parent;
+    // the hash check prevents cleanup from touching an external edit.
+    for (const auto& entry : transaction.entries) {
+        auto staged = remove_staged_file(entry);
+        if (!staged) return std::unexpected{staged.error()};
+    }
+
+    std::size_t rollback_index = 0;
+    for (auto iterator = transaction.entries.rbegin(); iterator != transaction.entries.rend(); ++iterator) {
+        auto& entry = *iterator;
+        if (entry.status == TransactionEntryStatus::restored) {
+            ++rollback_index;
+            continue;
+        }
+        if (entry.kind == TransactionEntryKind::remove) {
+            // A remove operation has no post-write destination.  If the
+            // backup move happened, the destination must still be absent.
+            std::filesystem::file_status status;
+            auto inspected = safe_status(entry.destination, status);
+            if (!inspected) return std::unexpected{inspected.error()};
+            if (std::filesystem::exists(status)) {
+                if (entry.status != TransactionEntryStatus::applied ||
+                    std::filesystem::is_symlink(status) ||
+                    !std::filesystem::is_directory(status)) {
+                    return std::unexpected{error("stale destination changed while transaction recovery was pending",
+                                                 entry.destination.generic_string())};
+                }
+                std::error_code ec;
+                if (!std::filesystem::is_empty(entry.destination, ec)) {
+                    if (ec) {
+                        return std::unexpected{error("cannot inspect recreated output directory: " + ec.message(),
+                                                     entry.destination.generic_string())};
+                    }
+                    return std::unexpected{error("cannot remove a recreated output directory containing an unowned file",
+                                                 entry.destination.generic_string())};
+                }
+                std::filesystem::remove(entry.destination, ec);
+                if (ec) {
+                    return std::unexpected{error("cannot remove recreated output directory: " + ec.message(),
+                                                 entry.destination.generic_string())};
+                }
+            }
+        } else {
+            const bool may_have_been_applied = entry.status == TransactionEntryStatus::in_progress ||
+                                               entry.status == TransactionEntryStatus::applied;
+            std::filesystem::file_status status;
+            auto inspected = safe_status(entry.destination, status);
+            if (!inspected) return std::unexpected{inspected.error()};
+            if (std::filesystem::exists(status)) {
+                auto removed = remove_new_destination(entry, may_have_been_applied);
+                if (!removed) return std::unexpected{removed.error()};
+            }
+        }
+
+        auto restored = restore_backup(entry, rollback_index, recovery_mode);
+        if (!restored) return std::unexpected{restored.error()};
+        ++rollback_index;
+        transaction.phase = "rollback";
+        auto journal = write_journal(transaction);
+        if (!journal) return std::unexpected{journal.error()};
+    }
+
+    auto directories = remove_created_directories(transaction);
+    if (!directories) return std::unexpected{directories.error()};
+    auto verified = verify_pre_state(transaction);
+    if (!verified) return std::unexpected{verified.error()};
+    transaction.state = "rolled_back";
+    transaction.phase = "rollback";
+    return write_journal(transaction);
+}
+
+[[nodiscard]] Result<void> ensure_transaction_directory_is_new(Transaction& transaction) {
+    auto present = transaction_directory_present(transaction.root, transaction.capabilities);
+    if (!present) return std::unexpected{present.error()};
+    if (*present) {
+        return std::unexpected{error("an existing SafeWriter transaction requires recovery",
+                                     transaction.directory.generic_string())};
+    }
+
+    auto metadata_parent = reject_symlink_parents(transaction.root,
+                                                   ".cmakegen/transaction/journal.json",
+                                                   transaction.capabilities);
+    if (!metadata_parent) return std::unexpected{metadata_parent.error()};
+    std::error_code ec;
+    std::filesystem::create_directories(transaction.backups_directory, ec);
+    if (ec) {
+        return std::unexpected{error("cannot create transaction directory: " + ec.message(),
+                                     transaction.directory.generic_string())};
+    }
+    return {};
+}
+
+[[nodiscard]] Result<Transaction> start_transaction(const std::filesystem::path& root,
+                                                    const PreparedPlan& plan) {
+    Transaction transaction{root,
+                            transaction_directory(root),
+                            transaction_directory(root) / "journal.json",
+                            transaction_directory(root) / "pre-manifest.json",
+                            transaction_directory(root) / "post-manifest.json",
+                            transaction_directory(root) / "backups"};
+    transaction.pre_manifest_exists = plan.pre_manifest.present;
+    transaction.pre_manifest_content = plan.pre_manifest.content;
+    transaction.post_manifest_exists = plan.post_manifest.present;
+    transaction.post_manifest_content = plan.post_manifest.content;
+    transaction.capabilities = plan.capabilities;
+    transaction.entries.reserve(plan.entries.size());
+    for (std::size_t index = 0; index < plan.entries.size(); ++index) {
+        const auto& planned = plan.entries[index];
+        TransactionEntry entry;
+        entry.kind = planned.kind;
+        entry.logical_path = planned.logical_path;
+        entry.destination = planned.destination;
+        entry.had_original = planned.had_original;
+        entry.pre_hash = planned.pre_hash;
+        entry.post_exists = planned.post_exists;
+        entry.post_hash = planned.post_hash;
+        entry.content = planned.content;
+        entry.backup = transaction.backups_directory / transaction_backup_name(index).substr(8);
+        if (planned.kind == TransactionEntryKind::replace ||
+            (planned.kind == TransactionEntryKind::manifest && planned.post_exists)) {
+            entry.temporary = transaction_temp_path(planned.destination);
+        }
+        transaction.entries.push_back(std::move(entry));
+    }
+
+    auto directory = ensure_transaction_directory_is_new(transaction);
+    if (!directory) return std::unexpected{directory.error()};
+    auto pre = write_file_without_replacement(transaction.pre_metadata_path,
+                                               render_manifest_metadata(plan.pre_manifest));
+    if (!pre) {
+        auto cleanup = cleanup_transaction(transaction);
+        if (!cleanup) {
+            return std::unexpected{error("cannot prepare transaction and recovery artifacts could not be cleaned: " +
+                                         cleanup.error().diagnostics().front().message,
+                                         transaction.directory.generic_string())};
+        }
+        return std::unexpected{pre.error()};
+    }
+    auto post = write_file_without_replacement(transaction.post_metadata_path,
+                                                render_manifest_metadata(plan.post_manifest));
+    if (!post) {
+        auto cleanup = cleanup_transaction(transaction);
+        if (!cleanup) {
+            return std::unexpected{error("cannot prepare transaction and recovery artifacts could not be cleaned: " +
+                                         cleanup.error().diagnostics().front().message,
+                                         transaction.directory.generic_string())};
+        }
+        return std::unexpected{post.error()};
+    }
+    auto journal = write_file_without_replacement(transaction.journal,
+                                                   render_journal_json(transaction).dump(2) + "\n");
+    if (!journal) {
+        auto cleanup = cleanup_transaction(transaction);
+        if (!cleanup) {
+            return std::unexpected{error("cannot prepare transaction and recovery artifacts could not be cleaned: " +
+                                         cleanup.error().diagnostics().front().message,
+                                         transaction.directory.generic_string())};
+        }
+        return std::unexpected{journal.error()};
+    }
+    return transaction;
+}
+
+[[nodiscard]] Result<void> collect_created_directories(Transaction& transaction) {
+    std::set<std::string, std::less<>> seen;
+    const auto is_scheduled_removal = [&transaction](const std::filesystem::path& path) {
+        return std::ranges::any_of(transaction.entries, [&path](const auto& entry) {
+            return entry.kind == TransactionEntryKind::remove && entry.destination == path;
+        });
+    };
+    for (const auto& entry : transaction.entries) {
+        if (entry.kind != TransactionEntryKind::replace) continue;
+        auto current = entry.destination.parent_path();
+        while (current != transaction.root && !current.empty()) {
+            std::filesystem::file_status status;
+            auto inspected = safe_status(current, status);
+            if (!inspected) return std::unexpected{inspected.error()};
+            if (std::filesystem::exists(status)) {
+                if (is_scheduled_removal(current)) {
+                    const auto relative = current.lexically_relative(transaction.root).generic_string();
+                    if (seen.emplace(portable_equivalence_key(relative)).second) {
+                        transaction.created_directories.push_back(current);
+                    }
+                    current = current.parent_path();
+                    continue;
+                }
+                if (std::filesystem::is_symlink(status) || !std::filesystem::is_directory(status)) {
+                    return std::unexpected{error("output parent is not a directory",
+                                                 current.generic_string())};
+                }
+                break;
+            }
+            const auto relative = current.lexically_relative(transaction.root).generic_string();
+            if (relative.empty() || portable_equivalence_key(relative).starts_with(".cmakegen")) {
+                return std::unexpected{error("output parent is unsafe", current.generic_string())};
+            }
+            if (seen.emplace(portable_equivalence_key(relative)).second) {
+                transaction.created_directories.push_back(current);
+            }
+            current = current.parent_path();
+        }
+    }
+    std::ranges::sort(transaction.created_directories, [](const auto& left, const auto& right) {
+        return left.native().size() < right.native().size();
+    });
+    return {};
+}
+
+[[nodiscard]] Result<void> create_transaction_directories(Transaction& transaction) {
+    for (const auto& directory : transaction.created_directories) {
+        std::error_code ec;
+        std::filesystem::create_directory(directory, ec);
+        if (ec) return std::unexpected{error("cannot create output directory: " + ec.message(),
+                                             directory.generic_string())};
+    }
+    return {};
+}
+
+[[nodiscard]] Result<void> stage_transaction_outputs(Transaction& transaction) {
+    for (const auto& entry : transaction.entries) {
+        if ((!entry.post_exists) ||
+            (entry.kind != TransactionEntryKind::replace && entry.kind != TransactionEntryKind::manifest)) {
+            continue;
+        }
+        auto staged = write_file_without_replacement(entry.temporary, entry.content);
+        if (!staged) return std::unexpected{staged.error()};
+    }
+    return {};
+}
+
+[[nodiscard]] Result<void> backup_transaction_outputs(Transaction& transaction) {
+    transaction.state = "applying";
+    transaction.phase = "backup";
+    auto phase = write_journal(transaction);
+    if (!phase) return std::unexpected{phase.error()};
+
+    for (auto& entry : transaction.entries) {
+        if (entry.had_original) {
+            entry.status = TransactionEntryStatus::backing_up;
+            auto before = write_journal(transaction);
+            if (!before) return std::unexpected{before.error()};
+            auto moved = move_to_backup(entry.destination, entry.backup);
+            if (!moved) return std::unexpected{moved.error()};
+        }
+        entry.status = TransactionEntryStatus::backed_up;
+        auto after = write_journal(transaction);
+        if (!after) return std::unexpected{after.error()};
+    }
+    return {};
+}
+
+[[nodiscard]] Result<bool> post_state_is_complete(const Transaction& transaction) {
+    for (const auto& entry : transaction.entries) {
+        std::filesystem::file_status status;
+        auto inspected = safe_status(entry.destination, status);
+        if (!inspected) return std::unexpected{inspected.error()};
+        const bool exists = std::filesystem::exists(status);
+        if (entry.post_exists != exists) return false;
+        if (entry.post_exists) {
+            if (std::filesystem::is_symlink(status) || !std::filesystem::is_regular_file(status)) return false;
+            auto content = read_file(entry.destination);
+            if (!content || SafeWriter::sha256(*content) != entry.post_hash) return false;
+        }
+    }
+    const auto manifest = transaction.root / manifest_relative_path;
+    std::filesystem::file_status status;
+    auto inspected = safe_status(manifest, status);
+    if (!inspected) return std::unexpected{inspected.error()};
+    const bool exists = std::filesystem::exists(status);
+    if (exists != transaction.post_manifest_exists) return false;
+    if (exists) {
+        auto content = read_file(manifest);
+        if (!content || *content != transaction.post_manifest_content) return false;
+    }
+    return true;
+}
+
+[[nodiscard]] std::string first_diagnostic_message(const DiagnosticSet& diagnostics) {
+    if (diagnostics.empty()) return "unknown filesystem error";
+    return diagnostics.diagnostics().front().message;
+}
+
+[[nodiscard]] DiagnosticSet recovery_required(const Transaction& transaction,
+                                              std::string_view cause) {
+    return error("SafeWriter transaction is uncommitted and requires operator recovery (" +
+                     std::string{cause} + "); journal, backups, and pre/post manifest metadata were retained at " +
+                     relative_path(transaction.root, transaction.directory) +
+                     ". Stop concurrent writers, resolve any locked destination, then rerun generation to retry recovery.",
+                 transaction.directory.generic_string());
+}
+
+[[nodiscard]] Result<void> retain_recovery_state(Transaction& transaction) {
+    transaction.state = "recovery_required";
+    transaction.phase = "rollback";
+    auto journal = write_journal(transaction);
+    if (!journal) return std::unexpected{journal.error()};
+    return {};
+}
+
+[[nodiscard]] Result<void> recover_pending_transaction(const std::filesystem::path& root,
+                                                       const FilesystemCapabilities& capabilities) {
+    auto present = transaction_directory_present(root, capabilities);
+    if (!present) return std::unexpected{present.error()};
+    if (!*present) return {};
+
+    const auto journal = transaction_directory(root) / "journal.json";
+    std::error_code ec;
+    const auto journal_status = std::filesystem::symlink_status(journal, ec);
+    if (is_not_found(ec) || (!ec && journal_status.type() == std::filesystem::file_type::not_found)) {
+        return std::unexpected{error("transaction directory has no journal; manual recovery is required",
+                                     transaction_directory(root).generic_string())};
+    }
+    if (ec) return std::unexpected{error("cannot inspect transaction journal: " + ec.message(), journal.generic_string())};
+    if (std::filesystem::is_symlink(journal_status) || !std::filesystem::is_regular_file(journal_status)) {
+        return std::unexpected{error("transaction journal is not a regular file",
+                                     journal.generic_string())};
+    }
+
+    auto loaded = load_transaction(root, capabilities);
+    if (!loaded) return std::unexpected{loaded.error()};
+    auto& transaction = *loaded;
+    if (transaction.state == "committed" || transaction.state == "rolled_back") {
+        auto cleanup = cleanup_transaction(transaction);
+        if (!cleanup) {
+            return std::unexpected{recovery_required(transaction, cleanup.error().diagnostics().front().message)};
+        }
+        return {};
+    }
+
+    if (transaction.state == "manifest_pending") {
+        auto complete = post_state_is_complete(transaction);
+        if (!complete) return std::unexpected{complete.error()};
+        if (*complete) {
+            transaction.state = "committed";
+            transaction.phase = "commit";
+            auto journal_update = write_journal(transaction);
+            if (!journal_update) {
+                return std::unexpected{recovery_required(transaction, journal_update.error().diagnostics().front().message)};
+            }
+            auto cleanup = cleanup_transaction(transaction);
+            if (!cleanup) {
+                return std::unexpected{recovery_required(transaction, cleanup.error().diagnostics().front().message)};
+            }
+            return {};
+        }
+    }
+
+    auto rollback = rollback_transaction(transaction, true);
+    if (!rollback) {
+        auto retained = retain_recovery_state(transaction);
+        (void)retained;
+        return std::unexpected{recovery_required(transaction, rollback.error().diagnostics().front().message)};
+    }
+    auto cleanup = cleanup_transaction(transaction);
+    if (!cleanup) {
+        return std::unexpected{recovery_required(transaction, cleanup.error().diagnostics().front().message)};
+    }
+    return {};
+}
+
+[[nodiscard]] Result<bool> pending_transaction_for_read_only_operation(
+    const std::filesystem::path& root,
+    const FilesystemCapabilities& capabilities) {
+    auto present = transaction_directory_present(root, capabilities);
+    if (!present) return std::unexpected{present.error()};
+    if (!*present) return false;
+    return true;
+}
+
+[[nodiscard]] Result<void> handle_transaction_failure(Transaction& transaction,
+                                                      const DiagnosticSet& cause) {
+    auto rollback = rollback_transaction(transaction, false);
+    if (rollback) {
+        auto cleanup = cleanup_transaction(transaction);
+        if (cleanup) return {};
+        return std::unexpected{recovery_required(transaction,
+                                                  "rollback completed but transaction artifact cleanup failed: " +
+                                                      first_diagnostic_message(cleanup.error()))};
+    }
+    auto retained = retain_recovery_state(transaction);
+    (void)retained;
+    return std::unexpected{recovery_required(transaction,
+                                              "" + first_diagnostic_message(cause) +
+                                                  "; rollback failed: " + first_diagnostic_message(rollback.error()))};
+}
+
+[[nodiscard]] Result<WriteResult> execute_transaction(Transaction transaction,
+                                                      const WriteResult& result) {
+    auto fail = [&](const DiagnosticSet& cause) -> Result<WriteResult> {
+        auto handled = handle_transaction_failure(transaction, cause);
+        if (handled) {
+            return std::unexpected{error("transaction failed and rollback completed; previous outputs and manifest were restored: " +
+                                         first_diagnostic_message(cause),
+                                         transaction.root.generic_string())};
+        }
+        return std::unexpected{handled.error()};
+    };
+
+    auto directories = collect_created_directories(transaction);
+    if (!directories) return fail(directories.error());
+    auto directory_journal = write_journal(transaction);
+    if (!directory_journal) return fail(directory_journal.error());
+    auto backed_up = backup_transaction_outputs(transaction);
+    if (!backed_up) return fail(backed_up.error());
+    auto created = create_transaction_directories(transaction);
+    if (!created) return fail(created.error());
+    auto staged = stage_transaction_outputs(transaction);
+    if (!staged) return fail(staged.error());
+
+    using Point = detail::safe_writer_testing::FailurePoint;
+    std::size_t replacement_seen = 0;
+    if (consume_failure(Point::before_replacement, 0)) {
+        auto injected = injected_failure(failure_point_name(Point::before_replacement), transaction.directory);
+        return fail(injected);
+    }
+
+    for (auto& entry : transaction.entries) {
+        if (entry.kind == TransactionEntryKind::remove ||
+            (entry.kind == TransactionEntryKind::manifest && !entry.post_exists)) {
+            entry.status = TransactionEntryStatus::applied;
+            transaction.phase = "remove";
+            auto journal = write_journal(transaction);
+            if (!journal) return fail(journal.error());
+            continue;
+        }
+        transaction.phase = entry.kind == TransactionEntryKind::manifest ? "manifest" : "replace";
+        if (entry.kind == TransactionEntryKind::manifest) {
+            transaction.state = "manifest_pending";
+        }
+        entry.status = TransactionEntryStatus::in_progress;
+        auto before = write_journal(transaction);
+        if (!before) return fail(before.error());
+
+        if (entry.kind == TransactionEntryKind::manifest && consume_failure(Point::manifest_update, 0)) {
+            auto injected = injected_failure(failure_point_name(Point::manifest_update), entry.destination);
+            return fail(injected);
+        }
+        if (entry.kind == TransactionEntryKind::replace &&
+            consume_failure(Point::during_replacement, replacement_seen)) {
+            auto injected = injected_failure(failure_point_name(Point::during_replacement), entry.destination);
+            return fail(injected);
+        }
+        auto replaced = replace_file(entry.temporary, entry.destination);
+        if (!replaced) return fail(replaced.error());
+        entry.status = TransactionEntryStatus::applied;
+        auto after_apply = write_journal(transaction);
+        if (!after_apply) return fail(after_apply.error());
+        if (entry.kind == TransactionEntryKind::replace &&
+            consume_failure(Point::after_replacement, replacement_seen)) {
+            auto injected = injected_failure(failure_point_name(Point::after_replacement), entry.destination);
+            return fail(injected);
+        }
+        if (entry.kind == TransactionEntryKind::replace) ++replacement_seen;
+    }
+
+    transaction.state = "committed";
+    transaction.phase = "commit";
+    auto committed = write_journal(transaction);
+    if (!committed) return fail(committed.error());
+    auto cleanup = cleanup_transaction(transaction);
+    if (!cleanup) {
+        return std::unexpected{recovery_required(transaction, cleanup.error().diagnostics().front().message)};
+    }
+    return result;
+}
+
+[[nodiscard]] Result<std::pair<bool, std::string>> existing_file_content(
+    const std::filesystem::path& path,
+    std::string_view description) {
+    std::error_code ec;
+    const auto status = std::filesystem::symlink_status(path, ec);
+    if (is_not_found(ec) || (!ec && status.type() == std::filesystem::file_type::not_found)) {
+        return std::pair<bool, std::string>{false, {}};
+    }
+    if (ec) return std::unexpected{error("cannot inspect " + std::string{description} + ": " + ec.message(),
+                                         path.generic_string())};
+    if (std::filesystem::is_symlink(status) || !std::filesystem::is_regular_file(status)) {
+        return std::unexpected{error(std::string{description} + " must be a regular file", path.generic_string())};
+    }
+    auto content = read_file(path);
+    if (!content) return std::unexpected{content.error()};
+    return std::pair<bool, std::string>{true, std::move(*content)};
+}
+
+[[nodiscard]] Result<PreparedPlan> prepare_write(const std::filesystem::path& root,
+                                                 const GeneratedFileSet& files,
+                                                 const WriteOptions& options,
+                                                 const FilesystemCapabilities& capabilities) {
+    const auto manifest_path = root / manifest_relative_path;
+    auto manifest_safe = ensure_manifest_path_is_safe(root, manifest_path, capabilities);
+    if (!manifest_safe) return std::unexpected{manifest_safe.error()};
+    auto old_manifest = load_manifest(manifest_path);
+    if (!old_manifest) return std::unexpected{old_manifest.error()};
+    auto old_manifest_valid = validate_manifest_equivalence(*old_manifest, capabilities);
+    if (!old_manifest_valid) return std::unexpected{old_manifest_valid.error()};
+
+    auto current_manifest = existing_file_content(manifest_path, "manifest");
+    if (!current_manifest) return std::unexpected{current_manifest.error()};
+    const ManifestMetadata pre_manifest{current_manifest->first, current_manifest->second};
+
+    Manifest next_manifest = options.cleanup_stale ? Manifest{} : *old_manifest;
+    std::map<std::string, const GeneratedFile*, std::less<>> next_files;
+    for (const auto& file : files.files()) {
+        auto normalized = normalize_relative_path(file.path);
+        if (!normalized) return std::unexpected{normalized.error()};
+        auto unicode_valid = capabilities.validate_path(*normalized);
+        if (!unicode_valid) return std::unexpected{unicode_valid.error()};
+        auto parents = reject_symlink_parents(root, *normalized, capabilities);
+        if (!parents) return std::unexpected{parents.error()};
+        if (!next_files.emplace(*normalized, &file).second) {
+            return std::unexpected{error("generated file set contains duplicate output paths", *normalized)};
+        }
+        auto existing = find_equivalent_manifest_path(next_manifest, *normalized, capabilities);
+        if (!existing) return std::unexpected{existing.error()};
+        if (*existing) next_manifest.files.erase(**existing);
+        next_manifest.files.insert_or_assign(*normalized, SafeWriter::sha256(file.content));
+    }
+
+    auto output_valid = validate_generated_file_equivalence(next_files, capabilities);
+    if (!output_valid) return std::unexpected{output_valid.error()};
+    auto next_manifest_valid = validate_manifest_equivalence(next_manifest, capabilities);
+    if (!next_manifest_valid) return std::unexpected{next_manifest_valid.error()};
+
+    PreparedPlan plan;
+    plan.pre_manifest = pre_manifest;
+    plan.capabilities = capabilities;
+    std::vector<std::filesystem::path> stale_destinations;
+    if (options.cleanup_stale) {
+        for (const auto& [relative, hash] : old_manifest->files) {
+            bool retained = false;
+            for (const auto& [next_relative, file] : next_files) {
+                (void)file;
+                auto equivalent = capabilities.equivalent(relative, next_relative);
+                if (!equivalent) return std::unexpected{equivalent.error()};
+                if (*equivalent) {
+                    retained = true;
+                    break;
+                }
+            }
+            if (retained) continue;
+            auto checked = normalize_relative_path(relative);
+            if (!checked) return std::unexpected{checked.error()};
+            auto unicode_valid = capabilities.validate_path(*checked);
+            if (!unicode_valid) return std::unexpected{unicode_valid.error()};
+            auto parents = reject_symlink_parents(root, *checked, capabilities);
+            if (!parents) return std::unexpected{parents.error()};
+            auto resolved = resolve_existing_alias(root, relative, capabilities);
+            if (!resolved) return std::unexpected{resolved.error()};
+            auto content = existing_file_content(*resolved, "owned stale path");
+            if (!content) return std::unexpected{content.error()};
+            if (!content->first) continue;
+            if (SafeWriter::sha256(content->second) != hash && !options.force) {
+                return std::unexpected{error("refusing to remove a generated file modified since its recorded hash; use force to remove it",
+                                             relative)};
+            }
+            stale_destinations.push_back(*resolved);
+            plan.entries.push_back(PlannedEntry{TransactionEntryKind::remove, relative, *resolved,
+                                                true, SafeWriter::sha256(content->second), false, {}, {}});
+        }
+    }
+
+    for (const auto& [relative, file] : next_files) {
+        auto resolved = resolve_existing_alias(root, relative, capabilities);
+        if (!resolved) return std::unexpected{resolved.error()};
+        std::error_code ec;
+        auto status = std::filesystem::symlink_status(*resolved, ec);
+        if (ec == std::errc::not_a_directory) {
+            ec.clear();
+            status = std::filesystem::file_status{};
+        }
+        if (ec && !is_not_found(ec)) {
+            return std::unexpected{error("cannot inspect destination: " + ec.message(), resolved->generic_string())};
+        }
+        if (is_not_found(ec)) {
+            ec.clear();
+            status = std::filesystem::file_status{};
+        }
+        const bool exists = std::filesystem::exists(status);
+        if (exists && (std::filesystem::is_symlink(status) || !std::filesystem::is_regular_file(status))) {
+            return std::unexpected{error("destination must be a regular file", resolved->generic_string())};
+        }
+        auto old = find_equivalent_manifest_path(*old_manifest, relative, capabilities);
+        if (!old) return std::unexpected{old.error()};
+        const bool owned = static_cast<bool>(*old);
+        if (exists && !owned && !options.force) {
+            return std::unexpected{error("refusing to replace an unowned file; use force to take ownership", relative)};
+        }
+
+        std::string previous_content;
+        std::string previous_hash;
+        if (exists) {
+            auto current = read_file(*resolved);
+            if (!current) return std::unexpected{current.error()};
+            previous_content = *current;
+            previous_hash = SafeWriter::sha256(previous_content);
+            if (owned && previous_hash != old_manifest->files.at(**old) && !options.force) {
+                return std::unexpected{error("refusing to replace a generated file modified since its recorded hash; use force to take ownership",
+                                             relative)};
+            }
+        }
+
+        bool changed = !exists || !owned || previous_content != file->content;
+        if (changed) {
+            plan.entries.push_back(PlannedEntry{TransactionEntryKind::replace,
+                                                relative,
+                                                *resolved,
+                                                exists,
+                                                previous_hash,
+                                                true,
+                                                SafeWriter::sha256(file->content),
+                                                file->content});
+        }
+    }
+
+    for (const auto& [relative, file] : next_files) {
+        auto ancestors = reject_file_ancestor(root, relative, capabilities, stale_destinations);
+        if (!ancestors) return std::unexpected{ancestors.error()};
+    }
+
+    const auto rendered_manifest = render_manifest(next_manifest);
+    const bool manifest_changed = !pre_manifest.present || pre_manifest.content != rendered_manifest;
+    plan.post_manifest = ManifestMetadata{true, rendered_manifest};
+    if (manifest_changed) {
+        auto manifest_hash = SafeWriter::sha256(pre_manifest.content);
+        plan.entries.push_back(PlannedEntry{TransactionEntryKind::manifest,
+                                            std::string{manifest_relative_path},
+                                            manifest_path,
+                                            pre_manifest.present,
+                                            pre_manifest.present ? manifest_hash : std::string{},
+                                            true,
+                                            SafeWriter::sha256(rendered_manifest),
+                                            rendered_manifest});
+    }
+    plan.result.files_written = std::ranges::count_if(plan.entries, [](const auto& entry) {
+        return entry.kind == TransactionEntryKind::replace;
+    });
+    plan.result.files_removed = std::ranges::count_if(plan.entries, [](const auto& entry) {
+        return entry.kind == TransactionEntryKind::remove;
+    });
+    plan.result.would_change = !plan.entries.empty();
+    return plan;
+}
+
+[[nodiscard]] Result<PreparedPlan> prepare_clean(const std::filesystem::path& root,
+                                                 bool force,
+                                                 const FilesystemCapabilities& capabilities) {
+    const auto manifest_path = root / manifest_relative_path;
+    auto manifest_safe = ensure_manifest_path_is_safe(root, manifest_path, capabilities);
+    if (!manifest_safe) return std::unexpected{manifest_safe.error()};
+    auto current_manifest = existing_file_content(manifest_path, "manifest");
+    if (!current_manifest) return std::unexpected{current_manifest.error()};
+    if (!current_manifest->first) return PreparedPlan{};
+    auto manifest = load_manifest(manifest_path);
+    if (!manifest) return std::unexpected{manifest.error()};
+    auto manifest_valid = validate_manifest_equivalence(*manifest, capabilities);
+    if (!manifest_valid) return std::unexpected{manifest_valid.error()};
+
+    PreparedPlan plan;
+    plan.pre_manifest = ManifestMetadata{true, current_manifest->second};
+    plan.post_manifest = ManifestMetadata{false, {}};
+    plan.capabilities = capabilities;
+    for (const auto& [relative, hash] : manifest->files) {
+        auto checked = normalize_relative_path(relative);
+        if (!checked) return std::unexpected{checked.error()};
+        auto unicode_valid = capabilities.validate_path(*checked);
+        if (!unicode_valid) return std::unexpected{unicode_valid.error()};
+        auto parents = reject_symlink_parents(root, *checked, capabilities);
+        if (!parents) return std::unexpected{parents.error()};
+        auto resolved = resolve_existing_alias(root, relative, capabilities);
+        if (!resolved) return std::unexpected{resolved.error()};
+        auto content = existing_file_content(*resolved, "owned path");
+        if (!content) return std::unexpected{content.error()};
+        if (!content->first) continue;
+        if (SafeWriter::sha256(content->second) != hash && !force) {
+            return std::unexpected{error("refusing to remove a generated file modified since its recorded hash; use force to remove it",
+                                         relative)};
+        }
+        plan.entries.push_back(PlannedEntry{TransactionEntryKind::remove,
+                                            relative,
+                                            *resolved,
+                                            true,
+                                            SafeWriter::sha256(content->second),
+                                            false,
+                                            {},
+                                            {}});
+    }
+    plan.entries.push_back(PlannedEntry{TransactionEntryKind::manifest,
+                                        std::string{manifest_relative_path},
+                                        manifest_path,
+                                        true,
+                                        SafeWriter::sha256(current_manifest->second),
+                                        false,
+                                        {},
+                                        {}});
+    plan.result.files_removed = std::ranges::count_if(plan.entries, [](const auto& entry) {
+        return entry.kind == TransactionEntryKind::remove;
+    });
+    plan.result.would_change = true;
+    return plan;
+}
+
 } // namespace
+
+namespace detail::safe_writer_testing {
+
+void set_failure_injection(FailureInjection injection) {
+    std::scoped_lock lock{failure_injection_mutex};
+    failure_injections.clear();
+    failure_injections.push_back(injection);
+}
+
+void queue_failure_injection(FailureInjection injection) {
+    std::scoped_lock lock{failure_injection_mutex};
+    failure_injections.push_back(injection);
+}
+
+void clear_failure_injection() {
+    std::scoped_lock lock{failure_injection_mutex};
+    failure_injections.clear();
+}
+
+} // namespace detail::safe_writer_testing
 
 Result<void> GeneratedFileSet::add(GeneratedFile file) {
     auto normalized = normalize_relative_path(file.path);
@@ -1123,193 +2648,47 @@ Result<void> GeneratedFileSet::add(GeneratedFile file) {
     files_.push_back(std::move(file));
     return {};
 }
-const std::vector<GeneratedFile>& GeneratedFileSet::files() const noexcept { return files_; }
+
+const std::vector<GeneratedFile>& GeneratedFileSet::files() const noexcept {
+    return files_;
+}
+
 SafeWriter::SafeWriter(std::filesystem::path project_root) : project_root_(std::move(project_root)) {}
 
 std::string SafeWriter::sha256(std::string_view content) {
-    const auto digest = hash_bytes(content); std::ostringstream output;
-    for (const auto byte : digest) output << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned>(byte);
+    const auto digest = hash_bytes(content);
+    std::ostringstream output;
+    for (const auto byte : digest) {
+        output << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned>(byte);
+    }
     return output.str();
 }
 
-Result<WriteResult> SafeWriter::write(const GeneratedFileSet& files, const WriteOptions& options) const {
+Result<WriteResult> SafeWriter::write(const GeneratedFileSet& files,
+                                      const WriteOptions& options) const {
     std::error_code ec;
-    if (!std::filesystem::is_directory(project_root_, ec) || ec) return std::unexpected{error("project root must be an existing directory", project_root_.generic_string())};
-
+    if (!std::filesystem::is_directory(project_root_, ec) || ec) {
+        return std::unexpected{error("project root must be an existing directory", project_root_.generic_string())};
+    }
     auto detected_capabilities = detect_filesystem_capabilities(project_root_);
     if (!detected_capabilities) return std::unexpected{detected_capabilities.error()};
     const auto& capabilities = *detected_capabilities;
-
-    const auto manifest_path = project_root_ / manifest_relative_path;
-    auto resolved_manifest = resolve_existing_alias(project_root_, manifest_relative_path, capabilities);
-    if (!resolved_manifest) return std::unexpected{resolved_manifest.error()};
-    if (*resolved_manifest != manifest_path) {
-        return std::unexpected{error("manifest has a portable path alias", resolved_manifest->generic_string())};
-    }
-    auto manifest_parent = reject_symlink_parents(project_root_, manifest_relative_path, capabilities);
-    if (!manifest_parent) return std::unexpected{manifest_parent.error()};
-    auto old_manifest = load_manifest(manifest_path);
-    if (!old_manifest) return std::unexpected{old_manifest.error()};
-    auto old_manifest_valid = validate_manifest_equivalence(*old_manifest, capabilities);
-    if (!old_manifest_valid) return std::unexpected{old_manifest_valid.error()};
-
-    Manifest next_manifest = options.cleanup_stale ? Manifest{} : *old_manifest;
-    std::map<std::string, const GeneratedFile*, std::less<>> next_files;
-    for (const auto& file : files.files()) {
-        auto normalized = normalize_relative_path(file.path);
-        if (!normalized) return std::unexpected{normalized.error()};
-        auto unicode_valid = validate_target_unicode_capability(capabilities, *normalized);
-        if (!unicode_valid) return std::unexpected{unicode_valid.error()};
-        auto parents = reject_symlink_parents(project_root_, path_from_utf8(*normalized), capabilities);
-        if (!parents) return std::unexpected{parents.error()};
-        if (!next_files.emplace(*normalized, &file).second) {
-            return std::unexpected{error("generated file set contains duplicate output paths", *normalized)};
+    auto pending = pending_transaction_for_read_only_operation(project_root_, capabilities);
+    if (!pending) return std::unexpected{pending.error()};
+    if (*pending) {
+        if (options.check || options.dry_run) {
+            return std::unexpected{error("a pending SafeWriter transaction requires recovery; check/dry-run performed no writes",
+                                         transaction_directory(project_root_).generic_string())};
         }
+        auto recovered = recover_pending_transaction(project_root_, capabilities);
+        if (!recovered) return std::unexpected{recovered.error()};
     }
-
-    auto output_valid = validate_generated_file_equivalence(next_files, capabilities);
-    if (!output_valid) return std::unexpected{output_valid.error()};
-
-    for (const auto& [relative, file] : next_files) {
-        auto existing = find_equivalent_manifest_path(next_manifest, relative, capabilities);
-        if (!existing) return std::unexpected{existing.error()};
-        if (*existing) next_manifest.files.erase(**existing);
-        next_manifest.files.insert_or_assign(relative, sha256(file->content));
-    }
-    auto next_manifest_valid = validate_manifest_equivalence(next_manifest, capabilities);
-    if (!next_manifest_valid) return std::unexpected{next_manifest_valid.error()};
-
-    struct Pending { std::filesystem::path destination; std::string content; };
-    std::vector<Pending> writes; std::vector<std::filesystem::path> removals;
-    if (options.cleanup_stale) {
-        for (const auto& [relative, hash] : old_manifest->files) {
-            bool retained = false;
-            for (const auto& [next_relative, file] : next_files) {
-                (void)file;
-                auto equivalent = capabilities.equivalent(relative, next_relative);
-                if (!equivalent) return std::unexpected{equivalent.error()};
-                if (*equivalent) {
-                    retained = true;
-                    break;
-                }
-            }
-            if (retained) continue;
-
-            auto checked = normalize_relative_path(path_from_utf8(relative));
-            if (!checked) return std::unexpected{checked.error()};
-            auto parent = reject_symlink_parents(project_root_, path_from_utf8(*checked), capabilities);
-            if (!parent) return std::unexpected{parent.error()};
-            auto resolved_destination = resolve_existing_alias(project_root_, path_from_utf8(relative), capabilities);
-            if (!resolved_destination) return std::unexpected{resolved_destination.error()};
-            const auto destination = *resolved_destination;
-            auto status = std::filesystem::symlink_status(destination, ec);
-            if (ec && !is_not_found(ec)) {
-                return std::unexpected{error("cannot inspect stale file: " + ec.message(), destination.generic_string())};
-            }
-            if (is_not_found(ec)) {
-                ec.clear();
-                status = std::filesystem::file_status{};
-            }
-            if (std::filesystem::is_symlink(status) ||
-                (std::filesystem::exists(status) && !std::filesystem::is_regular_file(status))) {
-                return std::unexpected{error("owned stale path is not a regular file", relative)};
-            }
-            if (std::filesystem::exists(status)) {
-                auto current = read_file(destination);
-                if (!current) return std::unexpected{current.error()};
-                if (sha256(*current) != hash && !options.force) {
-                    return std::unexpected{error("refusing to remove a generated file modified since its recorded hash; use force to remove it", relative)};
-                }
-                removals.push_back(destination);
-            }
-        }
-    }
-    for (const auto& [relative,file] : next_files) {
-        auto resolved_destination = resolve_existing_alias(project_root_, path_from_utf8(relative), capabilities);
-        if (!resolved_destination) return std::unexpected{resolved_destination.error()};
-        const auto destination = *resolved_destination;
-        auto status = std::filesystem::symlink_status(destination, ec);
-        // A stale owned file may be an ancestor of this destination. It is
-        // scheduled for removal before writes, so treat ENOTDIR as absent here;
-        // reject_file_ancestor below still rejects every unscheduled file.
-        if (ec == std::errc::not_a_directory) ec.clear();
-        if (ec && !is_not_found(ec)) {
-            return std::unexpected{error("cannot inspect destination: " + ec.message(), destination.generic_string())};
-        }
-        if (is_not_found(ec)) {
-            ec.clear();
-            status = std::filesystem::file_status{};
-        }
-        if (std::filesystem::is_symlink(status) ||
-            (std::filesystem::exists(status) && !std::filesystem::is_regular_file(status))) {
-            return std::unexpected{error("destination must be a regular file", destination.generic_string())};
-        }
-
-        auto old_path = find_equivalent_manifest_path(*old_manifest, relative, capabilities);
-        if (!old_path) return std::unexpected{old_path.error()};
-        const bool owned = static_cast<bool>(*old_path);
-        const auto old_hash = owned ? old_manifest->files.at(**old_path) : std::string{};
-        if (std::filesystem::exists(status) && !owned && !options.force) {
-            return std::unexpected{error("refusing to replace an unowned file; use force to take ownership", relative)};
-        }
-        if (std::filesystem::exists(status) && owned) {
-            auto current = read_file(destination);
-            if (!current) return std::unexpected{current.error()};
-            if (sha256(*current) != old_hash && !options.force) {
-                return std::unexpected{error("refusing to replace a generated file modified since its recorded hash; use force to take ownership", relative)};
-            }
-        }
-        if (!std::filesystem::exists(status) || !owned) {
-            writes.push_back({destination, file->content});
-        } else {
-            auto current = read_file(destination);
-            if (!current) return std::unexpected{current.error()};
-            if (*current != file->content) writes.push_back({destination, file->content});
-        }
-    }
-    for (const auto& [relative, file] : next_files) {
-        (void)file;
-        auto ancestors = reject_file_ancestor(project_root_, path_from_utf8(relative), capabilities, removals);
-        if (!ancestors) return std::unexpected{ancestors.error()};
-    }
-    const auto rendered_manifest = render_manifest(next_manifest);
-    bool manifest_changed = true;
-    const auto manifest_exists = std::filesystem::exists(manifest_path, ec);
-    if (ec) return std::unexpected{error("cannot inspect manifest: " + ec.message(), manifest_path.generic_string())};
-    if (manifest_exists) {
-        auto existing = read_file(manifest_path);
-        if (!existing) return std::unexpected{existing.error()};
-        manifest_changed = *existing != rendered_manifest;
-    }
-    WriteResult result{writes.size(), removals.size(),
-                       !writes.empty() || !removals.empty() || manifest_changed};
-    if (options.check || options.dry_run || !result.would_change) return result;
-    std::vector<bool> prerequisite_removals(removals.size());
-    for (const auto& pending : writes) {
-        for (std::size_t index = 0; index < removals.size(); ++index) {
-            for (auto ancestor = pending.destination.parent_path(); ancestor != project_root_ && !ancestor.empty(); ancestor = ancestor.parent_path()) {
-                if (ancestor == removals[index]) {
-                    prerequisite_removals[index] = true;
-                    break;
-                }
-            }
-        }
-    }
-    for (std::size_t index = 0; index < removals.size(); ++index) if (prerequisite_removals[index]) {
-        std::filesystem::remove(removals[index], ec);
-        if (ec) return std::unexpected{error("cannot remove stale generated file: " + ec.message(), removals[index].generic_string())};
-    }
-    for(const auto& pending:writes) { std::filesystem::create_directories(pending.destination.parent_path(),ec); if(ec) return std::unexpected{error("cannot create output directory: "+ec.message(),pending.destination.parent_path().generic_string())}; }
-    std::vector<std::pair<std::filesystem::path,std::filesystem::path>> temporary; temporary.reserve(writes.size()+1);
-    std::optional<std::filesystem::path> manifest_temp;
-    auto cleanup=[&](){ for(const auto& [temp,dest]:temporary){std::error_code ignored;std::filesystem::remove(temp,ignored);} if(manifest_temp){std::error_code ignored;std::filesystem::remove(*manifest_temp,ignored);} };
-    for(const auto& pending:writes){auto temp=write_temporary(pending.destination,pending.content);if(!temp){cleanup();return std::unexpected{temp.error()};}temporary.emplace_back(*temp,pending.destination);}
-    std::filesystem::create_directories(manifest_path.parent_path(),ec); if(ec){cleanup();return std::unexpected{error("cannot create manifest directory: "+ec.message(),manifest_path.parent_path().generic_string())};}
-    auto pending_manifest_temp=write_temporary(manifest_path,rendered_manifest);if(!pending_manifest_temp){cleanup();return std::unexpected{pending_manifest_temp.error()};} manifest_temp=*pending_manifest_temp;
-    for(std::size_t index = 0; index < removals.size(); ++index) if (!prerequisite_removals[index]) { const auto& stale = removals[index]; std::filesystem::remove(stale,ec);if(ec){cleanup();return std::unexpected{error("cannot remove stale generated file: "+ec.message(),stale.generic_string())};}}
-    for(const auto& [temp,destination]:temporary){auto replaced=replace_file(temp,destination);if(!replaced){cleanup();return std::unexpected{replaced.error()};}}
-    auto replaced=replace_file(*manifest_temp,manifest_path);if(!replaced){cleanup();return std::unexpected{replaced.error()};}
-    return result;
+    auto plan = prepare_write(project_root_, files, options, capabilities);
+    if (!plan) return std::unexpected{plan.error()};
+    if (options.check || options.dry_run || !plan->result.would_change) return plan->result;
+    auto transaction = start_transaction(project_root_, *plan);
+    if (!transaction) return std::unexpected{transaction.error()};
+    return execute_transaction(std::move(*transaction), plan->result);
 }
 
 Result<WriteResult> SafeWriter::clean(bool dry_run, bool force) const {
@@ -1317,74 +2696,25 @@ Result<WriteResult> SafeWriter::clean(bool dry_run, bool force) const {
     if (!std::filesystem::is_directory(project_root_, ec) || ec) {
         return std::unexpected{error("project root must be an existing directory", project_root_.generic_string())};
     }
-
     auto detected_capabilities = detect_filesystem_capabilities(project_root_);
     if (!detected_capabilities) return std::unexpected{detected_capabilities.error()};
     const auto& capabilities = *detected_capabilities;
-
-    const auto manifest_path = project_root_ / manifest_relative_path;
-    auto resolved_manifest = resolve_existing_alias(project_root_, manifest_relative_path, capabilities);
-    if (!resolved_manifest) return std::unexpected{resolved_manifest.error()};
-    if (*resolved_manifest != manifest_path) {
-        return std::unexpected{error("manifest has a portable path alias", resolved_manifest->generic_string())};
+    auto pending = pending_transaction_for_read_only_operation(project_root_, capabilities);
+    if (!pending) return std::unexpected{pending.error()};
+    if (*pending) {
+        if (dry_run) {
+            return std::unexpected{error("a pending SafeWriter transaction requires recovery; clean dry-run performed no writes",
+                                         transaction_directory(project_root_).generic_string())};
+        }
+        auto recovered = recover_pending_transaction(project_root_, capabilities);
+        if (!recovered) return std::unexpected{recovered.error()};
     }
-    auto manifest_parent = reject_symlink_parents(project_root_, manifest_relative_path, capabilities);
-    if (!manifest_parent) return std::unexpected{manifest_parent.error()};
-    auto manifest = load_manifest(manifest_path);
-    if (!manifest) return std::unexpected{manifest.error()};
-    auto manifest_valid = validate_manifest_equivalence(*manifest, capabilities);
-    if (!manifest_valid) return std::unexpected{manifest_valid.error()};
-
-    WriteResult result{};
-    for (const auto& [relative, hash] : manifest->files) {
-        auto valid = normalize_relative_path(path_from_utf8(relative));
-        if (!valid) return std::unexpected{valid.error()};
-        auto unicode_valid = validate_target_unicode_capability(capabilities, *valid);
-        if (!unicode_valid) return std::unexpected{unicode_valid.error()};
-        auto parents = reject_symlink_parents(project_root_, path_from_utf8(*valid), capabilities);
-        if (!parents) return std::unexpected{parents.error()};
-        auto resolved_path = resolve_existing_alias(project_root_, path_from_utf8(relative), capabilities);
-        if (!resolved_path) return std::unexpected{resolved_path.error()};
-        const auto path = *resolved_path;
-        auto status = std::filesystem::symlink_status(path, ec);
-        if (ec && !is_not_found(ec)) {
-            return std::unexpected{error("cannot inspect owned file: " + ec.message(), path.generic_string())};
-        }
-        if (is_not_found(ec)) {
-            ec.clear();
-            status = std::filesystem::file_status{};
-        }
-        if (std::filesystem::is_symlink(status) ||
-            (std::filesystem::exists(status) && !std::filesystem::is_regular_file(status))) {
-            return std::unexpected{error("owned path is not a regular file", relative)};
-        }
-        if (std::filesystem::exists(status)) {
-            auto current = read_file(path);
-            if (!current) return std::unexpected{current.error()};
-            if (sha256(*current) != hash && !force) {
-                return std::unexpected{error("refusing to remove a generated file modified since its recorded hash; use force to remove it", relative)};
-            }
-            ++result.files_removed;
-            result.would_change = true;
-        }
-    }
-
-    const auto manifest_exists = std::filesystem::exists(manifest_path, ec);
-    if (ec) return std::unexpected{error("cannot inspect manifest: " + ec.message(), manifest_path.generic_string())};
-    if (manifest_exists) result.would_change = true;
-    if (dry_run || !result.would_change) return result;
-
-    for (const auto& [relative, hash] : manifest->files) {
-        (void)hash;
-        auto resolved_path = resolve_existing_alias(project_root_, path_from_utf8(relative), capabilities);
-        if (!resolved_path) return std::unexpected{resolved_path.error()};
-        std::filesystem::remove(*resolved_path, ec);
-        if (ec) return std::unexpected{error("cannot remove owned file: " + ec.message(), relative)};
-    }
-    std::filesystem::remove(manifest_path, ec);
-    if (ec) return std::unexpected{error("cannot remove manifest: " + ec.message(), manifest_path.generic_string())};
-    std::filesystem::remove(manifest_path.parent_path(), ec);
-    return result;
+    auto plan = prepare_clean(project_root_, force, capabilities);
+    if (!plan) return std::unexpected{plan.error()};
+    if (dry_run || !plan->result.would_change) return plan->result;
+    auto transaction = start_transaction(project_root_, *plan);
+    if (!transaction) return std::unexpected{transaction.error()};
+    return execute_transaction(std::move(*transaction), plan->result);
 }
 
 } // namespace cmakegen

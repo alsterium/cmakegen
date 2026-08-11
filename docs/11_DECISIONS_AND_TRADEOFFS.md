@@ -250,3 +250,26 @@ This changes the normalized public type of string scoped entries from
 unwrap `value`, so valid generated CMake and normalized dump output remain
 byte-for-byte unchanged. Dependency collection types and their direct members
 are unchanged.
+
+## ADR-014 — SafeWriter publishes multi-file output through a recoverable transaction
+
+Decision:
+
+SafeWriter creates a deterministic journal, pre/post manifest metadata, and
+numbered backups before replacing generated outputs. It replaces the manifest
+last. A replacement failure is rolled back in reverse order and the old output
+set is verified before the failure is reported. If rollback or automatic
+recovery cannot complete, the transaction remains explicitly uncommitted under
+`.cmakegen/transaction/` for operator recovery.
+
+Why:
+
+- sequential filesystem replacement can expose a partial generated tree
+- the manifest must never claim ownership of an incomplete new tree
+- deterministic artifacts make recovery auditable and safe to retry
+
+Tradeoff:
+
+Successful writes temporarily use additional disk space for backups and
+metadata. Check and dry-run remain write-free; successful transactions remove
+all transaction artifacts after commit verification.

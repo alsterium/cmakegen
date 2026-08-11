@@ -270,12 +270,24 @@ Write pattern:
 
 1. render all outputs in memory
 2. validate target destinations
-3. write sibling temporary files
-4. flush/close
-5. atomically replace where supported
-6. update manifest last
+3. create a deterministic transaction journal with pre/post manifest metadata
+   and output backups
+4. write sibling temporary files and flush/close
+5. move existing owned outputs into the transaction backups
+6. atomically replace outputs where supported
+7. update the manifest last
+8. remove journal, backups, and temporary files only after commit verification
 
 A failed render must produce no partial generated project.
+
+If replacement or manifest publication fails, SafeWriter rolls back in reverse
+order and verifies the pre-transaction hashes and manifest bytes before
+reporting the failure. If rollback or automatic recovery fails, it writes a
+deterministic uncommitted state under `.cmakegen/transaction/` containing
+`journal.json`, `pre-manifest.json`, `post-manifest.json`, and `backups/`.
+Check and dry-run stop before creating that state. Recovery never deletes
+unowned files and does not advance the manifest until the complete post-state
+has been verified.
 
 ## 12. Self-host architecture
 
