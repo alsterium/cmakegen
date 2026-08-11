@@ -40,6 +40,20 @@ TEST_CASE("human diagnostics retain the documented shape and can suppress color"
     CHECK(cmakegen::format_diagnostic(diagnostic, {.color = true}).find("\x1b[31m") == 0);
 }
 
+TEST_CASE("human diagnostics preserve scoped entry provenance") {
+    const cmakegen::Diagnostic diagnostic{
+        std::string{cmakegen::diagnostic_codes::semantic_error},
+        cmakegen::DiagnosticSeverity::error,
+        "interface libraries only allow interface scope",
+        "targets.Headers.platform.linux.includeDirectories.public[0]",
+        cmakegen::SourceLocation{17, 20},
+    };
+
+    CHECK(cmakegen::format_diagnostic(diagnostic) ==
+          "error[CMG3001]: interface libraries only allow interface scope\n"
+          "  at targets.Headers.platform.linux.includeDirectories.public[0] (line 17, column 20)");
+}
+
 TEST_CASE("results transport diagnostics without exceptions") {
     cmakegen::DiagnosticSet diagnostics;
     diagnostics.add({"CMG1001", cmakegen::DiagnosticSeverity::error, "unsupported schema version", "schemaVersion", std::nullopt});

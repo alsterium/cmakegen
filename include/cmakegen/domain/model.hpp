@@ -2,10 +2,12 @@
 
 #include "cmakegen/diagnostics/diagnostic.hpp"
 
+#include <concepts>
 #include <cstdint>
 #include <map>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace cmakegen {
@@ -20,6 +22,34 @@ struct ScopedValues {
     std::vector<T> public_values;
     std::vector<T> interface_values;
 };
+
+// A normalized scoped string retains the YAML entry that produced its
+// effective value.  The renderer consumes only value, while semantic
+// validation can use the provenance to point at the exact offending entry.
+template <typename T>
+struct ScopedValue {
+    T value;
+    std::string diagnostic_path;
+    std::optional<SourceLocation> diagnostic_location;
+
+    ScopedValue() = default;
+    ScopedValue(T value) : value(std::move(value)) {}
+    template <typename U>
+        requires std::constructible_from<T, U>
+    ScopedValue(U&& value) : value(std::forward<U>(value)) {}
+    ScopedValue(T value, std::string diagnostic_path,
+                std::optional<SourceLocation> diagnostic_location)
+        : value(std::move(value)), diagnostic_path(std::move(diagnostic_path)),
+          diagnostic_location(diagnostic_location) {}
+
+    ScopedValue& operator=(T new_value) {
+        value = std::move(new_value);
+        return *this;
+    }
+};
+
+using ScopedStringValue = ScopedValue<std::string>;
+using ScopedStringValues = ScopedValues<ScopedStringValue>;
 
 struct SourceEntry {
     std::string path;
@@ -53,9 +83,9 @@ struct LinkDependency {
 
 struct TargetOverride {
     std::vector<SourceEntry> sources;
-    ScopedValues<std::string> include_directories;
-    ScopedValues<std::string> definitions;
-    ScopedValues<std::string> compile_options;
+    ScopedStringValues include_directories;
+    ScopedStringValues definitions;
+    ScopedStringValues compile_options;
     ScopedValues<LinkDependency> dependencies;
 };
 
@@ -71,9 +101,9 @@ struct Target {
     std::string diagnostic_path;
     std::optional<SourceLocation> diagnostic_location;
     std::vector<SourceEntry> sources;
-    ScopedValues<std::string> include_directories;
-    ScopedValues<std::string> definitions;
-    ScopedValues<std::string> compile_options;
+    ScopedStringValues include_directories;
+    ScopedStringValues definitions;
+    ScopedStringValues compile_options;
     ScopedValues<LinkDependency> dependencies;
     PlatformOverrides platform;
 };

@@ -108,11 +108,11 @@ void render_target_override(Text& text, const Target& target, const TargetOverri
                             const std::vector<ResolvedSource>& sources) {
     render_sources(text, target, sources);
     render_scoped_command(text, "target_include_directories", target.name, override.include_directories,
-                          [](const std::string& value) { return cmake_argument(value); });
+                          [](const ScopedStringValue& value) { return cmake_argument(value.value); });
     render_scoped_command(text, "target_compile_definitions", target.name, override.definitions,
-                          [](const std::string& value) { return cmake_argument(value); });
+                          [](const ScopedStringValue& value) { return cmake_argument(value.value); });
     render_scoped_command(text, "target_compile_options", target.name, override.compile_options,
-                          [](const std::string& value) { return cmake_argument(value); });
+                          [](const ScopedStringValue& value) { return cmake_argument(value.value); });
     render_scoped_command(text, "target_link_libraries", target.name, override.dependencies,
                           [](const LinkDependency& value) { return cmake_argument(value.name); });
 }
@@ -127,11 +127,11 @@ void render_target(Text& text, const Target& target, const ResolvedTargetSources
 
     render_sources(text, target, resolved ? resolved->common : std::vector<ResolvedSource>{});
     render_scoped_command(text, "target_include_directories", target.name, target.include_directories,
-                          [](const std::string& value) { return cmake_argument(value); });
+                          [](const ScopedStringValue& value) { return cmake_argument(value.value); });
     render_scoped_command(text, "target_compile_definitions", target.name, target.definitions,
-                          [](const std::string& value) { return cmake_argument(value); });
+                          [](const ScopedStringValue& value) { return cmake_argument(value.value); });
     render_scoped_command(text, "target_compile_options", target.name, target.compile_options,
-                          [](const std::string& value) { return cmake_argument(value); });
+                          [](const ScopedStringValue& value) { return cmake_argument(value.value); });
     render_scoped_command(text, "target_link_libraries", target.name, target.dependencies,
                           [](const LinkDependency& value) { return cmake_argument(value.name); });
 }

@@ -7,6 +7,7 @@
 #include <functional>
 #include <set>
 #include <string_view>
+#include <utility>
 
 namespace cmakegen {
 namespace {
@@ -152,6 +153,15 @@ void add_semantic_error(DiagnosticSet& diagnostics, std::string path, std::strin
                      std::move(message), std::move(path), std::nullopt});
 }
 
+template <typename Entry>
+void add_scoped_semantic_error(DiagnosticSet& diagnostics, const Entry& entry,
+                               std::string fallback_path, std::string message) {
+    diagnostics.add({std::string{diagnostic_codes::semantic_error}, DiagnosticSeverity::error,
+                     std::move(message), entry.diagnostic_path.empty() ? std::move(fallback_path)
+                                                                        : entry.diagnostic_path,
+                     entry.diagnostic_location});
+}
+
 void add_source_semantic_error(DiagnosticSet& diagnostics, const SourceEntry& source,
                                std::string fallback_path, std::string message) {
     diagnostics.add({std::string{diagnostic_codes::semantic_error}, DiagnosticSeverity::error,
@@ -188,17 +198,24 @@ void validate_literal_cmake_argument(DiagnosticSet& diagnostics, const std::stri
 template <typename T, typename Value>
 void validate_scoped_literal_cmake_arguments(DiagnosticSet& diagnostics, const ScopedValues<T>& values,
                                              const std::string& path, Value value) {
-    const auto validate_scope = [&](const std::vector<T>& scope_values, std::string_view scope) {
+    const auto validate_scope = [&](const auto& scope_values, std::string_view scope) {
         for (std::size_t index = 0; index < scope_values.size(); ++index) {
-            const auto item = value(scope_values[index]);
-            validate_literal_cmake_argument(diagnostics,
-                                            path + "." + std::string{scope} + "[" +
-                                                std::to_string(index) + "]",
-                                            item);
+            const auto& entry = scope_values[index];
+            const auto item = value(entry);
+            const auto fallback_path = path + "." + std::string{scope} + "[" +
+                                       std::to_string(index) + "]";
+            if (item.contains("${") || item.contains("$<") || item.contains("$(")) {
+                add_scoped_semantic_error(
+                    diagnostics, entry, fallback_path,
+                    "literal CMake arguments must not contain evaluated dollar syntax");
+            }
+            if (item.contains('\n') || item.contains('\r')) {
+                add_scoped_semantic_error(diagnostics, entry, fallback_path,
+                                          "literal CMake arguments must not contain line breaks");
+            }
             if (item == "PUBLIC" || item == "PRIVATE" || item == "INTERFACE") {
-                add_semantic_error(diagnostics, path + "." + std::string{scope} + "[" +
-                                                   std::to_string(index) + "]",
-                                   "literal CMake arguments must not equal a scope keyword");
+                add_scoped_semantic_error(diagnostics, entry, fallback_path,
+                                          "literal CMake arguments must not equal a scope keyword");
             }
         }
     };
@@ -207,15 +224,16 @@ void validate_scoped_literal_cmake_arguments(DiagnosticSet& diagnostics, const S
     validate_scope(values.interface_values, "interface");
 }
 
-void validate_compile_definitions(DiagnosticSet& diagnostics, const ScopedValues<std::string>& values,
+void validate_compile_definitions(DiagnosticSet& diagnostics, const ScopedStringValues& values,
                                   const std::string& path) {
-    const auto validate = [&](const std::vector<std::string>& entries, std::string_view scope) {
+    const auto validate = [&](const auto& entries, std::string_view scope) {
         for (std::size_t index = 0; index < entries.size(); ++index) {
             const auto& entry = entries[index];
-            if (entry.contains('#') || entry.find('(') < entry.find('=')) {
-                add_semantic_error(diagnostics, path + "." + std::string{scope} + "[" +
-                                                   std::to_string(index) + "]",
-                                   "compile definitions must not contain '#' or function-style syntax");
+            if (entry.value.contains('#') || entry.value.find('(') < entry.value.find('=')) {
+                add_scoped_semantic_error(
+                    diagnostics, entry,
+                    path + "." + std::string{scope} + "[" + std::to_string(index) + "]",
+                    "compile definitions must not contain '#' or function-style syntax");
             }
         }
     };
@@ -227,14 +245,15 @@ void validate_compile_definitions(DiagnosticSet& diagnostics, const ScopedValues
 void validate_interface_scopes(DiagnosticSet& diagnostics, const Target& target,
                                const std::string& path) {
     const auto validate_scopes = [&](const auto& values, const std::string& property_path) {
-        if (!values.private_values.empty()) {
-            add_semantic_error(diagnostics, property_path + ".private",
-                               "interface libraries only allow interface scope");
-        }
-        if (!values.public_values.empty()) {
-            add_semantic_error(diagnostics, property_path + ".public",
-                               "interface libraries only allow interface scope");
-        }
+        const auto validate_scope = [&](const auto& entries, std::string_view scope) {
+            for (std::size_t index = 0; index < entries.size(); ++index) {
+                add_scoped_semantic_error(
+                    diagnostics, entries[index], property_path + "." + std::string{scope},
+                    "interface libraries only allow interface scope");
+            }
+        };
+        validate_scope(values.private_values, "private");
+        validate_scope(values.public_values, "public");
     };
     validate_scopes(target.include_directories, path + ".includeDirectories");
     validate_scopes(target.definitions, path + ".definitions");
@@ -389,15 +408,17 @@ void validate_dependencies(DiagnosticSet& diagnostics, const ScopedValues<LinkDe
     const auto validate_scope = [&](const std::vector<LinkDependency>& values, std::string_view scope) {
         for (std::size_t index = 0; index < values.size(); ++index) {
             if (values[index].name.contains(';')) {
-                add_semantic_error(diagnostics, path + "." + std::string{scope} + "[" +
-                                                   std::to_string(index) + "]",
-                                   "dependency names must not contain semicolons");
+                add_scoped_semantic_error(
+                    diagnostics, values[index],
+                    path + "." + std::string{scope} + "[" + std::to_string(index) + "]",
+                    "dependency names must not contain semicolons");
             }
             if (is_link_mode_keyword(values[index].name)) {
-                add_semantic_error(diagnostics, path + "." + std::string{scope} + "[" +
-                                                   std::to_string(index) + "]",
-                                   "dependency name is reserved as a CMake link-mode keyword: " +
-                                       values[index].name);
+                add_scoped_semantic_error(
+                    diagnostics, values[index],
+                    path + "." + std::string{scope} + "[" + std::to_string(index) + "]",
+                    "dependency name is reserved as a CMake link-mode keyword: " +
+                        values[index].name);
             }
         }
     };
@@ -643,14 +664,14 @@ Result<TargetGraph> validate_project(const Project& project,
         validate_sources(diagnostics, target, path, project, resolved_sources);
         validate_scoped_literal_cmake_arguments(
             diagnostics, target.include_directories, path + ".includeDirectories",
-            [](const std::string& value) -> std::string_view { return value; });
+            [](const ScopedStringValue& value) -> std::string_view { return value.value; });
         validate_scoped_literal_cmake_arguments(
             diagnostics, target.definitions, path + ".definitions",
-            [](const std::string& value) -> std::string_view { return value; });
+            [](const ScopedStringValue& value) -> std::string_view { return value.value; });
         validate_compile_definitions(diagnostics, target.definitions, path + ".definitions");
         validate_scoped_literal_cmake_arguments(
             diagnostics, target.compile_options, path + ".compileOptions",
-            [](const std::string& value) -> std::string_view { return value; });
+            [](const ScopedStringValue& value) -> std::string_view { return value.value; });
         validate_scoped_literal_cmake_arguments(
             diagnostics, target.dependencies, path + ".dependencies",
             [](const LinkDependency& value) -> std::string_view { return value.name; });
@@ -659,15 +680,15 @@ Result<TargetGraph> validate_project(const Project& project,
             const auto platform_path = path + ".platform." + std::string{platform};
             validate_scoped_literal_cmake_arguments(
                 diagnostics, override.include_directories, platform_path + ".includeDirectories",
-                [](const std::string& value) -> std::string_view { return value; });
+                [](const ScopedStringValue& value) -> std::string_view { return value.value; });
             validate_scoped_literal_cmake_arguments(
                 diagnostics, override.definitions, platform_path + ".definitions",
-                [](const std::string& value) -> std::string_view { return value; });
+                [](const ScopedStringValue& value) -> std::string_view { return value.value; });
             validate_compile_definitions(diagnostics, override.definitions,
                                          platform_path + ".definitions");
             validate_scoped_literal_cmake_arguments(
                 diagnostics, override.compile_options, platform_path + ".compileOptions",
-                [](const std::string& value) -> std::string_view { return value; });
+                [](const ScopedStringValue& value) -> std::string_view { return value.value; });
             validate_scoped_literal_cmake_arguments(
                 diagnostics, override.dependencies, platform_path + ".dependencies",
                 [](const LinkDependency& value) -> std::string_view { return value.name; });

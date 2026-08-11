@@ -240,6 +240,53 @@ TEST_CASE("interface libraries reject non-interface scopes and implementation so
     CHECK(diagnostics[3].message == "interface libraries cannot contain implementation sources");
 }
 
+TEST_CASE("interface scoped diagnostics retain common and platform entry provenance") {
+    const auto raw = parse_raw_spec(R"(
+schemaVersion: 1
+name: example
+targets:
+  Headers:
+    type: interfaceLibrary
+    includeDirectories:
+      private: [include/private]
+      public: [include/public]
+    definitions:
+      public: [HEADER_PUBLIC=1]
+    compileOptions:
+      private: [-Wall]
+    platform:
+      linux:
+        includeDirectories:
+          public: [linux/include]
+        definitions:
+          private: [LINUX=1]
+        compileOptions:
+          public: [-Wextra]
+)");
+    REQUIRE(raw);
+
+    const auto result = validate_project(normalize_project(*raw));
+    REQUIRE_FALSE(result);
+    const auto& diagnostics = result.error().diagnostics();
+    REQUIRE(diagnostics.size() == 7);
+
+    const std::vector<std::pair<std::string, SourceLocation>> expected{
+        {"targets.Headers.compileOptions.private[0]", {13, 17}},
+        {"targets.Headers.definitions.public[0]", {11, 16}},
+        {"targets.Headers.includeDirectories.private[0]", {8, 17}},
+        {"targets.Headers.includeDirectories.public[0]", {9, 16}},
+        {"targets.Headers.platform.linux.compileOptions.public[0]", {21, 20}},
+        {"targets.Headers.platform.linux.definitions.private[0]", {19, 21}},
+        {"targets.Headers.platform.linux.includeDirectories.public[0]", {17, 20}},
+    };
+    for (std::size_t index = 0; index < expected.size(); ++index) {
+        CHECK(diagnostics[index].path == expected[index].first);
+        REQUIRE(diagnostics[index].location);
+        CHECK(*diagnostics[index].location == expected[index].second);
+        CHECK(diagnostics[index].message == "interface libraries only allow interface scope");
+    }
+}
+
 TEST_CASE("source semantic diagnostics retain declaration provenance") {
     auto interface_target = target("Headers", TargetType::interface_library);
     SourceLocation location{12, 7};

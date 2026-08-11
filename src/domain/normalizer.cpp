@@ -115,11 +115,26 @@ namespace {
     return source;
 }
 
-template <typename T, typename Transform>
-[[nodiscard]] ScopedValues<T> normalize_scoped(const RawScopedValues<std::string>& raw,
-                                                Transform transform) {
+template <typename Transform>
+[[nodiscard]] ScopedStringValues normalize_scoped(const RawScopedValues<std::string>& raw,
+                                                  Transform transform) {
     auto normalize_values = [&transform](const auto& values) {
-        std::vector<T> normalized;
+        std::vector<ScopedStringValue> normalized;
+        normalized.reserve(values.size());
+        for (const auto& value : values) {
+            normalized.push_back({transform(value), value.path, value.location});
+        }
+        return normalized;
+    };
+    return {normalize_values(raw.private_values), normalize_values(raw.public_values),
+            normalize_values(raw.interface_values)};
+}
+
+template <typename Transform>
+[[nodiscard]] ScopedValues<LinkDependency> normalize_dependencies(
+    const RawScopedValues<std::string>& raw, Transform transform) {
+    auto normalize_values = [&transform](const auto& values) {
+        std::vector<LinkDependency> normalized;
         normalized.reserve(values.size());
         for (const auto& value : values) normalized.push_back(transform(value));
         return normalized;
@@ -140,11 +155,11 @@ template <typename T, typename Transform>
     TargetOverride result;
     result.sources.reserve(raw.sources.size());
     for (const auto& source : raw.sources) result.sources.push_back(normalize_source(source));
-    result.include_directories = normalize_scoped<std::string>(
+    result.include_directories = normalize_scoped(
         raw.include_directories, [](const auto& value) { return normalize_path(value.value); });
-    result.definitions = normalize_scoped<std::string>(raw.definitions, [](const auto& value) { return value.value; });
-    result.compile_options = normalize_scoped<std::string>(raw.compile_options, [](const auto& value) { return value.value; });
-    result.dependencies = normalize_scoped<LinkDependency>(
+    result.definitions = normalize_scoped(raw.definitions, [](const auto& value) { return value.value; });
+    result.compile_options = normalize_scoped(raw.compile_options, [](const auto& value) { return value.value; });
+    result.dependencies = normalize_dependencies(
         raw.dependencies, [&spec](const auto& value) { return normalize_dependency(value, spec); });
     return result;
 }
@@ -157,11 +172,11 @@ template <typename T, typename Transform>
     result.type = normalize_target_type(raw.type.value);
     result.sources.reserve(raw.sources.size());
     for (const auto& source : raw.sources) result.sources.push_back(normalize_source(source));
-    result.include_directories = normalize_scoped<std::string>(
+    result.include_directories = normalize_scoped(
         raw.include_directories, [](const auto& value) { return normalize_path(value.value); });
-    result.definitions = normalize_scoped<std::string>(raw.definitions, [](const auto& value) { return value.value; });
-    result.compile_options = normalize_scoped<std::string>(raw.compile_options, [](const auto& value) { return value.value; });
-    result.dependencies = normalize_scoped<LinkDependency>(
+    result.definitions = normalize_scoped(raw.definitions, [](const auto& value) { return value.value; });
+    result.compile_options = normalize_scoped(raw.compile_options, [](const auto& value) { return value.value; });
+    result.dependencies = normalize_dependencies(
         raw.dependencies, [&spec](const auto& value) { return normalize_dependency(value, spec); });
     if (raw.macos) result.platform.macos = normalize_override(*raw.macos, spec);
     if (raw.linux) result.platform.linux = normalize_override(*raw.linux, spec);

@@ -203,3 +203,30 @@ Consequence:
 
 Case-only rename and manifest migration use the portable ASCII/Win32 identity
 first, then apply the finalized Unicode capability rules from T019.
+
+## ADR-013 — Preserve scoped string provenance in the normalized model
+
+Decision:
+
+Normalized include directories, compile definitions, and compile options use a
+`ScopedValue<T>` entry containing the effective value plus its parser path and
+optional source location. Their common and platform override collections use
+`ScopedStringValues`. Existing `LinkDependency` provenance remains on the
+dependency value itself because graph and interface-dependency validation
+already consume that shared interface.
+
+Why:
+
+Interface-library scope validation must identify the exact YAML entry that is
+invalid. Keeping provenance alongside each normalized value avoids recomputing
+locations after normalization and preserves the association when common and
+platform values are validated independently.
+
+Compatibility:
+
+This changes the normalized public type of string scoped entries from
+`std::vector<std::string>`-like values to
+`std::vector<ScopedValue<std::string>>`. Renderers and dumps deliberately
+unwrap `value`, so valid generated CMake and normalized dump output remain
+byte-for-byte unchanged. Dependency collection types and their direct members
+are unchanged.

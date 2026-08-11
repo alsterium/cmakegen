@@ -61,9 +61,12 @@ template <typename T, typename Dump>
     json sources = json::array();
     for (const auto& source : value.sources) sources.push_back(dump_source(source));
     return {{"sources", sources},
-            {"includeDirectories", dump_scoped(value.include_directories, [](const auto& item) { return item; })},
-            {"definitions", dump_scoped(value.definitions, [](const auto& item) { return item; })},
-            {"compileOptions", dump_scoped(value.compile_options, [](const auto& item) { return item; })},
+            {"includeDirectories", dump_scoped(value.include_directories,
+                                                [](const ScopedStringValue& item) { return item.value; })},
+            {"definitions", dump_scoped(value.definitions,
+                                         [](const ScopedStringValue& item) { return item.value; })},
+            {"compileOptions", dump_scoped(value.compile_options,
+                                            [](const ScopedStringValue& item) { return item.value; })},
             {"dependencies", dump_scoped(value.dependencies, dump_dependency)}};
 }
 
@@ -88,9 +91,12 @@ template <typename T, typename Dump>
         targets[name] = {{"name", target.name},
                          {"type", name_of(target.type)},
                          {"sources", sources},
-                         {"includeDirectories", dump_scoped(target.include_directories, [](const auto& item) { return item; })},
-                         {"definitions", dump_scoped(target.definitions, [](const auto& item) { return item; })},
-                         {"compileOptions", dump_scoped(target.compile_options, [](const auto& item) { return item; })},
+                         {"includeDirectories", dump_scoped(target.include_directories,
+                                                             [](const ScopedStringValue& item) { return item.value; })},
+                         {"definitions", dump_scoped(target.definitions,
+                                                      [](const ScopedStringValue& item) { return item.value; })},
+                         {"compileOptions", dump_scoped(target.compile_options,
+                                                         [](const ScopedStringValue& item) { return item.value; })},
                          {"dependencies", dump_scoped(target.dependencies, dump_dependency)},
                          {"platform", {{"macos", dump_override(target.platform.macos)},
                                        {"linux", dump_override(target.platform.linux)},
