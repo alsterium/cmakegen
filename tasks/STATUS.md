@@ -36,7 +36,7 @@ intentionally not included here.
 | ID | Task | Status | Difficulty | Uncertainty | Depends on | Wave |
 |---|---|---|---|---|---|---|
 | [T018](T018-interface-diagnostic-provenance.md) | Provenance-carrying interface diagnostics | done | L | medium | T008 | 14 |
-| [T019](T019-unicode-path-equivalence.md) | Unicode-aware path equivalence and collision safety | todo | L | high | T011 | 14 |
+| [T019](T019-unicode-path-equivalence.md) | Unicode-aware path equivalence and collision safety | done | L | high | T011 | 14 |
 | [T020](T020-safe-writer-transaction-recovery.md) | SafeWriter transaction rollback and recovery | todo | L | high | T011 | 14 |
 | [T021](T021-case-only-rename-and-manifest-migration.md) | Case-only rename and manifest migration | todo | M | medium | T011, T019, T020 | 15 |
 

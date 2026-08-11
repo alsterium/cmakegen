@@ -55,3 +55,25 @@ comparison handles ASCII and Win32 aliases but cannot safely emulate
 filesystem-specific Unicode case and normalization. The invariant and its
 Unicode-only extension are defined in
 [ADR-012](../docs/11_DECISIONS_AND_TRADEOFFS.md#adr-012--preserve-portable-output-identity-across-filesystems).
+
+## Execution record
+
+- Date: 2026-08-12
+- Summary: Added an explicit ASCII/Win32 portable equivalence layer and a
+  capability-aware Unicode boundary for SafeWriter. macOS APFS/HFS capability
+  detection uses `getattrlist` and Core Foundation normalization/case folding;
+  Windows uses volume/per-directory case capability queries and ordinal Unicode
+  comparison. Unsupported or indeterminate Unicode capability fails preflight.
+  The same relation now covers preflight, ownership lookup, manifest migration
+  and comparison, stale cleanup, ancestor checks, and output collisions.
+- Tests: Added isolated SafeWriter coverage for portable aliases, Win32
+  trailing-dot/space ownership, case-sensitive-host aliases, macOS Unicode
+  normalization/case behavior, deterministic distinct Unicode output, and
+  unsupported capability failure.
+- Verification: Normal and bootstrap builds passed. The isolated SafeWriter
+  suite passed all 13 runnable cases with 2 platform-appropriate skips; full
+  normal CTest passed 148/149 tests, with the unrelated pre-existing CMake
+  renderer dynamic-values test failing. Bootstrap CTest completed successfully
+  with no registered tests, and `git diff --check` passed.
+- Follow-ups: T020 remains responsible for transaction rollback/recovery, and
+  T021 remains responsible for case-only rename/manifest migration semantics.

@@ -5,6 +5,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <string_view>
 
 namespace {
 
@@ -30,6 +31,29 @@ void write_file(const std::filesystem::path& path, std::string_view content) {
     std::ifstream input(path, std::ios::binary);
     return {std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
 }
+
+[[nodiscard]] std::filesystem::path utf8_path(std::string_view value) {
+#if defined(_WIN32)
+    return std::filesystem::u8path(value);
+#else
+    return std::filesystem::path{std::string{value}};
+#endif
+}
+
+#if defined(__APPLE__) || defined(_WIN32)
+[[nodiscard]] bool filesystem_has_alias(const std::filesystem::path& root, std::string_view first,
+                                        std::string_view second) {
+    const auto first_path = root / utf8_path(first);
+    const auto second_path = root / utf8_path(second);
+    write_file(first_path, "probe\n");
+    const bool aliases = std::filesystem::exists(second_path) && read_file(second_path) == "probe\n";
+    std::error_code error;
+    std::filesystem::remove(first_path, error);
+    error.clear();
+    std::filesystem::remove(second_path, error);
+    return aliases;
+}
+#endif
 
 [[nodiscard]] cmakegen::GeneratedFileSet file_set(std::initializer_list<cmakegen::GeneratedFile> files) {
     cmakegen::GeneratedFileSet result;
@@ -240,6 +264,137 @@ TEST_CASE("safe writer rejects portable metadata aliases and output collisions d
     CHECK_FALSE(directory_destinations.add({"directory/file/", "bad\n"}));
     CHECK_FALSE(directory_destinations.add({"directory/file/.", "bad\n"}));
 }
+
+TEST_CASE("safe writer keeps portable ASCII aliases host independent") {
+    cmakegen::GeneratedFileSet files;
+    REQUIRE(files.add({"CaseSensitive.txt", "one\n"}));
+    CHECK_FALSE(files.add({"casesensitive.txt", "two\n"}));
+
+    cmakegen::GeneratedFileSet win32_aliases;
+    REQUIRE(win32_aliases.add({"output", "one\n"}));
+    CHECK_FALSE(win32_aliases.add({"output. ", "two\n"}));
+}
+
+TEST_CASE("safe writer applies Win32 trailing-dot-space aliases during ownership lookup") {
+    TemporaryDirectory fixture;
+    write_file(fixture.path() / "output", "user\n");
+    cmakegen::SafeWriter writer{fixture.path()};
+
+    CHECK_FALSE(writer.write(file_set({{"output. ", "generated\n"}})));
+    CHECK(read_file(fixture.path() / "output") == "user\n");
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/manifest.json"));
+}
+
+TEST_CASE("safe writer rejects portable aliases when a case-sensitive host stores both spellings") {
+    TemporaryDirectory fixture;
+    write_file(fixture.path() / "Foo.txt", "generated\n");
+    write_file(fixture.path() / "foo.txt", "user\n");
+
+    if (!std::filesystem::exists(fixture.path() / "Foo.txt") ||
+        !std::filesystem::exists(fixture.path() / "foo.txt") ||
+        read_file(fixture.path() / "Foo.txt") == read_file(fixture.path() / "foo.txt")) {
+        SKIP("filesystem does not support distinct case-only aliases");
+    }
+
+    cmakegen::SafeWriter writer{fixture.path()};
+    CHECK_FALSE(writer.write(file_set({{"FOO.TXT", "replacement\n"}})));
+    CHECK(read_file(fixture.path() / "Foo.txt") == "generated\n");
+    CHECK(read_file(fixture.path() / "foo.txt") == "user\n");
+}
+
+#if defined(__APPLE__)
+TEST_CASE("safe writer follows macOS Unicode normalization equivalence") {
+    TemporaryDirectory fixture;
+    const std::string composed = "caf\xc3\xa9.txt";
+    const std::string decomposed = "cafe\xcc\x81.txt";
+    const bool aliases = filesystem_has_alias(fixture.path(), composed, decomposed);
+
+    cmakegen::GeneratedFileSet files;
+    REQUIRE(files.add({utf8_path(composed), "composed\n"}));
+    REQUIRE(files.add({utf8_path(decomposed), "decomposed\n"}));
+    cmakegen::SafeWriter writer{fixture.path()};
+    const auto result = writer.write(files);
+    if (aliases) {
+        CHECK_FALSE(result);
+        CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/manifest.json"));
+    } else {
+        REQUIRE(result);
+        CHECK(std::filesystem::exists(fixture.path() / utf8_path(composed)));
+        CHECK(std::filesystem::exists(fixture.path() / utf8_path(decomposed)));
+        const auto manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+        const auto rerun = writer.write(files);
+        REQUIRE(rerun);
+        CHECK_FALSE(rerun->would_change);
+        CHECK(read_file(fixture.path() / ".cmakegen/manifest.json") == manifest);
+    }
+}
+
+TEST_CASE("safe writer uses macOS Unicode case aliases for ownership and cleanup") {
+    TemporaryDirectory fixture;
+    const std::string upper = "\xc3\x85.txt";
+    const std::string lower = "\xc3\xa5.txt";
+    if (!filesystem_has_alias(fixture.path(), upper, lower)) {
+        SKIP("filesystem is not case-insensitive for this Unicode alias");
+    }
+
+    cmakegen::SafeWriter writer{fixture.path()};
+    const auto first = writer.write(file_set({{utf8_path(upper), "first\n"}}));
+    REQUIRE(first);
+    const auto updated = writer.write(file_set({{utf8_path(lower), "second\n"}}));
+    REQUIRE(updated);
+    CHECK(updated->files_written == 1);
+    CHECK(read_file(fixture.path() / utf8_path(upper)) == "second\n");
+    REQUIRE(writer.clean());
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / utf8_path(upper)));
+}
+
+TEST_CASE("safe writer preserves distinct macOS Unicode names and manifest order") {
+    TemporaryDirectory fixture;
+    const std::string accented = "caf\xc3\xa9.txt";
+    const std::string plain = "cafe.txt";
+    CHECK_FALSE(filesystem_has_alias(fixture.path(), accented, plain));
+
+    cmakegen::GeneratedFileSet files;
+    REQUIRE(files.add({utf8_path(accented), "accented\n"}));
+    REQUIRE(files.add({utf8_path(plain), "plain\n"}));
+    cmakegen::SafeWriter writer{fixture.path()};
+    const auto result = writer.write(files);
+    REQUIRE(result);
+    const auto manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+    const auto rerun = writer.write(files);
+    REQUIRE(rerun);
+    CHECK_FALSE(rerun->would_change);
+    CHECK(read_file(fixture.path() / ".cmakegen/manifest.json") == manifest);
+}
+#elif defined(_WIN32)
+TEST_CASE("safe writer follows Windows Unicode case capability") {
+    TemporaryDirectory fixture;
+    const std::string upper = "\xc3\x85.txt";
+    const std::string lower = "\xc3\xa5.txt";
+    const bool aliases = filesystem_has_alias(fixture.path(), upper, lower);
+
+    cmakegen::GeneratedFileSet files;
+    REQUIRE(files.add({utf8_path(upper), "upper\n"}));
+    REQUIRE(files.add({utf8_path(lower), "lower\n"}));
+    cmakegen::SafeWriter writer{fixture.path()};
+    const auto result = writer.write(files);
+    if (aliases) {
+        CHECK_FALSE(result);
+    } else {
+        REQUIRE(result);
+        CHECK(std::filesystem::exists(fixture.path() / utf8_path(upper)));
+        CHECK(std::filesystem::exists(fixture.path() / utf8_path(lower)));
+    }
+}
+#else
+TEST_CASE("safe writer fails safely when Unicode filesystem capability is unsupported") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    const auto result = writer.write(file_set({{"caf\xc3\xa9.txt", "content\n"}}));
+    CHECK_FALSE(result);
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/manifest.json"));
+}
+#endif
 
 TEST_CASE("safe writer recognizes manifest ownership through portable path aliases") {
     TemporaryDirectory fixture;

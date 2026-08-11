@@ -42,6 +42,10 @@ target_link_libraries(cmakegen_core PUBLIC
     yaml-cpp::yaml-cpp
     nlohmann_json::nlohmann_json
 )
+if(APPLE)
+    find_library(CMAKEGEN_COREFOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
+    target_link_libraries(cmakegen_core PUBLIC "${CMAKEGEN_COREFOUNDATION_FRAMEWORK}")
+endif()
 
 add_executable(cmakegen "${CMAKE_CURRENT_LIST_DIR}/../src/main.cpp")
 target_link_libraries(cmakegen PRIVATE cmakegen_core CLI11::CLI11)
