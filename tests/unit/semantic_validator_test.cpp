@@ -233,7 +233,7 @@ TEST_CASE("interface libraries reject non-interface scopes and implementation so
     REQUIRE_FALSE(result);
     const auto& diagnostics = result.error().diagnostics();
     REQUIRE(diagnostics.size() == 4);
-    CHECK(diagnostics[0].path == "targets.Headers.includeDirectories.private");
+    CHECK(diagnostics[0].path == "targets.Headers.includeDirectories.private[0]");
     CHECK(diagnostics[1].path == "targets.Headers.platform.linux.dependencies.public[0]");
     CHECK(diagnostics[2].message ==
           "interface libraries cannot contain implementation sources: src/automatic.cpp");

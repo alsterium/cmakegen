@@ -67,3 +67,11 @@ current diagnostic retains the scope but not the exact YAML entry location.
 - Generated files: unchanged; bootstrap source drift and self-host generated
   output remain synchronized.
 - Follow-ups: none.
+
+### Review follow-up
+
+- Added the scoped-entry index to interface-scope fallback diagnostic paths so
+  manually constructed projects distinguish multiple invalid values.
+- Verification: normal configure/build passed; the targeted CTest filter was
+  not registered by this build, so the built test executable was used for the
+  relevant regression coverage.

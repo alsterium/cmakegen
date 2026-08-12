@@ -248,7 +248,8 @@ void validate_interface_scopes(DiagnosticSet& diagnostics, const Target& target,
         const auto validate_scope = [&](const auto& entries, std::string_view scope) {
             for (std::size_t index = 0; index < entries.size(); ++index) {
                 add_scoped_semantic_error(
-                    diagnostics, entries[index], property_path + "." + std::string{scope},
+                    diagnostics, entries[index],
+                    property_path + "." + std::string{scope} + "[" + std::to_string(index) + "]",
                     "interface libraries only allow interface scope");
             }
         };
