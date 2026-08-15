@@ -140,10 +140,11 @@ intended post-state.
   journal-less backup validation. Added lifetime-lock contention and retained
   backup corruption coverage, plus symlinked backup-parent cleanup and
   symlinked post-state output-parent recovery coverage and staging-path
-  ancestor collision coverage. The existing Windows locked-file test now
-  exercises the pre-hash-preservation path.
+  ancestor collision coverage. Backup parents are also revalidated before
+  restoration. The existing Windows locked-file test now exercises the
+  pre-hash-preservation path.
 - Verification: `cmake --build build/t020-normal --parallel 2` and
   `cmake --build build/t020-bootstrap --parallel 2` passed;
-  `build/t020-normal/cmakegen_tests "safe writer*"` passed with 28 runnable
-  cases, 3 platform-appropriate skips, and 240 assertions; `git diff --check`
+  `build/t020-normal/cmakegen_tests "safe writer*"` passed with 29 runnable
+  cases, 3 platform-appropriate skips, and 248 assertions; `git diff --check`
   passed. CI failures remain outside this task.

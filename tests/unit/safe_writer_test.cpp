@@ -408,6 +408,36 @@ TEST_CASE("safe writer refuses symlinked backup parents during cleanup") {
     CHECK(std::filesystem::exists(transaction / "journal.json"));
 }
 
+TEST_CASE("safe writer refuses symlinked backup parents during restoration") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    const auto next = file_set({{"generated.txt", "new\n"}});
+
+    {
+        FailureInjectionScope injection{{FailurePoint::during_replacement, 0}};
+        cmakegen::detail::safe_writer_testing::queue_failure_injection({FailurePoint::rollback, 0});
+        const auto result = writer.write(next);
+        REQUIRE_FALSE(result);
+        CHECK(result.error().diagnostics().front().message.find("requires operator recovery") != std::string::npos);
+    }
+
+    const auto transaction = fixture.path() / ".cmakegen/transaction";
+    const auto external_backups = fixture.path() / "external-restoration-backups";
+    std::filesystem::create_directories(external_backups);
+    write_file(external_backups / "000000.bak", "external backup\n");
+    std::error_code error;
+    std::filesystem::rename(transaction / "backups", fixture.path() / "parked-restoration-backups", error);
+    REQUIRE_FALSE(error);
+    std::filesystem::create_directory_symlink(external_backups, transaction / "backups", error);
+    if (error) SKIP("filesystem cannot create directory symlinks");
+
+    const auto recovery = writer.write(next);
+    REQUIRE_FALSE(recovery);
+    CHECK(recovery.error().diagnostics().front().message.find("symbolic link") != std::string::npos);
+    CHECK(read_file(external_backups / "000000.bak") == "external backup\n");
+    CHECK(std::filesystem::exists(transaction / "journal.json"));
+}
+
 TEST_CASE("safe writer rejects symlinked parents while confirming post-state") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};

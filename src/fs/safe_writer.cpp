@@ -2129,6 +2129,8 @@ private:
 
     auto destination_parents = validate_recovery_path_parents(transaction, entry.destination);
     if (!destination_parents) return std::unexpected{destination_parents.error()};
+    auto backup_parents = validate_recovery_path_parents(transaction, entry.backup);
+    if (!backup_parents) return std::unexpected{backup_parents.error()};
 
     std::filesystem::file_status backup_status;
     auto inspected_backup = safe_status(entry.backup, backup_status);
@@ -2201,6 +2203,8 @@ private:
     }
     destination_parents = validate_recovery_path_parents(transaction, entry.destination);
     if (!destination_parents) return std::unexpected{destination_parents.error()};
+    backup_parents = validate_recovery_path_parents(transaction, entry.backup);
+    if (!backup_parents) return std::unexpected{backup_parents.error()};
     auto restored = move_to_backup(entry.backup, entry.destination);
     if (!restored) return std::unexpected{restored.error()};
     entry.status = TransactionEntryStatus::restored;
