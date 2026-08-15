@@ -2430,11 +2430,18 @@ private:
         };
         for (const auto& candidate : candidates) {
             if (candidate.empty()) continue;
-            auto equivalent = transaction.capabilities.equivalent(
-                relative_path(transaction.root, candidate),
-                relative_path(transaction.root, path));
-            if (!equivalent) return std::unexpected{equivalent.error()};
-            if (*equivalent) return true;
+            auto ancestor = candidate;
+            while (!ancestor.empty()) {
+                auto equivalent = transaction.capabilities.equivalent(
+                    relative_path(transaction.root, ancestor),
+                    relative_path(transaction.root, path));
+                if (!equivalent) return std::unexpected{equivalent.error()};
+                if (*equivalent) return true;
+                if (ancestor == transaction.root) break;
+                const auto parent = ancestor.parent_path();
+                if (parent == ancestor) break;
+                ancestor = parent;
+            }
         }
     }
     return false;

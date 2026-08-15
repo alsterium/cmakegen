@@ -118,10 +118,13 @@ and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).
 - When stale cleanup is disabled, retained manifest-owned siblings are added
   to the parent migration and their manifest paths are updated with the
   directory spelling change, preserving ownership of omitted outputs.
+- Intermediate ancestors on the path to a transaction artifact are treated
+  as owned directory structure and are still recursively inspected for
+  unowned descendants.
 - Verification: the forced-replacement, shared-parent rollback, and
   parent-migrated source-spelling, rename-temporary collision, and physical
-  spelling, preflight-conflict, resolved-tree migration, and retained-sibling
-  cases passed; the full isolated SafeWriter suite passed (40 runnable cases,
-  4 platform-appropriate skips, 393
+  spelling, preflight-conflict, resolved-tree migration, retained-sibling, and
+  deep-intermediate-directory cases passed; the full isolated SafeWriter
+  suite passed (41 runnable cases, 4 platform-appropriate skips, 400
   assertions), and `git diff --check` passed. CI failures remain outside this
   task.

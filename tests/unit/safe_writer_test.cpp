@@ -1512,6 +1512,17 @@ TEST_CASE("safe writer inspects unowned descendants below intermediate rename di
     CHECK(read_file(fixture.path() / ".cmakegen/manifest.json") == previous_manifest);
 }
 
+TEST_CASE("safe writer accepts deeper fully-owned intermediate rename directories") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/A/B/C/generated.txt", "generated\n"}})));
+
+    REQUIRE(writer.write(file_set({{"foo/A/B/C/generated.txt", "updated\n"}})));
+    CHECK(read_file(fixture.path() / "foo/A/B/C/generated.txt") == "updated\n");
+    CHECK(has_exact_directory_entry(fixture.path(), "foo"));
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "Foo"));
+}
+
 TEST_CASE("safe writer validates parent conflicts before check and dry-run") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};
