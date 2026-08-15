@@ -3,10 +3,17 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cerrno>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <string_view>
+
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
+#endif
 
 #ifdef _WIN32
 #include <windows.h>
@@ -36,6 +43,64 @@ void write_file(const std::filesystem::path& path, std::string_view content) {
     std::ifstream input(path, std::ios::binary);
     return {std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
 }
+
+class HeldTransactionLock {
+public:
+    explicit HeldTransactionLock(const std::filesystem::path& path) {
+        std::filesystem::create_directories(path.parent_path());
+#ifdef _WIN32
+        handle_ = ::CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_HIDDEN, nullptr);
+        if (handle_ == INVALID_HANDLE_VALUE) return;
+        OVERLAPPED overlapped{};
+        if (!::LockFileEx(handle_, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+                          0, MAXDWORD, MAXDWORD, &overlapped)) {
+            ::CloseHandle(handle_);
+            handle_ = INVALID_HANDLE_VALUE;
+        }
+#else
+        descriptor_ = ::open(path.c_str(), O_RDWR | O_CREAT, 0666);
+        if (descriptor_ == -1 || ::flock(descriptor_, LOCK_EX | LOCK_NB) != 0) {
+            if (descriptor_ != -1) ::close(descriptor_);
+            descriptor_ = -1;
+        }
+#endif
+    }
+
+    ~HeldTransactionLock() {
+#ifdef _WIN32
+        if (handle_ != INVALID_HANDLE_VALUE) {
+            OVERLAPPED overlapped{};
+            (void)::UnlockFileEx(handle_, 0, MAXDWORD, MAXDWORD, &overlapped);
+            (void)::CloseHandle(handle_);
+        }
+#else
+        if (descriptor_ != -1) {
+            (void)::flock(descriptor_, LOCK_UN);
+            (void)::close(descriptor_);
+        }
+#endif
+    }
+
+    HeldTransactionLock(const HeldTransactionLock&) = delete;
+    HeldTransactionLock& operator=(const HeldTransactionLock&) = delete;
+
+    [[nodiscard]] bool held() const noexcept {
+#ifdef _WIN32
+        return handle_ != INVALID_HANDLE_VALUE;
+#else
+        return descriptor_ != -1;
+#endif
+    }
+
+private:
+#ifdef _WIN32
+    HANDLE handle_ = INVALID_HANDLE_VALUE;
+#else
+    int descriptor_ = -1;
+#endif
+};
 
 [[nodiscard]] std::filesystem::path utf8_path(std::string_view value) {
 #if defined(_WIN32)
@@ -267,6 +332,45 @@ TEST_CASE("safe writer retains deterministic recovery artifacts when rollback fa
     CHECK(read_file(fixture.path() / "first.txt") == "first-new\n");
     CHECK(read_file(fixture.path() / "second.txt") == "second-new\n");
     CHECK_FALSE(std::filesystem::exists(transaction));
+}
+
+TEST_CASE("safe writer refuses to recover or write while another writer holds the transaction lock") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"generated.txt", "old\n"}})));
+
+    HeldTransactionLock lock{fixture.path() / ".cmakegen/transaction.lock"};
+    REQUIRE(lock.held());
+    const auto result = writer.write(file_set({{"generated.txt", "new\n"}}));
+
+    REQUIRE_FALSE(result);
+    CHECK(result.error().diagnostics().front().message.find("another SafeWriter writer is active") != std::string::npos);
+    CHECK(read_file(fixture.path() / "generated.txt") == "old\n");
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+}
+
+TEST_CASE("safe writer validates a retained backup before removing its destination") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"first.txt", "first-old\n"}, {"second.txt", "second-old\n"}})));
+    const auto next = file_set({{"first.txt", "first-new\n"}, {"second.txt", "second-new\n"}});
+
+    {
+        FailureInjectionScope injection{{FailurePoint::during_replacement, 1}};
+        cmakegen::detail::safe_writer_testing::queue_failure_injection({FailurePoint::rollback, 0});
+        REQUIRE_FALSE(writer.write(next));
+    }
+
+    const auto transaction = fixture.path() / ".cmakegen/transaction";
+    const auto first_backup = transaction / "backups/000000.bak";
+    REQUIRE(std::filesystem::exists(first_backup));
+    write_file(first_backup, "corrupted backup\n");
+    const auto recovery = writer.write(next);
+
+    REQUIRE_FALSE(recovery);
+    CHECK(read_file(fixture.path() / "first.txt") == "first-new\n");
+    CHECK(read_file(first_backup) == "corrupted backup\n");
+    CHECK(std::filesystem::exists(transaction / "journal.json"));
 }
 
 TEST_CASE("safe writer cleans recoverable journal-less transaction scaffolding") {

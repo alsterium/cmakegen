@@ -274,8 +274,12 @@ terminal journal before its pre/post metadata, so an interruption cannot leave
 a terminal journal that requires already-removed metadata. Recovery removes a
 transaction-created empty parent before restoring a file-to-directory
 transition and verifies every output in the post-manifest before finalizing.
-Transaction directory creation is exclusive; a competing writer never cleans
-another writer's artifacts.
+Transaction directory creation is exclusive, and a lifetime lock under
+`.cmakegen/transaction.lock` makes a competing writer fail instead of
+recovering an active transaction. Recovery revalidates destination and staging
+parents immediately before mutation and validates retained backup type/content
+before removing a destination; a competing writer never cleans another
+writer's artifacts.
 
 Why:
 

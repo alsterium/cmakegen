@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <climits>
+#include <cerrno>
 #include <cstdint>
 #include <cstring>
 #include <cwchar>
@@ -20,6 +21,12 @@
 #include <set>
 #include <sstream>
 #include <system_error>
+
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
+#endif
 
 #ifdef _WIN32
 #include <windows.h>
@@ -1437,6 +1444,143 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
     return root / ".cmakegen/transaction";
 }
 
+[[nodiscard]] std::filesystem::path transaction_lock_path(const std::filesystem::path& root) {
+    return root / ".cmakegen/transaction.lock";
+}
+
+class TransactionLock {
+public:
+    TransactionLock() = default;
+    ~TransactionLock() { release(); }
+
+    TransactionLock(const TransactionLock&) = delete;
+    TransactionLock& operator=(const TransactionLock&) = delete;
+
+    TransactionLock(TransactionLock&& other) noexcept {
+#ifdef _WIN32
+        handle_ = other.handle_;
+        other.handle_ = INVALID_HANDLE_VALUE;
+#else
+        descriptor_ = other.descriptor_;
+        other.descriptor_ = -1;
+#endif
+    }
+
+    TransactionLock& operator=(TransactionLock&& other) noexcept {
+        if (this == &other) return *this;
+        release();
+#ifdef _WIN32
+        handle_ = other.handle_;
+        other.handle_ = INVALID_HANDLE_VALUE;
+#else
+        descriptor_ = other.descriptor_;
+        other.descriptor_ = -1;
+#endif
+        return *this;
+    }
+
+    [[nodiscard]] static Result<TransactionLock> acquire(const std::filesystem::path& path) {
+        TransactionLock lock;
+#ifdef _WIN32
+        const auto handle = ::CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE,
+                                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                          nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_HIDDEN, nullptr);
+        if (handle == INVALID_HANDLE_VALUE) {
+            return std::unexpected{error("cannot open SafeWriter transaction lock: " +
+                                             std::error_code(static_cast<int>(::GetLastError()),
+                                                             std::system_category())
+                                                 .message(),
+                                         path.generic_string())};
+        }
+        OVERLAPPED overlapped{};
+        if (!::LockFileEx(handle, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+                          0, MAXDWORD, MAXDWORD, &overlapped)) {
+            const auto lock_error = ::GetLastError();
+            ::CloseHandle(handle);
+            if (lock_error == ERROR_LOCK_VIOLATION || lock_error == ERROR_SHARING_VIOLATION) {
+                return std::unexpected{error("another SafeWriter writer is active; transaction recovery is deferred",
+                                             path.generic_string())};
+            }
+            return std::unexpected{error("cannot acquire SafeWriter transaction lock: " +
+                                             std::error_code(static_cast<int>(lock_error),
+                                                             std::system_category())
+                                                 .message(),
+                                         path.generic_string())};
+        }
+        lock.handle_ = handle;
+#else
+        const auto descriptor = ::open(path.c_str(), O_RDWR | O_CREAT, 0666);
+        if (descriptor == -1) {
+            return std::unexpected{error("cannot open SafeWriter transaction lock: " +
+                                             std::error_code(errno, std::generic_category()).message(),
+                                         path.generic_string())};
+        }
+        if (::flock(descriptor, LOCK_EX | LOCK_NB) != 0) {
+            const auto lock_error = errno;
+            ::close(descriptor);
+            if (lock_error == EWOULDBLOCK || lock_error == EAGAIN) {
+                return std::unexpected{error("another SafeWriter writer is active; transaction recovery is deferred",
+                                             path.generic_string())};
+            }
+            return std::unexpected{error("cannot acquire SafeWriter transaction lock: " +
+                                             std::error_code(lock_error, std::generic_category()).message(),
+                                         path.generic_string())};
+        }
+        lock.descriptor_ = descriptor;
+#endif
+        return lock;
+    }
+
+private:
+    void release() noexcept {
+#ifdef _WIN32
+        if (handle_ == INVALID_HANDLE_VALUE) return;
+        OVERLAPPED overlapped{};
+        (void)::UnlockFileEx(handle_, 0, MAXDWORD, MAXDWORD, &overlapped);
+        (void)::CloseHandle(handle_);
+        handle_ = INVALID_HANDLE_VALUE;
+#else
+        if (descriptor_ == -1) return;
+        (void)::flock(descriptor_, LOCK_UN);
+        (void)::close(descriptor_);
+        descriptor_ = -1;
+#endif
+    }
+
+#ifdef _WIN32
+    HANDLE handle_ = INVALID_HANDLE_VALUE;
+#else
+    int descriptor_ = -1;
+#endif
+};
+
+[[nodiscard]] Result<TransactionLock> acquire_transaction_lock(
+    const std::filesystem::path& root,
+    const FilesystemCapabilities& capabilities) {
+    const auto lock_path = transaction_lock_path(root);
+    auto parents = reject_symlink_parents(root, ".cmakegen/transaction.lock", capabilities);
+    if (!parents) return std::unexpected{parents.error()};
+
+    std::error_code ec;
+    std::filesystem::create_directories(root / ".cmakegen", ec);
+    if (ec) {
+        return std::unexpected{error("cannot create transaction metadata directory: " + ec.message(),
+                                     (root / ".cmakegen").generic_string())};
+    }
+    parents = reject_symlink_parents(root, ".cmakegen/transaction.lock", capabilities);
+    if (!parents) return std::unexpected{parents.error()};
+
+    const auto status = std::filesystem::symlink_status(lock_path, ec);
+    if (!ec && status.type() != std::filesystem::file_type::not_found &&
+        (std::filesystem::is_symlink(status) || !std::filesystem::is_regular_file(status))) {
+        return std::unexpected{error("transaction lock must be a regular file", lock_path.generic_string())};
+    }
+    if (ec && ec != std::errc::no_such_file_or_directory) {
+        return std::unexpected{error("cannot inspect transaction lock: " + ec.message(), lock_path.generic_string())};
+    }
+    return TransactionLock::acquire(lock_path);
+}
+
 [[nodiscard]] Result<bool> transaction_directory_present(const std::filesystem::path& root,
                                                          const FilesystemCapabilities& capabilities) {
     const auto directory = transaction_directory(root);
@@ -1708,8 +1852,14 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
     return {};
 }
 
-[[nodiscard]] Result<void> remove_staged_file(const TransactionEntry& entry) {
+[[nodiscard]] Result<void> validate_recovery_path_parents(const Transaction& transaction,
+                                                           const std::filesystem::path& path);
+
+[[nodiscard]] Result<void> remove_staged_file(const Transaction& transaction,
+                                              const TransactionEntry& entry) {
     if (entry.temporary.empty() || !entry.staging_claimed) return {};
+    auto parents = validate_recovery_path_parents(transaction, entry.temporary);
+    if (!parents) return std::unexpected{parents.error()};
     std::error_code ec;
     const auto status = std::filesystem::symlink_status(entry.temporary, ec);
     if (is_not_found(ec) || ec == std::errc::not_a_directory ||
@@ -1733,12 +1883,14 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
         return std::unexpected{error("staged output changed outside the active transaction",
                                      entry.temporary.generic_string())};
     }
+    parents = validate_recovery_path_parents(transaction, entry.temporary);
+    if (!parents) return std::unexpected{parents.error()};
     return remove_if_present(entry.temporary, "staged output");
 }
 
 [[nodiscard]] Result<void> cleanup_transaction(Transaction& transaction) {
     for (const auto& entry : transaction.entries) {
-        auto staged = remove_staged_file(entry);
+        auto staged = remove_staged_file(transaction, entry);
         if (!staged) return std::unexpected{staged.error()};
     }
     for (const auto& entry : transaction.entries) {
@@ -1881,8 +2033,23 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
     return {};
 }
 
-[[nodiscard]] Result<void> remove_new_destination(const TransactionEntry& entry,
+[[nodiscard]] Result<void> validate_recovery_path_parents(const Transaction& transaction,
+                                                           const std::filesystem::path& path) {
+    const auto relative = path.lexically_relative(transaction.root);
+    const auto relative_value = relative.generic_string();
+    if (relative.empty() || relative.is_absolute() || relative_value == "." ||
+        relative_value == ".." || relative_value.starts_with("../")) {
+        return std::unexpected{error("transaction recovery path escapes the project root",
+                                     path.generic_string())};
+    }
+    return reject_symlink_parents(transaction.root, relative, transaction.capabilities);
+}
+
+[[nodiscard]] Result<void> remove_new_destination(const Transaction& transaction,
+                                                  const TransactionEntry& entry,
                                                   bool may_have_been_applied) {
+    auto parents = validate_recovery_path_parents(transaction, entry.destination);
+    if (!parents) return std::unexpected{parents.error()};
     std::filesystem::file_status status;
     auto inspected = safe_status(entry.destination, status);
     if (!inspected) return std::unexpected{inspected.error()};
@@ -1911,10 +2078,13 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
         return std::unexpected{error("destination changed while transaction recovery was pending",
                                      entry.destination.generic_string())};
     }
+    parents = validate_recovery_path_parents(transaction, entry.destination);
+    if (!parents) return std::unexpected{parents.error()};
     return remove_if_present(entry.destination, "transaction output");
 }
 
-[[nodiscard]] Result<void> restore_backup(TransactionEntry& entry,
+[[nodiscard]] Result<void> restore_backup(Transaction& transaction,
+                                          TransactionEntry& entry,
                                           std::size_t rollback_index,
                                           bool recovery_mode) {
     using Point = detail::safe_writer_testing::FailurePoint;
@@ -1924,6 +2094,9 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
     if (!recovery_mode && consume_failure(Point::rollback, rollback_index)) {
         return std::unexpected{injected_failure(failure_point_name(Point::rollback), entry.destination)};
     }
+
+    auto destination_parents = validate_recovery_path_parents(transaction, entry.destination);
+    if (!destination_parents) return std::unexpected{destination_parents.error()};
 
     std::filesystem::file_status backup_status;
     auto inspected_backup = safe_status(entry.backup, backup_status);
@@ -1947,7 +2120,7 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
         const bool may_have_been_applied = entry.status == TransactionEntryStatus::in_progress ||
                                            entry.status == TransactionEntryStatus::applied;
         if (destination_exists) {
-            auto removed = remove_new_destination(entry, may_have_been_applied);
+            auto removed = remove_new_destination(transaction, entry, may_have_been_applied);
             if (!removed) return std::unexpected{removed.error()};
         }
         if (backup_exists) {
@@ -1971,10 +2144,20 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
                                      entry.backup.generic_string())};
     }
 
+    if (std::filesystem::is_symlink(backup_status) || !std::filesystem::is_regular_file(backup_status)) {
+        return std::unexpected{error("transaction backup is not a regular file",
+                                     entry.backup.generic_string())};
+    }
+    auto backup_content = read_file(entry.backup);
+    if (!backup_content || SafeWriter::sha256(*backup_content) != entry.pre_hash) {
+        return std::unexpected{error("transaction backup content does not match its recorded pre-state",
+                                     entry.backup.generic_string())};
+    }
+
     if (destination_exists) {
         const bool may_have_been_applied = entry.status == TransactionEntryStatus::in_progress ||
                                            entry.status == TransactionEntryStatus::applied;
-        auto removed = remove_new_destination(entry, may_have_been_applied);
+        auto removed = remove_new_destination(transaction, entry, may_have_been_applied);
         if (!removed) return std::unexpected{removed.error()};
     }
     std::filesystem::file_status after_remove;
@@ -1984,6 +2167,8 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
         return std::unexpected{error("cannot restore transaction backup over an existing destination",
                                      entry.destination.generic_string())};
     }
+    destination_parents = validate_recovery_path_parents(transaction, entry.destination);
+    if (!destination_parents) return std::unexpected{destination_parents.error()};
     auto restored = move_to_backup(entry.backup, entry.destination);
     if (!restored) return std::unexpected{restored.error()};
     entry.status = TransactionEntryStatus::restored;
@@ -2035,6 +2220,8 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
         return left.native().size() > right.native().size();
     });
     for (const auto& directory : directories) {
+        auto parents = validate_recovery_path_parents(transaction, directory);
+        if (!parents) return std::unexpected{parents.error()};
         std::filesystem::file_status status;
         auto inspected = safe_status(directory, status);
         if (!inspected) return std::unexpected{inspected.error()};
@@ -2065,6 +2252,8 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
             return std::unexpected{error("cannot remove a created directory containing an unowned file",
                                          directory.generic_string())};
         }
+        parents = validate_recovery_path_parents(transaction, directory);
+        if (!parents) return std::unexpected{parents.error()};
         std::filesystem::remove(directory, ec);
         if (ec) return std::unexpected{error("cannot rollback created directory: " + ec.message(),
                                              directory.generic_string())};
@@ -2077,7 +2266,7 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
     // file-to-directory transition. Remove them before removing that parent;
     // the hash check prevents cleanup from touching an external edit.
     for (const auto& entry : transaction.entries) {
-        auto staged = remove_staged_file(entry);
+        auto staged = remove_staged_file(transaction, entry);
         if (!staged) return std::unexpected{staged.error()};
     }
 
@@ -2091,6 +2280,8 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
         if (entry.kind == TransactionEntryKind::remove) {
             // A remove operation has no post-write destination.  If the
             // backup move happened, the destination must still be absent.
+            auto destination_parents = validate_recovery_path_parents(transaction, entry.destination);
+            if (!destination_parents) return std::unexpected{destination_parents.error()};
             std::filesystem::file_status status;
             auto inspected = safe_status(entry.destination, status);
             if (!inspected) return std::unexpected{inspected.error()};
@@ -2113,25 +2304,17 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
                     return std::unexpected{error("cannot remove a recreated output directory containing an unowned file",
                                                  entry.destination.generic_string())};
                 }
+                auto parents = validate_recovery_path_parents(transaction, entry.destination);
+                if (!parents) return std::unexpected{parents.error()};
                 std::filesystem::remove(entry.destination, ec);
                 if (ec) {
                     return std::unexpected{error("cannot remove recreated output directory: " + ec.message(),
                                                  entry.destination.generic_string())};
                 }
             }
-        } else {
-            const bool may_have_been_applied = entry.status == TransactionEntryStatus::in_progress ||
-                                               entry.status == TransactionEntryStatus::applied;
-            std::filesystem::file_status status;
-            auto inspected = safe_status(entry.destination, status);
-            if (!inspected) return std::unexpected{inspected.error()};
-            if (std::filesystem::exists(status)) {
-                auto removed = remove_new_destination(entry, may_have_been_applied);
-                if (!removed) return std::unexpected{removed.error()};
-            }
         }
 
-        auto restored = restore_backup(entry, rollback_index, recovery_mode);
+        auto restored = restore_backup(transaction, entry, rollback_index, recovery_mode);
         if (!restored) return std::unexpected{restored.error()};
         ++rollback_index;
         transaction.phase = "rollback";
@@ -2914,17 +3097,38 @@ Result<WriteResult> SafeWriter::write(const GeneratedFileSet& files,
     const auto& capabilities = *detected_capabilities;
     auto pending = pending_transaction_for_read_only_operation(project_root_, capabilities);
     if (!pending) return std::unexpected{pending.error()};
+    std::optional<TransactionLock> transaction_lock;
+    const auto acquire_lock = [&]() -> Result<void> {
+        if (transaction_lock) return {};
+        auto acquired = acquire_transaction_lock(project_root_, capabilities);
+        if (!acquired) return std::unexpected{acquired.error()};
+        transaction_lock.emplace(std::move(*acquired));
+        return {};
+    };
     if (*pending) {
         if (options.check || options.dry_run) {
             return std::unexpected{error("a pending SafeWriter transaction requires recovery; check/dry-run performed no writes",
                                          transaction_directory(project_root_).generic_string())};
         }
+        auto locked = acquire_lock();
+        if (!locked) return std::unexpected{locked.error()};
         auto recovered = recover_pending_transaction(project_root_, capabilities);
         if (!recovered) return std::unexpected{recovered.error()};
     }
     auto plan = prepare_write(project_root_, files, options, capabilities);
     if (!plan) return std::unexpected{plan.error()};
     if (options.check || options.dry_run || !plan->result.would_change) return plan->result;
+    auto locked = acquire_lock();
+    if (!locked) return std::unexpected{locked.error()};
+    auto pending_after_lock = pending_transaction_for_read_only_operation(project_root_, capabilities);
+    if (!pending_after_lock) return std::unexpected{pending_after_lock.error()};
+    if (*pending_after_lock) {
+        auto recovered = recover_pending_transaction(project_root_, capabilities);
+        if (!recovered) return std::unexpected{recovered.error()};
+    }
+    plan = prepare_write(project_root_, files, options, capabilities);
+    if (!plan) return std::unexpected{plan.error()};
+    if (!plan->result.would_change) return plan->result;
     auto transaction = start_transaction(project_root_, *plan);
     if (!transaction) return std::unexpected{transaction.error()};
     return execute_transaction(std::move(*transaction), plan->result);
@@ -2940,17 +3144,38 @@ Result<WriteResult> SafeWriter::clean(bool dry_run, bool force) const {
     const auto& capabilities = *detected_capabilities;
     auto pending = pending_transaction_for_read_only_operation(project_root_, capabilities);
     if (!pending) return std::unexpected{pending.error()};
+    std::optional<TransactionLock> transaction_lock;
+    const auto acquire_lock = [&]() -> Result<void> {
+        if (transaction_lock) return {};
+        auto acquired = acquire_transaction_lock(project_root_, capabilities);
+        if (!acquired) return std::unexpected{acquired.error()};
+        transaction_lock.emplace(std::move(*acquired));
+        return {};
+    };
     if (*pending) {
         if (dry_run) {
             return std::unexpected{error("a pending SafeWriter transaction requires recovery; clean dry-run performed no writes",
                                          transaction_directory(project_root_).generic_string())};
         }
+        auto locked = acquire_lock();
+        if (!locked) return std::unexpected{locked.error()};
         auto recovered = recover_pending_transaction(project_root_, capabilities);
         if (!recovered) return std::unexpected{recovered.error()};
     }
     auto plan = prepare_clean(project_root_, force, capabilities);
     if (!plan) return std::unexpected{plan.error()};
     if (dry_run || !plan->result.would_change) return plan->result;
+    auto locked = acquire_lock();
+    if (!locked) return std::unexpected{locked.error()};
+    auto pending_after_lock = pending_transaction_for_read_only_operation(project_root_, capabilities);
+    if (!pending_after_lock) return std::unexpected{pending_after_lock.error()};
+    if (*pending_after_lock) {
+        auto recovered = recover_pending_transaction(project_root_, capabilities);
+        if (!recovered) return std::unexpected{recovered.error()};
+    }
+    plan = prepare_clean(project_root_, force, capabilities);
+    if (!plan) return std::unexpected{plan.error()};
+    if (!plan->result.would_change) return plan->result;
     auto transaction = start_transaction(project_root_, *plan);
     if (!transaction) return std::unexpected{transaction.error()};
     return execute_transaction(std::move(*transaction), plan->result);

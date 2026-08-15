@@ -296,8 +296,9 @@ cleaned only after its complete contents match the known setup/cleanup
 scaffolding; validation finishes before any backup is deleted. Recovery does
 not advance the manifest until every output recorded in the complete
 post-manifest has been verified. Recreated file-to-directory parents are
-removed before their previous file backups are restored, and transaction
-directory acquisition is exclusive.
+removed before their previous file backups are restored, transaction-directory
+acquisition is exclusive for the transaction lifetime, and recovery revalidates
+destination/staging parents and retained backup hashes before mutation.
 
 ## 12. Self-host architecture
 
