@@ -1912,7 +1912,12 @@ private:
         auto staged = remove_staged_file(transaction, entry);
         if (!staged) return std::unexpected{staged.error()};
     }
+    auto backup_parents = validate_recovery_path_parents(
+        transaction, transaction.backups_directory / ".cmakegen-backup-check");
+    if (!backup_parents) return std::unexpected{backup_parents.error()};
     for (const auto& entry : transaction.entries) {
+        backup_parents = validate_recovery_path_parents(transaction, entry.backup);
+        if (!backup_parents) return std::unexpected{backup_parents.error()};
         auto backup = remove_if_present(entry.backup, "transaction backup");
         if (!backup) return std::unexpected{backup.error()};
     }
@@ -2587,6 +2592,8 @@ private:
 
 [[nodiscard]] Result<bool> post_state_is_complete(const Transaction& transaction) {
     for (const auto& entry : transaction.entries) {
+        auto parents = validate_recovery_path_parents(transaction, entry.destination);
+        if (!parents) return std::unexpected{parents.error()};
         std::filesystem::file_status status;
         auto inspected = safe_status(entry.destination, status);
         if (!inspected) return std::unexpected{inspected.error()};
@@ -2606,6 +2613,8 @@ private:
         if (!manifest_valid) return std::unexpected{manifest_valid.error()};
         for (const auto& [relative, hash] : post_manifest->files) {
             const auto destination = transaction.root / relative;
+            auto parents = validate_recovery_path_parents(transaction, destination);
+            if (!parents) return std::unexpected{parents.error()};
             auto resolved = resolve_existing_alias(transaction.root, relative,
                                                    transaction.capabilities);
             if (!resolved) return std::unexpected{resolved.error()};

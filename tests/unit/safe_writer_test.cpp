@@ -2,6 +2,7 @@
 #include "cmakegen/fs/detail/windows_case_capability.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+#include <nlohmann/json.hpp>
 
 #include <cerrno>
 #include <chrono>
@@ -370,6 +371,77 @@ TEST_CASE("safe writer validates a retained backup before removing its destinati
     REQUIRE_FALSE(recovery);
     CHECK(read_file(fixture.path() / "first.txt") == "first-new\n");
     CHECK(read_file(first_backup) == "corrupted backup\n");
+    CHECK(std::filesystem::exists(transaction / "journal.json"));
+}
+
+TEST_CASE("safe writer refuses symlinked backup parents during cleanup") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    const auto next = file_set({{"generated.txt", "new\n"}});
+
+    {
+        FailureInjectionScope injection{{FailurePoint::during_replacement, 0}};
+        cmakegen::detail::safe_writer_testing::queue_failure_injection({FailurePoint::rollback, 0});
+        const auto result = writer.write(next);
+        REQUIRE_FALSE(result);
+        CHECK(result.error().diagnostics().front().message.find("requires operator recovery") != std::string::npos);
+    }
+
+    const auto transaction = fixture.path() / ".cmakegen/transaction";
+    const auto external_backups = fixture.path() / "external-backups";
+    std::filesystem::create_directories(external_backups);
+    write_file(external_backups / "000000.bak", "external backup\n");
+    std::error_code error;
+    std::filesystem::rename(transaction / "backups", fixture.path() / "parked-backups", error);
+    REQUIRE_FALSE(error);
+    std::filesystem::create_directory_symlink(external_backups, transaction / "backups", error);
+    if (error) SKIP("filesystem cannot create directory symlinks");
+
+    auto journal = nlohmann::json::parse(read_file(transaction / "journal.json"));
+    journal["state"] = "committed";
+    write_file(transaction / "journal.json", journal.dump(2) + "\n");
+
+    const auto recovery = writer.write(next);
+    REQUIRE_FALSE(recovery);
+    CHECK(recovery.error().diagnostics().front().message.find("symbolic link") != std::string::npos);
+    CHECK(read_file(external_backups / "000000.bak") == "external backup\n");
+    CHECK(std::filesystem::exists(transaction / "journal.json"));
+}
+
+TEST_CASE("safe writer rejects symlinked parents while confirming post-state") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"out/generated.txt", "old\n"}})));
+    const auto next = file_set({{"out/generated.txt", "new\n"}});
+
+    {
+        FailureInjectionScope injection{{FailurePoint::manifest_update, 0}};
+        cmakegen::detail::safe_writer_testing::queue_failure_injection({FailurePoint::rollback, 0});
+        const auto result = writer.write(next);
+        REQUIRE_FALSE(result);
+        CHECK(result.error().diagnostics().front().message.find("requires operator recovery") != std::string::npos);
+    }
+
+    const auto transaction = fixture.path() / ".cmakegen/transaction";
+    const auto external_output = fixture.path() / "external-output";
+    std::filesystem::create_directories(external_output);
+    write_file(external_output / "generated.txt", "new\n");
+    std::error_code error;
+    std::filesystem::remove_all(fixture.path() / "out", error);
+    REQUIRE_FALSE(error);
+    std::filesystem::create_directory_symlink(external_output, fixture.path() / "out", error);
+    if (error) SKIP("filesystem cannot create directory symlinks");
+
+    const auto post_metadata = nlohmann::json::parse(read_file(transaction / "post-manifest.json"));
+    write_file(fixture.path() / ".cmakegen/manifest.json", post_metadata["content"].get<std::string>());
+    auto journal = nlohmann::json::parse(read_file(transaction / "journal.json"));
+    journal["state"] = "manifest_pending";
+    write_file(transaction / "journal.json", journal.dump(2) + "\n");
+
+    const auto recovery = writer.write(next);
+    REQUIRE_FALSE(recovery);
+    CHECK(recovery.error().diagnostics().front().message.find("symbolic link") != std::string::npos);
+    CHECK(read_file(external_output / "generated.txt") == "new\n");
     CHECK(std::filesystem::exists(transaction / "journal.json"));
 }
 

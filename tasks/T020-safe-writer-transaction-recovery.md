@@ -131,14 +131,17 @@ intended post-state.
   including unchanged entries. Preflight rejects generated destinations that
   collide with another output's deterministic staging path, and rollback
   accepts an untouched remove destination when its pre-state hash still
-  matches.
+  matches. Cleanup also revalidates the backup directory chain, and
+  post-state verification rejects symlinked output parents before reading
+  manifest-owned files.
 - Tests: added partial-staging, stale-journal-temporary, and journal-less
   recovery coverage, including preservation of unclaimed staging paths and
   journal-less backup validation. Added lifetime-lock contention and retained
-  backup corruption coverage. The existing Windows locked-file test now
-  exercises the pre-hash-preservation path.
+  backup corruption coverage, plus symlinked backup-parent cleanup and
+  symlinked post-state output-parent recovery coverage. The existing Windows
+  locked-file test now exercises the pre-hash-preservation path.
 - Verification: `cmake --build build/t020-normal --parallel 2` and
   `cmake --build build/t020-bootstrap --parallel 2` passed;
-  `build/t020-normal/cmakegen_tests "safe writer*"` passed with 25 runnable
-  cases, 3 platform-appropriate skips, and 217 assertions; `git diff --check`
+  `build/t020-normal/cmakegen_tests "safe writer*"` passed with 27 runnable
+  cases, 3 platform-appropriate skips, and 235 assertions; `git diff --check`
   passed. CI failures remain outside this task.
