@@ -1370,6 +1370,9 @@ struct Transaction {
     // created_directories below.
     std::vector<std::filesystem::path> planned_directories;
     std::vector<std::filesystem::path> created_directories;
+    // Persisted before create_directory so recovery can distinguish an
+    // interrupted file-to-directory transition from an unrelated directory.
+    std::optional<std::filesystem::path> creating_directory;
     FilesystemCapabilities capabilities;
 };
 
@@ -1406,6 +1409,11 @@ struct PreparedPlan {
     json["created_directories"] = nlohmann::ordered_json::array();
     for (const auto& directory : transaction.created_directories) {
         json["created_directories"].push_back(relative_path(transaction.root, directory));
+    }
+    if (transaction.creating_directory) {
+        json["creating_directory"] = relative_path(transaction.root, *transaction.creating_directory);
+    } else {
+        json["creating_directory"] = nullptr;
     }
     json["entries"] = nlohmann::ordered_json::array();
     for (const auto& entry : transaction.entries) {
@@ -1694,7 +1702,9 @@ private:
             json.value("pre_manifest", "") != "pre-manifest.json" ||
             json.value("post_manifest", "") != "post-manifest.json" ||
             !json.contains("entries") || !json["entries"].is_array() ||
-            !json.contains("created_directories") || !json["created_directories"].is_array()) {
+            !json.contains("created_directories") || !json["created_directories"].is_array() ||
+            (json.contains("creating_directory") && !json["creating_directory"].is_null() &&
+             !json["creating_directory"].is_string())) {
             return std::unexpected{error("transaction journal has an unsupported format", journal.generic_string())};
         }
         transaction.state = json["state"].get<std::string>();
@@ -1728,6 +1738,18 @@ private:
             auto unicode_valid = capabilities.validate_path(*normalized);
             if (!unicode_valid) return std::unexpected{unicode_valid.error()};
             transaction.created_directories.push_back(root / *normalized);
+        }
+        if (json.contains("creating_directory") && !json["creating_directory"].is_null()) {
+            auto normalized = normalize_relative_path(
+                std::filesystem::path{json["creating_directory"].get<std::string>()});
+            if (!normalized || *normalized != json["creating_directory"].get<std::string>() ||
+                is_reserved_metadata_path(*normalized)) {
+                return std::unexpected{error("transaction journal contains an unsafe creating directory",
+                                             journal.generic_string())};
+            }
+            auto unicode_valid = capabilities.validate_path(*normalized);
+            if (!unicode_valid) return std::unexpected{unicode_valid.error()};
+            transaction.creating_directory = root / *normalized;
         }
 
         std::size_t index = 0;
@@ -2361,9 +2383,10 @@ private:
             auto inspected = safe_status(entry.destination, status);
             if (!inspected) return std::unexpected{inspected.error()};
             if (std::filesystem::exists(status)) {
-                const bool recreated_for_transition = std::ranges::any_of(
-                    transaction.created_directories,
-                    [&entry](const auto& directory) { return directory == entry.destination; });
+                const bool recreated_for_transition =
+                    std::ranges::any_of(transaction.created_directories,
+                                        [&entry](const auto& directory) { return directory == entry.destination; }) ||
+                    (transaction.creating_directory && *transaction.creating_directory == entry.destination);
                 bool untouched_original = false;
                 if (!recreated_for_transition && entry.status != TransactionEntryStatus::applied &&
                     entry.had_original && std::filesystem::is_regular_file(status)) {
@@ -2409,6 +2432,7 @@ private:
     if (!directories) return std::unexpected{directories.error()};
     auto verified = verify_pre_state(transaction);
     if (!verified) return std::unexpected{verified.error()};
+    transaction.creating_directory.reset();
     transaction.state = "rolled_back";
     transaction.phase = "rollback";
     return write_journal(transaction);
@@ -2501,8 +2525,8 @@ private:
         }
         return std::unexpected{post.error()};
     }
-    auto journal = write_file_without_replacement(transaction.journal,
-                                                   render_journal_json(transaction).dump(2) + "\n");
+    auto journal = atomic_write_text(transaction.journal,
+                                     render_journal_json(transaction).dump(2) + "\n");
     if (!journal) {
         auto cleanup = cleanup_transaction(transaction);
         if (!cleanup) {
@@ -2562,6 +2586,9 @@ private:
 
 [[nodiscard]] Result<void> create_transaction_directories(Transaction& transaction) {
     for (const auto& directory : transaction.planned_directories) {
+        transaction.creating_directory = directory;
+        auto before = write_journal(transaction);
+        if (!before) return std::unexpected{before.error()};
         std::error_code ec;
         const bool created = std::filesystem::create_directory(directory, ec);
         if (ec) return std::unexpected{error("cannot create output directory: " + ec.message(),
@@ -2574,6 +2601,9 @@ private:
             auto journal = write_journal(transaction);
             if (!journal) return std::unexpected{journal.error()};
         }
+        transaction.creating_directory.reset();
+        auto after = write_journal(transaction);
+        if (!after) return std::unexpected{after.error()};
     }
     transaction.planned_directories.clear();
     return {};

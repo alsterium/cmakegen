@@ -150,6 +150,11 @@ intended post-state.
   ownership before terminal cleanup, and rollback rejects an empty directory
   recreated at a removed destination unless that directory is journaled as a
   transaction-created file-to-directory transition.
+- Initial journal publication now uses the same temporary-and-atomic-rename
+  protocol as later updates. Directory creation records an explicit
+  `creating_directory` state before the system call, allowing recovery to
+  finish an interrupted file-to-directory transition without treating it as
+  an unclaimed external directory.
 - Tests: added partial-staging, stale-journal-temporary, and journal-less
   recovery coverage, including preservation of unclaimed staging paths and
   journal-less backup validation. Added lifetime-lock contention and retained
@@ -160,9 +165,10 @@ intended post-state.
   pre-hash-preservation path. Added coverage that an interrupted
   file-to-directory transition journals the directory only after creation,
   retained pre-manifest output validation, recreated post-publication staging
-  paths, and unclaimed directories at removed destinations.
+  paths, unclaimed directories at removed destinations, and recovery from a
+  journaled in-progress directory creation.
 - Verification: `cmake --build build/t020-normal --parallel 2` and
   `cmake --build build/t020-bootstrap --parallel 2` passed;
-  `build/t020-normal/cmakegen_tests "safe writer*"` passed with 35 runnable
-  cases, 3 platform-appropriate skips, and 304 assertions; `git diff --check`
+  `build/t020-normal/cmakegen_tests "safe writer*"` passed with 36 runnable
+  cases, 3 platform-appropriate skips, and 312 assertions; `git diff --check`
   passed. CI failures remain outside this task.

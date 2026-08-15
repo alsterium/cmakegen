@@ -301,6 +301,28 @@ TEST_CASE("safe writer journals output directories only after creating them") {
     CHECK(journal["created_directories"][0] == "generated");
 }
 
+TEST_CASE("safe writer recovers a directory created while its ownership was in progress") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"generated", "old\n"}})));
+
+    {
+        FailureInjectionScope injection{{FailurePoint::during_staging, 0}};
+        cmakegen::detail::safe_writer_testing::queue_failure_injection({FailurePoint::rollback, 0});
+        REQUIRE_FALSE(writer.write(file_set({{"generated/child.txt", "new\n"}})));
+    }
+
+    const auto transaction = fixture.path() / ".cmakegen/transaction";
+    auto journal = nlohmann::json::parse(read_file(transaction / "journal.json"));
+    journal["created_directories"] = nlohmann::json::array();
+    journal["creating_directory"] = "generated";
+    write_file(transaction / "journal.json", journal.dump(2) + "\n");
+
+    REQUIRE(writer.write(file_set({{"generated/child.txt", "new\n"}})));
+    CHECK(read_file(fixture.path() / "generated/child.txt") == "new\n");
+    CHECK_FALSE(std::filesystem::exists(transaction));
+}
+
 TEST_CASE("safe writer reports platform-specific locked-file replacement failures") {
 #ifndef _WIN32
     SKIP("POSIX permits renaming an open file; Windows share-mode locking is tested on Windows");
@@ -604,7 +626,7 @@ TEST_CASE("safe writer cleans recoverable journal-less transaction scaffolding")
         std::filesystem::create_directories(fixture.path() / ".cmakegen/transaction/backups");
     }
 
-    SECTION("cleanup interrupted after the journal was removed") {
+    SECTION("initial journal publication interrupted before replacement") {
         const auto transaction = fixture.path() / ".cmakegen/transaction";
         std::filesystem::create_directories(transaction / "backups");
         write_file(transaction / "pre-manifest.json", "metadata\n");
