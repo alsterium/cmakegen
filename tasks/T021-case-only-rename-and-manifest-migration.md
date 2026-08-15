@@ -127,11 +127,15 @@ and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).
   branch.
 - Forced parent migrations permit modified retained outputs and record the
   retained content's current hash while preserving its content.
+- Rename temporary collision checks now run only for planned case-only renames
+  and compare against the complete post-write manifest, including retained
+  outputs.
 - Verification: the forced-replacement, shared-parent rollback, and
   parent-migrated source-spelling, rename-temporary collision, and physical
   spelling, preflight-conflict, resolved-tree migration, retained-sibling,
-  nested-retained-migration, forced-retained-migration, and
-  deep-intermediate-directory cases passed; the full isolated SafeWriter suite
-  passed (43 runnable cases, 4 platform-appropriate skips, 421
+  nested-retained-migration, forced-retained-migration,
+  planned-rename-collision, and deep-intermediate-directory cases passed; the
+  full isolated SafeWriter suite passed (44 runnable cases, 4
+  platform-appropriate skips, 433
   assertions), and `git diff --check` passed. CI failures remain outside this
   task.

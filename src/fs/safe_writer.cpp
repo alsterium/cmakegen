@@ -1282,25 +1282,6 @@ constexpr std::array<std::uint32_t, 64> sha_constants = {
     return {};
 }
 
-[[nodiscard]] Result<void> validate_generated_rename_collisions(
-    const std::map<std::string, const GeneratedFile*, std::less<>>& files,
-    const FilesystemCapabilities& capabilities) {
-    for (const auto& [relative, file] : files) {
-        (void)file;
-        const auto rename_temporary = rename_transaction_temp_path(std::filesystem::path{relative}).generic_string();
-        for (const auto& [other, other_file] : files) {
-            (void)other_file;
-            auto equivalent = capabilities.equivalent(other, rename_temporary);
-            if (!equivalent) return std::unexpected{equivalent.error()};
-            if (*equivalent) {
-                return std::unexpected{error("generated output collides with a case-only rename temporary",
-                                             other)};
-            }
-        }
-    }
-    return {};
-}
-
 enum class TransactionEntryKind {
     remove,
     replace,
@@ -1466,6 +1447,32 @@ struct PreparedPlan {
     WriteResult result;
     FilesystemCapabilities capabilities;
 };
+
+[[nodiscard]] Result<void> validate_generated_rename_collisions(
+    const std::vector<PlannedEntry>& entries,
+    const Manifest& post_manifest,
+    const FilesystemCapabilities& capabilities) {
+    for (const auto& entry : entries) {
+        if (entry.kind != TransactionEntryKind::rename) continue;
+        const auto rename_temporary = rename_transaction_temp_path(entry.destination, entry.source)
+                                          .lexically_relative(capabilities.project_root)
+                                          .generic_string();
+        for (const auto& [other, hash] : post_manifest.files) {
+            (void)hash;
+            auto equivalent = capabilities.equivalent(other, rename_temporary);
+            if (!equivalent) return std::unexpected{equivalent.error()};
+            auto temporary_ancestor = is_path_ancestor(rename_temporary, other, capabilities);
+            if (!temporary_ancestor) return std::unexpected{temporary_ancestor.error()};
+            auto output_ancestor = is_path_ancestor(other, rename_temporary, capabilities);
+            if (!output_ancestor) return std::unexpected{output_ancestor.error()};
+            if (*equivalent || *temporary_ancestor || *output_ancestor) {
+                return std::unexpected{error("generated output collides with a case-only rename temporary",
+                                             other)};
+            }
+        }
+    }
+    return {};
+}
 
 [[nodiscard]] std::string relative_path(const std::filesystem::path& root,
                                         const std::filesystem::path& path) {
@@ -4190,8 +4197,6 @@ void retarget_transaction_artifacts_after_directory_move(
     if (!output_valid) return std::unexpected{output_valid.error()};
     auto staging_valid = validate_generated_staging_collisions(next_files, next_manifest, capabilities);
     if (!staging_valid) return std::unexpected{staging_valid.error()};
-    auto rename_valid = validate_generated_rename_collisions(next_files, capabilities);
-    if (!rename_valid) return std::unexpected{rename_valid.error()};
     auto next_manifest_valid = validate_manifest_equivalence(next_manifest, capabilities);
     if (!next_manifest_valid) return std::unexpected{next_manifest_valid.error()};
 
@@ -4329,6 +4334,9 @@ void retarget_transaction_artifacts_after_directory_move(
     auto retained_parent_entries = add_retained_parent_migration_entries(
         root, *old_manifest, next_manifest, plan, options.force);
     if (!retained_parent_entries) return std::unexpected{retained_parent_entries.error()};
+
+    auto rename_valid = validate_generated_rename_collisions(plan.entries, next_manifest, capabilities);
+    if (!rename_valid) return std::unexpected{rename_valid.error()};
 
     const auto rendered_manifest = render_manifest(next_manifest);
     const bool manifest_changed = !pre_manifest.present || pre_manifest.content != rendered_manifest;

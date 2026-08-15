@@ -881,14 +881,30 @@ TEST_CASE("safe writer rejects missing or modified retained outputs before openi
 TEST_CASE("safe writer rejects outputs that collide with case-only rename temporaries") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo.txt", "old\n"}})));
     const auto result = writer.write(file_set({
-        {"foo.txt", "foo\n"},
+        {"foo.txt", "new\n"},
         {".foo.txt.cmakegen-rename.tmp", "temporary\n"},
     }));
 
     REQUIRE_FALSE(result);
     CHECK(result.error().diagnostics().front().message.find("rename temporary") != std::string::npos);
-    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/manifest.json"));
+    CHECK(read_file(fixture.path() / "Foo.txt") == "old\n");
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+}
+
+TEST_CASE("safe writer only checks rename temporary collisions for planned renames") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo.txt", "old\n"},
+                                   {".foo.txt.cmakegen-rename.tmp", "retained\n"}})));
+
+    const auto result = writer.write(file_set({{"foo.txt", "new\n"}}), {.cleanup_stale = false});
+    REQUIRE_FALSE(result);
+    CHECK(result.error().diagnostics().front().message.find("rename temporary") != std::string::npos);
+    CHECK(read_file(fixture.path() / "Foo.txt") == "old\n");
+    CHECK(read_file(fixture.path() / ".foo.txt.cmakegen-rename.tmp") == "retained\n");
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
 }
 
 TEST_CASE("safe writer verifies a manifest-owned file before replacing it") {
