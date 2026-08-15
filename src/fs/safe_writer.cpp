@@ -1200,12 +1200,13 @@ constexpr std::array<std::uint32_t, 64> sha_constants = {
 
 [[nodiscard]] Result<void> validate_generated_staging_collisions(
     const std::map<std::string, const GeneratedFile*, std::less<>>& files,
+    const Manifest& post_manifest,
     const FilesystemCapabilities& capabilities) {
     for (const auto& [relative, file] : files) {
         (void)file;
         const auto staging = transaction_temp_path(std::filesystem::path{relative}).generic_string();
-        for (const auto& [other, other_file] : files) {
-            (void)other_file;
+        for (const auto& [other, hash] : post_manifest.files) {
+            (void)hash;
             auto equivalent = capabilities.equivalent(other, staging);
             if (!equivalent) return std::unexpected{equivalent.error()};
             if (*equivalent) {
@@ -2896,7 +2897,7 @@ private:
 
     auto output_valid = validate_generated_file_equivalence(next_files, capabilities);
     if (!output_valid) return std::unexpected{output_valid.error()};
-    auto staging_valid = validate_generated_staging_collisions(next_files, capabilities);
+    auto staging_valid = validate_generated_staging_collisions(next_files, next_manifest, capabilities);
     if (!staging_valid) return std::unexpected{staging_valid.error()};
     auto next_manifest_valid = validate_manifest_equivalence(next_manifest, capabilities);
     if (!next_manifest_valid) return std::unexpected{next_manifest_valid.error()};

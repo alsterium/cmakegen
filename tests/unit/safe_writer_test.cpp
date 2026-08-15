@@ -549,6 +549,18 @@ TEST_CASE("safe writer rejects descendants of deterministic staging paths") {
     CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/manifest.json"));
 }
 
+TEST_CASE("safe writer rejects retained outputs that collide with staging paths") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{".foo.cmakegen-transaction.tmp", "retained\n"}})));
+
+    const auto result = writer.write(file_set({{"foo", "new\n"}}), {.cleanup_stale = false});
+    REQUIRE_FALSE(result);
+    CHECK(result.error().diagnostics().front().message.find("staging path") != std::string::npos);
+    CHECK(read_file(fixture.path() / ".foo.cmakegen-transaction.tmp") == "retained\n");
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+}
+
 TEST_CASE("safe writer verifies a manifest-owned file before replacing it") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};
