@@ -134,13 +134,20 @@ and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).
   same portable-equivalent ancestor before any transaction is created.
 - Occupied case-only rename temporaries are rejected during plan preparation,
   so check and dry-run use the same target validation as a real write.
+- New sibling branches below a parent spelling migration are created under the
+  currently existing source parent and retargeted with the directory move, so
+  nested paths such as `foo/b/y.txt` can accompany `Foo/A/x.txt` →
+  `foo/a/x.txt` without creating a second parent alias.
+- Unicode normalization-only aliases preserve the established manifest and
+  physical spelling.  They are no longer treated as case-only physical
+  renames, making an identical re-generation a no-op on APFS/HFS.
 - Verification: the forced-replacement, shared-parent rollback, and
   parent-migrated source-spelling, rename-temporary collision, and physical
   spelling, preflight-conflict, resolved-tree migration, retained-sibling,
   nested-retained-migration, forced-retained-migration,
   planned-rename-collision, shared-parent-conflict,
   occupied-rename-temporary, and deep-intermediate-directory cases passed; the
-  full isolated SafeWriter suite passed (46 runnable cases, 4
-  platform-appropriate skips, 458
-  assertions), and `git diff --check` passed. CI failures remain outside this
+  full isolated SafeWriter suite passed (48 runnable cases, 4
+  platform-appropriate skips, 474 assertions), and `git diff --check`
+  passed. CI failures remain outside this
   task.

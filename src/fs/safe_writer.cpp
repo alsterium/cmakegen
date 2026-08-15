@@ -2593,6 +2593,82 @@ void retarget_transaction_artifacts_after_directory_move(
     return true;
 }
 
+[[nodiscard]] Result<bool> is_case_only_spelling_change(
+    std::string_view existing, std::string_view requested,
+    const FilesystemCapabilities& capabilities) {
+    if (existing == requested) return false;
+    // Keep portable ASCII case-only renames working, but do not turn a
+    // trailing-dot/space alias into a physical migration.
+    if (ascii_case_fold(existing) == ascii_case_fold(requested)) return true;
+    if (!has_non_ascii(existing) && !has_non_ascii(requested)) return false;
+
+#ifdef __APPLE__
+    if (capabilities.unicode_mode == UnicodeFilesystemMode::macos_case_sensitive ||
+        capabilities.unicode_mode == UnicodeFilesystemMode::macos_case_insensitive) {
+        auto existing_normalized = macos_unicode_key(existing, false);
+        if (!existing_normalized) return std::unexpected{existing_normalized.error()};
+        auto requested_normalized = macos_unicode_key(requested, false);
+        if (!requested_normalized) return std::unexpected{requested_normalized.error()};
+        // Equal case-sensitive normalization keys differ only in their byte
+        // normalization. APFS/HFS cannot necessarily preserve that spelling,
+        // so it is already physically satisfied.
+        if (*existing_normalized == *requested_normalized) return false;
+        auto existing_folded = macos_unicode_key(existing, true);
+        if (!existing_folded) return std::unexpected{existing_folded.error()};
+        auto requested_folded = macos_unicode_key(requested, true);
+        if (!requested_folded) return std::unexpected{requested_folded.error()};
+        return *existing_folded == *requested_folded;
+    }
+#endif
+
+#ifdef _WIN32
+    if (capabilities.unicode_mode == UnicodeFilesystemMode::windows_case_sensitive ||
+        capabilities.unicode_mode == UnicodeFilesystemMode::windows_case_insensitive) {
+        auto exact = windows_unicode_equal(existing, requested, false);
+        if (!exact) return std::unexpected{exact.error()};
+        if (*exact) return false;
+        return windows_unicode_equal(existing, requested, true);
+    }
+#endif
+
+    return false;
+}
+
+// A replacement may add a new branch beneath a directory that a rename entry
+// will move later in the transaction.  Before that move, create the branch
+// below the existing source spelling so the directory move can retarget it
+// together with the other transaction artifacts.
+[[nodiscard]] Result<std::optional<std::filesystem::path>>
+pending_parent_migration_source(const Transaction& transaction,
+                                const std::filesystem::path& destination_parent) {
+    const auto parent_components = relative_component_strings(transaction.root, destination_parent);
+    for (const auto& candidate : transaction.entries) {
+        if (candidate.kind != TransactionEntryKind::rename) continue;
+        std::vector<std::string> source_components;
+        std::vector<std::string> destination_components;
+        auto changed = has_parent_spelling_change(transaction, candidate,
+                                                   source_components, destination_components);
+        if (!changed) return std::unexpected{changed.error()};
+        if (!*changed) continue;
+
+        for (std::size_t index = 0; index < source_components.size(); ++index) {
+            if (source_components[index] == destination_components[index] ||
+                parent_components.size() < index + 1 ||
+                !std::equal(destination_components.begin(),
+                            destination_components.begin() + static_cast<std::ptrdiff_t>(index + 1),
+                            parent_components.begin())) {
+                continue;
+            }
+            auto source_parent = component_prefix(transaction.root, source_components, index + 1);
+            for (std::size_t suffix = index + 1; suffix < parent_components.size(); ++suffix) {
+                source_parent /= parent_components[suffix];
+            }
+            return source_parent;
+        }
+    }
+    return std::nullopt;
+}
+
 [[nodiscard]] Result<void> migrate_parent_spelling_forward(
     Transaction& transaction, TransactionEntry& entry,
     const std::vector<std::string>& source_components,
@@ -3719,6 +3795,12 @@ void retarget_transaction_artifacts_after_directory_move(
                 }
                 break;
             }
+            auto migrated_source = pending_parent_migration_source(transaction, current);
+            if (!migrated_source) return std::unexpected{migrated_source.error()};
+            if (*migrated_source && **migrated_source != current) {
+                current = **migrated_source;
+                continue;
+            }
             if (entry.kind == TransactionEntryKind::rename) {
                 const auto relative = generic_utf8_string(current.lexically_relative(transaction.root));
                 auto resolved = resolve_existing_alias(transaction.root, relative,
@@ -4244,10 +4326,23 @@ void retarget_transaction_artifacts_after_directory_move(
         if (!next_files.emplace(*normalized, &file).second) {
             return std::unexpected{error("generated file set contains duplicate output paths", *normalized)};
         }
-        auto existing = find_equivalent_manifest_path(next_manifest, *normalized, capabilities);
+        auto existing = find_equivalent_manifest_path(*old_manifest, *normalized, capabilities);
         if (!existing) return std::unexpected{existing.error()};
-        if (*existing) next_manifest.files.erase(**existing);
-        next_manifest.files.insert_or_assign(*normalized, SafeWriter::sha256(file.content));
+        if (*existing) {
+            auto spelling_changed = is_case_only_spelling_change(**existing, *normalized, capabilities);
+            if (!spelling_changed) return std::unexpected{spelling_changed.error()};
+            if (*spelling_changed) {
+                next_manifest.files.erase(**existing);
+                next_manifest.files.insert_or_assign(*normalized, SafeWriter::sha256(file.content));
+            } else {
+                // A normalization-only alias can resolve to the same physical
+                // name on APFS/HFS. Preserve the established manifest spelling
+                // so identical generation remains a no-op.
+                next_manifest.files.insert_or_assign(**existing, SafeWriter::sha256(file.content));
+            }
+        } else {
+            next_manifest.files.insert_or_assign(*normalized, SafeWriter::sha256(file.content));
+        }
     }
 
     auto output_valid = validate_generated_file_equivalence(next_files, capabilities);
@@ -4360,8 +4455,10 @@ void retarget_transaction_artifacts_after_directory_move(
             }
         }
 
-        const bool spelling_changed = exists && owned && relative_path(root, *resolved) != relative;
-        if (spelling_changed) {
+        const auto existing_relative = relative_path(root, *resolved);
+        auto spelling_changed = is_case_only_spelling_change(existing_relative, relative, capabilities);
+        if (!spelling_changed) return std::unexpected{spelling_changed.error()};
+        if (exists && owned && *spelling_changed) {
             plan.entries.push_back(PlannedEntry{TransactionEntryKind::rename,
                                                 relative,
                                                 root / relative,

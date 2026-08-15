@@ -1174,6 +1174,25 @@ TEST_CASE("safe writer accepts distinct ASCII parents beside macOS Unicode outpu
     CHECK(std::filesystem::exists(fixture.path() / "other/plain.txt"));
 }
 
+TEST_CASE("safe writer treats normalization-only aliases as an unchanged physical spelling") {
+    TemporaryDirectory fixture;
+    const std::string composed = "caf\xc3\xa9.txt";
+    const std::string decomposed = "cafe\xcc\x81.txt";
+    if (!filesystem_has_alias(fixture.path(), composed, decomposed)) {
+        SKIP("filesystem does not normalize these Unicode aliases");
+    }
+
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{utf8_path(composed), "content\n"}})));
+    const auto manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+
+    const auto rerun = writer.write(file_set({{utf8_path(decomposed), "content\n"}}));
+    REQUIRE(rerun);
+    CHECK_FALSE(rerun->would_change);
+    CHECK(rerun->files_written == 0);
+    CHECK(read_file(fixture.path() / ".cmakegen/manifest.json") == manifest);
+}
+
 TEST_CASE("safe writer uses macOS Unicode case aliases for ownership and cleanup") {
     TemporaryDirectory fixture;
     const std::string upper = "\xc3\x85.txt";
@@ -1511,6 +1530,18 @@ TEST_CASE("safe writer migrates a shared parent before creating a sibling output
     REQUIRE(writer.write(file_set({{"foo/a.txt", "a-new\n"}, {"foo/b.txt", "b-new\n"}})));
     CHECK(read_file(fixture.path() / "foo/a.txt") == "a-new\n");
     CHECK(read_file(fixture.path() / "foo/b.txt") == "b-new\n");
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "Foo"));
+    CHECK(has_exact_directory_entry(fixture.path(), "foo"));
+}
+
+TEST_CASE("safe writer creates nested sibling branches below a pending parent migration") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/A/x.txt", "x-old\n"}})));
+
+    REQUIRE(writer.write(file_set({{"foo/a/x.txt", "x-new\n"}, {"foo/b/y.txt", "y-new\n"}})));
+    CHECK(read_file(fixture.path() / "foo/a/x.txt") == "x-new\n");
+    CHECK(read_file(fixture.path() / "foo/b/y.txt") == "y-new\n");
     CHECK_FALSE(has_exact_directory_entry(fixture.path(), "Foo"));
     CHECK(has_exact_directory_entry(fixture.path(), "foo"));
 }
