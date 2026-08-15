@@ -173,3 +173,17 @@ Unicode-only extension are defined in
   suite passed 15 cases with 2 platform-appropriate skips (94 assertions),
   bootstrap CTest completed with no registered tests, and `git diff --check`
   passed.
+
+### Review follow-up (distinct ASCII parents)
+
+- macOS path comparison now returns non-equivalence immediately for distinct
+  ASCII components after portable folding. It no longer probes an unrelated
+  project-root filesystem capability when only a later Unicode component needs
+  target-parent validation.
+- The macOS regression combines a Unicode output below an existing target
+  directory with an unrelated ASCII path and verifies both outputs are
+  accepted.
+- Verification: normal and bootstrap builds passed; the isolated SafeWriter
+  suite passed 16 cases with 2 platform-appropriate skips (99 assertions),
+  bootstrap CTest completed with no registered tests, and `git diff --check`
+  passed.

@@ -686,15 +686,18 @@ Result<bool> FilesystemCapabilities::equivalent_path(std::string_view left, std:
     std::string left_parent;
     std::string right_parent;
     for (std::size_t index = 0; index < left_components.size(); ++index) {
-        auto left_cursor = macos_parent_for_relative(*this, left_parent);
-        if (!left_cursor) return std::unexpected{left_cursor.error()};
-        auto right_cursor = macos_parent_for_relative(*this, right_parent);
-        if (!right_cursor) return std::unexpected{right_cursor.error()};
-        const auto left_capability_directory = left_cursor->exists ? left_cursor->directory
-                                                                    : left_cursor->capability_directory;
-        const auto right_capability_directory = right_cursor->exists ? right_cursor->directory
-                                                                      : right_cursor->capability_directory;
-        if (portable_equivalence_key(left_components[index]) != portable_equivalence_key(right_components[index])) {
+        const auto left_key = portable_equivalence_key(left_components[index]);
+        const auto right_key = portable_equivalence_key(right_components[index]);
+        if (left_key != right_key) {
+            if (!has_non_ascii(left_components[index]) && !has_non_ascii(right_components[index])) return false;
+            auto left_cursor = macos_parent_for_relative(*this, left_parent);
+            if (!left_cursor) return std::unexpected{left_cursor.error()};
+            auto right_cursor = macos_parent_for_relative(*this, right_parent);
+            if (!right_cursor) return std::unexpected{right_cursor.error()};
+            const auto left_capability_directory = left_cursor->exists ? left_cursor->directory
+                                                                        : left_cursor->capability_directory;
+            const auto right_capability_directory = right_cursor->exists ? right_cursor->directory
+                                                                          : right_cursor->capability_directory;
             auto component_equivalent = macos_unicode_equivalent_in_directories(
                 left_capability_directory, right_capability_directory, left_components[index], right_components[index]);
             if (!component_equivalent) return std::unexpected{component_equivalent.error()};

@@ -340,6 +340,17 @@ TEST_CASE("safe writer validates macOS Unicode paths at existing target parents"
     CHECK_FALSE(std::filesystem::exists(fixture.path() / "output" / utf8_path(filename)));
 }
 
+TEST_CASE("safe writer accepts distinct ASCII parents beside macOS Unicode output") {
+    TemporaryDirectory fixture;
+    std::filesystem::create_directory(fixture.path() / "output");
+    cmakegen::SafeWriter writer{fixture.path()};
+    const std::string filename = "caf\xc3\xa9.txt";
+    REQUIRE(writer.write(file_set({{utf8_path("output/" + filename), "unicode\n"},
+                                   {"other/plain.txt", "plain\n"}})));
+    CHECK(std::filesystem::exists(fixture.path() / "output" / utf8_path(filename)));
+    CHECK(std::filesystem::exists(fixture.path() / "other/plain.txt"));
+}
+
 TEST_CASE("safe writer uses macOS Unicode case aliases for ownership and cleanup") {
     TemporaryDirectory fixture;
     const std::string upper = "\xc3\x85.txt";
