@@ -183,3 +183,22 @@ and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).
   unowned occupancy remains rejected.
 - Verification: check, dry-run, and write coverage confirms the stale output
   is retained during read-only modes and removed before a successful rename.
+
+### Review follow-up (staging occupancy)
+
+- Planning now probes the physical deterministic content-staging path used by
+  content-changing case-only renames. Check and dry-run reject an unowned
+  occupied path before transaction artifacts are created, while staging still
+  revalidates it to close the race window.
+
+### Review follow-up (forced and equivalent aliases)
+
+- Forced takeover of an unowned portable alias now uses the rename transaction
+  when its spelling differs only by case, so the first successful generation
+  realizes the requested physical spelling and manifest entry together.
+- Scheduled stale removal of a rename temporary now compares paths with the
+  filesystem equivalence policy, allowing a manifest-owned differently cased
+  temporary to be backed up before the rename claims its canonical temporary.
+- Verification: normal and bootstrap builds passed; the isolated SafeWriter
+  suite passed 68 runnable cases with 4 platform-appropriate skips (659
+  assertions), and `git diff --check` passed.

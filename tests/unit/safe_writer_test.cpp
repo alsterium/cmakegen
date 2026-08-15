@@ -820,6 +820,18 @@ TEST_CASE("safe writer protects unowned files unless force is requested") {
     CHECK(read_file(fixture.path() / "CMakeLists.txt") == "generated\n");
 }
 
+TEST_CASE("safe writer force-renames an unowned portable alias to the requested spelling") {
+    TemporaryDirectory fixture;
+    write_file(fixture.path() / "Foo.txt", "user\n");
+    cmakegen::SafeWriter writer{fixture.path()};
+
+    REQUIRE(writer.write(file_set({{"foo.txt", "generated\n"}}), {.force = true}));
+    CHECK(read_file(fixture.path() / "foo.txt") == "generated\n");
+    CHECK(has_exact_directory_entry(fixture.path(), "foo.txt"));
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "Foo.txt"));
+    CHECK(read_file(fixture.path() / ".cmakegen/manifest.json").find("foo.txt") != std::string::npos);
+}
+
 TEST_CASE("safe writer rejects outputs that collide with deterministic staging paths") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};
@@ -925,6 +937,27 @@ TEST_CASE("safe writer checks rename staging paths against retained outputs") {
     CHECK(dry_run.error().diagnostics().front().message.find("staging path") != std::string::npos);
     CHECK(read_file(fixture.path() / "Foo.txt") == "old\n");
     CHECK(read_file(fixture.path() / ".foo.txt.cmakegen-transaction.tmp") == "retained\n");
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+}
+
+TEST_CASE("safe writer validates occupied rename staging paths before journaling") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo.txt", "old\n"}})));
+    write_file(fixture.path() / ".foo.txt.cmakegen-transaction.tmp", "unowned\n");
+    const auto next = file_set({{"foo.txt", "new\n"}});
+
+    const auto checked = writer.write(next, {.check = true});
+    REQUIRE_FALSE(checked);
+    CHECK(checked.error().diagnostics().front().message.find("staging path is occupied") != std::string::npos);
+    const auto dry_run = writer.write(next, {.dry_run = true});
+    REQUIRE_FALSE(dry_run);
+    CHECK(dry_run.error().diagnostics().front().message.find("staging path is occupied") != std::string::npos);
+    const auto result = writer.write(next);
+    REQUIRE_FALSE(result);
+    CHECK(result.error().diagnostics().front().message.find("staging path is occupied") != std::string::npos);
+    CHECK(read_file(fixture.path() / "Foo.txt") == "old\n");
+    CHECK(read_file(fixture.path() / ".foo.txt.cmakegen-transaction.tmp") == "unowned\n");
     CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
 }
 
@@ -1719,6 +1752,18 @@ TEST_CASE("safe writer removes stale owned rename temporaries before case-only m
     REQUIRE(writer.write(next));
     CHECK(read_file(fixture.path() / "foo.txt") == "new\n");
     CHECK_FALSE(std::filesystem::exists(fixture.path() / ".foo.txt.cmakegen-rename.tmp"));
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+}
+
+TEST_CASE("safe writer removes equivalently spelled stale rename temporaries before migration") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo.txt", "old\n"},
+                                   {".FOO.txt.cmakegen-rename.tmp", "stale\n"}})));
+
+    REQUIRE(writer.write(file_set({{"foo.txt", "new\n"}})));
+    CHECK(read_file(fixture.path() / "foo.txt") == "new\n");
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".FOO.txt.cmakegen-rename.tmp"));
     CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
 }
 

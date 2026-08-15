@@ -1507,6 +1507,52 @@ struct PreparedPlan {
     return {};
 }
 
+[[nodiscard]] Result<void> validate_planned_staging_occupancy(
+    const std::vector<PlannedEntry>& entries, const FilesystemCapabilities& capabilities) {
+    for (const auto& entry : entries) {
+        const bool needs_staging = entry.kind == TransactionEntryKind::replace ||
+                                   (entry.kind == TransactionEntryKind::rename &&
+                                    entry.pre_hash != entry.post_hash);
+        if (!needs_staging) continue;
+        const auto staging_parent = entry.kind == TransactionEntryKind::rename &&
+                                            entry.source.parent_path() != entry.destination.parent_path()
+                                        ? entry.source.parent_path()
+                                        : entry.destination.parent_path();
+        const auto staging = transaction_temp_path(staging_parent / entry.destination.filename());
+        const auto relative = staging.lexically_relative(capabilities.project_root).generic_string();
+
+        bool removed_by_plan = false;
+        for (const auto& candidate : entries) {
+            if (candidate.kind != TransactionEntryKind::remove) continue;
+            const auto candidate_relative = candidate.destination.lexically_relative(capabilities.project_root)
+                                                .generic_string();
+            auto equivalent = capabilities.equivalent(candidate_relative, relative);
+            if (!equivalent) return std::unexpected{equivalent.error()};
+            auto removal_ancestor = is_path_ancestor(candidate_relative, relative, capabilities);
+            if (!removal_ancestor) return std::unexpected{removal_ancestor.error()};
+            if (*equivalent || *removal_ancestor) {
+                removed_by_plan = true;
+                break;
+            }
+        }
+        if (removed_by_plan) continue;
+
+        auto resolved = resolve_existing_alias(capabilities.project_root, relative, capabilities);
+        if (!resolved) return std::unexpected{resolved.error()};
+
+        std::error_code ec;
+        const auto status = std::filesystem::symlink_status(*resolved, ec);
+        if (ec && !is_not_found(ec)) {
+            return std::unexpected{error("cannot inspect transaction staging path: " + ec.message(),
+                                         resolved->generic_string())};
+        }
+        if (!is_not_found(ec) && std::filesystem::exists(status)) {
+            return std::unexpected{error("transaction staging path is occupied", resolved->generic_string())};
+        }
+    }
+    return {};
+}
+
 [[nodiscard]] std::string relative_path(const std::filesystem::path& root,
                                         const std::filesystem::path& path) {
     return generic_utf8_string(path.lexically_relative(root));
@@ -2911,10 +2957,18 @@ pending_parent_migration_source(const Transaction& transaction,
         // therefore cannot occupy the temporary at the point the rename
         // claims it, and rejecting it here would make a previously generated
         // output name permanently block a later case-only migration.
-        const bool removed_by_plan = std::ranges::any_of(transaction.entries, [&entry](const auto& candidate) {
-            return candidate.kind == TransactionEntryKind::remove &&
-                   candidate.destination == entry.rename_temporary;
-        });
+        bool removed_by_plan = false;
+        const auto temporary_relative = relative_path(transaction.root, entry.rename_temporary);
+        for (const auto& candidate : transaction.entries) {
+            if (candidate.kind != TransactionEntryKind::remove) continue;
+            auto equivalent = transaction.capabilities.equivalent(
+                relative_path(transaction.root, candidate.destination), temporary_relative);
+            if (!equivalent) return std::unexpected{equivalent.error()};
+            if (*equivalent) {
+                removed_by_plan = true;
+                break;
+            }
+        }
         if (removed_by_plan) continue;
         auto temporary_absent = ensure_rename_temporary_is_absent(transaction, entry);
         if (!temporary_absent) return std::unexpected{temporary_absent.error()};
@@ -4522,7 +4576,7 @@ pending_parent_migration_source(const Transaction& transaction,
         const auto existing_relative = relative_path(root, *resolved);
         auto spelling_changed = is_case_only_spelling_change(existing_relative, relative, capabilities);
         if (!spelling_changed) return std::unexpected{spelling_changed.error()};
-        if (exists && owned && *spelling_changed) {
+        if (exists && *spelling_changed && (owned || options.force)) {
             plan.entries.push_back(PlannedEntry{TransactionEntryKind::rename,
                                                 relative,
                                                 root / relative,
@@ -4557,6 +4611,8 @@ pending_parent_migration_source(const Transaction& transaction,
     if (!rename_valid) return std::unexpected{rename_valid.error()};
     auto staging_paths_valid = validate_planned_staging_collisions(plan.entries, next_manifest, capabilities);
     if (!staging_paths_valid) return std::unexpected{staging_paths_valid.error()};
+    auto staging_occupancy_valid = validate_planned_staging_occupancy(plan.entries, capabilities);
+    if (!staging_occupancy_valid) return std::unexpected{staging_occupancy_valid.error()};
 
     const auto rendered_manifest = render_manifest(next_manifest);
     const bool manifest_changed = !pre_manifest.present || pre_manifest.content != rendered_manifest;
