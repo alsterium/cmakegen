@@ -56,8 +56,9 @@ T014.
   AppleClang/macOS but failing on Clang/Linux and MSVC/Windows. Capture the
   failing job logs and fix the platform-specific bootstrap/normal invariant
   before marking T015 done or merging the CI matrix PR.
-- 2026-08-16: Capped `CMAKE_BUILD_PARALLEL_LEVEL` at 2 for each matrix job so
-  cold Unix Makefiles builds cannot request unbounded parallelism. The
-  canonical generated files remain pinned to LF via `.gitattributes` for
-  Windows manifest-hash checks. The historical hosted-job logs have expired,
-  so T015 remains `doing` until a new matrix run records successful results.
+- 2026-08-16: Capped each bootstrap and normal build with `--parallel 2` (and
+  set the same job-level default) so cold Unix Makefiles builds cannot request
+  unbounded parallelism. The canonical generated files remain pinned to LF via
+  `.gitattributes` for Windows manifest-hash checks. The historical hosted-job
+  logs have expired, so T015 remains `doing` until a new matrix run records
+  successful results.

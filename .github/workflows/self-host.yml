@@ -64,7 +64,7 @@ jobs:
 
       - name: A. Build bootstrap generator
         shell: bash
-        run: cmake --build build/bootstrap --config Debug --parallel
+        run: cmake --build build/bootstrap --config Debug --parallel 2
 
       - name: Locate bootstrap generator
         id: bootstrap
@@ -88,7 +88,7 @@ jobs:
 
       - name: C. Build normal project
         shell: bash
-        run: cmake --build --preset debug --config Debug --parallel
+        run: cmake --build --preset debug --config Debug --parallel 2
 
       - name: Locate normal generator
         id: normal
