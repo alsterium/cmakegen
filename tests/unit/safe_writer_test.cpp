@@ -1379,6 +1379,33 @@ TEST_CASE("safe writer migrates a case-only parent shared by multiple outputs") 
     CHECK(has_exact_directory_entry(fixture.path(), "foo"));
 }
 
+TEST_CASE("safe writer migrates a shared parent before creating a sibling output") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/a.txt", "a-old\n"}})));
+
+    REQUIRE(writer.write(file_set({{"foo/a.txt", "a-new\n"}, {"foo/b.txt", "b-new\n"}})));
+    CHECK(read_file(fixture.path() / "foo/a.txt") == "a-new\n");
+    CHECK(read_file(fixture.path() / "foo/b.txt") == "b-new\n");
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "Foo"));
+    CHECK(has_exact_directory_entry(fixture.path(), "foo"));
+}
+
+TEST_CASE("safe writer refuses to migrate an ancestor containing an unowned descendant") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/Sub/generated.txt", "generated\n"}})));
+    write_file(fixture.path() / "Foo/Sub/user.txt", "user\n");
+    const auto previous_manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+
+    CHECK_FALSE(writer.write(file_set({{"foo/Sub/generated.txt", "updated\n"}})));
+    CHECK(read_file(fixture.path() / "Foo/Sub/generated.txt") == "generated\n");
+    CHECK(read_file(fixture.path() / "Foo/Sub/user.txt") == "user\n");
+    CHECK(has_exact_directory_entry(fixture.path(), "Foo"));
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "foo"));
+    CHECK(read_file(fixture.path() / ".cmakegen/manifest.json") == previous_manifest);
+}
+
 TEST_CASE("safe writer protects an unowned case-only conflicting path") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};

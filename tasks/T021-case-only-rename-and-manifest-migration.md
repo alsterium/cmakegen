@@ -93,6 +93,9 @@ and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).
   transaction-owned sibling outputs and staging files are retained. Recovery
   adopts a resolved rename temporary when the journal records the pre-move
   parent spelling.
+- Descendants are inspected recursively before moving an owned ancestor, and
+  mixed rename/replace transactions suppress replacement-parent creation and
+  stage new siblings below the existing physical parent until migration.
 - Verification: the nested-parent case and full isolated SafeWriter suite
-  passed (27 runnable cases, 4 platform-appropriate skips, 277 assertions),
+  passed (29 runnable cases, 4 platform-appropriate skips, 295 assertions),
   and `git diff --check` passed. CI failures remain outside this task.

@@ -2369,6 +2369,65 @@ private:
     return result;
 }
 
+[[nodiscard]] Result<bool> is_transaction_owned_path(const Transaction& transaction,
+                                                      const std::filesystem::path& path) {
+    for (const auto& transaction_entry : transaction.entries) {
+        const std::array<std::filesystem::path, 6> candidates{
+            transaction_entry.source,
+            transaction_entry.destination,
+            transaction_entry.temporary,
+            transaction_entry.rename_temporary,
+            transaction_entry.source.parent_path(),
+            transaction_entry.destination.parent_path(),
+        };
+        for (const auto& candidate : candidates) {
+            if (candidate.empty()) continue;
+            auto equivalent = transaction.capabilities.equivalent(
+                relative_path(transaction.root, candidate),
+                relative_path(transaction.root, path));
+            if (!equivalent) return std::unexpected{equivalent.error()};
+            if (*equivalent) return true;
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] Result<void> ensure_transaction_owned_subtree(
+    const Transaction& transaction, const std::filesystem::path& directory) {
+    std::error_code ec;
+    const auto status = std::filesystem::symlink_status(directory, ec);
+    if (ec || std::filesystem::is_symlink(status) || !std::filesystem::is_directory(status)) {
+        return std::unexpected{error("rename parent contains an unexpected directory",
+                                     directory.generic_string())};
+    }
+    std::filesystem::directory_iterator entries(directory, ec);
+    if (ec) {
+        return std::unexpected{error("cannot inspect rename descendant: " + ec.message(),
+                                     directory.generic_string())};
+    }
+    for (const auto& child : entries) {
+        auto owned = is_transaction_owned_path(transaction, child.path());
+        if (!owned) return std::unexpected{owned.error()};
+        if (!*owned) {
+            return std::unexpected{error("cannot migrate a rename parent containing an unowned descendant",
+                                         child.path().generic_string())};
+        }
+        const auto child_status = std::filesystem::symlink_status(child.path(), ec);
+        if (ec || std::filesystem::is_symlink(child_status)) {
+            return std::unexpected{error("rename descendant is not a regular transaction entry",
+                                         child.path().generic_string())};
+        }
+        if (std::filesystem::is_directory(child_status)) {
+            auto nested = ensure_transaction_owned_subtree(transaction, child.path());
+            if (!nested) return std::unexpected{nested.error()};
+        } else if (!std::filesystem::is_regular_file(child_status)) {
+            return std::unexpected{error("rename descendant is not a regular transaction entry",
+                                         child.path().generic_string())};
+        }
+    }
+    return {};
+}
+
 [[nodiscard]] Result<void> ensure_parent_directory_contains_only(
     const Transaction& transaction, const std::filesystem::path& directory,
     std::string_view allowed_name,
@@ -2389,29 +2448,9 @@ private:
         const auto name = entry.path().filename().generic_string();
         const bool is_allowed = name == allowed_name;
         const bool is_additional_file = !additional_file_name.empty() && name == additional_file_name;
-        bool is_transaction_owned = false;
-        for (const auto& transaction_entry : transaction.entries) {
-            const std::array<std::filesystem::path, 6> candidates{
-                transaction_entry.source,
-                transaction_entry.destination,
-                transaction_entry.temporary,
-                transaction_entry.rename_temporary,
-                transaction_entry.source.parent_path(),
-                transaction_entry.destination.parent_path(),
-            };
-            for (const auto& candidate : candidates) {
-                if (candidate.empty()) continue;
-                auto equivalent = transaction.capabilities.equivalent(
-                    relative_path(transaction.root, candidate),
-                    relative_path(transaction.root, entry.path()));
-                if (!equivalent) return std::unexpected{equivalent.error()};
-                if (*equivalent) {
-                    is_transaction_owned = true;
-                    break;
-                }
-            }
-            if (is_transaction_owned) break;
-        }
+        auto transaction_owned = is_transaction_owned_path(transaction, entry.path());
+        if (!transaction_owned) return std::unexpected{transaction_owned.error()};
+        const bool is_transaction_owned = *transaction_owned;
         if (!is_allowed && !is_additional_file && !is_transaction_owned) {
             return std::unexpected{error("cannot migrate a rename parent containing an unowned entry",
                                          directory.generic_string())};
@@ -2426,6 +2465,10 @@ private:
              !std::filesystem::is_regular_file(child_status))) {
             return std::unexpected{error("rename parent contains an unexpected transaction entry",
                                          entry.path().generic_string())};
+        }
+        if (is_transaction_owned && std::filesystem::is_directory(child_status)) {
+            auto descendants = ensure_transaction_owned_subtree(transaction, entry.path());
+            if (!descendants) return std::unexpected{descendants.error()};
         }
     }
     if (!found_allowed) {
@@ -3235,10 +3278,32 @@ private:
         if (planned.kind == TransactionEntryKind::replace ||
             (planned.kind == TransactionEntryKind::rename && planned.pre_hash != planned.post_hash) ||
             (planned.kind == TransactionEntryKind::manifest && planned.post_exists)) {
+            auto staging_parent = planned.destination.parent_path();
+            if (planned.kind == TransactionEntryKind::replace && staging_parent != root) {
+                auto resolved_parent = resolve_existing_alias(
+                    root, relative_path(root, staging_parent), transaction.capabilities);
+                if (!resolved_parent) return std::unexpected{resolved_parent.error()};
+                std::filesystem::file_status parent_status;
+                auto inspected_parent = safe_status(*resolved_parent, parent_status);
+                if (!inspected_parent) return std::unexpected{inspected_parent.error()};
+                if (std::filesystem::exists(parent_status)) {
+                    const bool scheduled_removal = std::ranges::any_of(
+                        plan.entries, [&resolved_parent](const auto& candidate) {
+                            return candidate.kind == TransactionEntryKind::remove &&
+                                   candidate.destination == *resolved_parent;
+                        });
+                    if (std::filesystem::is_symlink(parent_status) ||
+                        (!std::filesystem::is_directory(parent_status) && !scheduled_removal)) {
+                        return std::unexpected{error("output parent is not a directory",
+                                                     resolved_parent->generic_string())};
+                    }
+                    if (std::filesystem::is_directory(parent_status)) staging_parent = *resolved_parent;
+                }
+            }
             const auto temporary_destination = planned.kind == TransactionEntryKind::rename &&
                                                        planned.source.parent_path() != planned.destination.parent_path()
                                                    ? planned.source.parent_path() / planned.destination.filename()
-                                                   : planned.destination;
+                                                   : staging_parent / planned.destination.filename();
             entry.temporary = transaction_temp_path(temporary_destination);
         }
         if (planned.kind == TransactionEntryKind::rename) {
@@ -3292,6 +3357,31 @@ private:
             return entry.kind == TransactionEntryKind::remove && entry.destination == path;
         });
     };
+    const auto has_pending_parent_migration = [&transaction](const std::filesystem::path& parent)
+        -> Result<bool> {
+        const auto parent_relative = relative_path(transaction.root, parent);
+        for (const auto& candidate : transaction.entries) {
+            if (candidate.kind != TransactionEntryKind::rename) continue;
+            std::vector<std::string> source_components;
+            std::vector<std::string> destination_components;
+            auto changed = has_parent_spelling_change(transaction, candidate,
+                                                       source_components,
+                                                       destination_components);
+            if (!changed) return std::unexpected{changed.error()};
+            if (!*changed) continue;
+            const auto destination_parent = relative_path(transaction.root,
+                                                           candidate.destination.parent_path());
+            auto equivalent = transaction.capabilities.equivalent(parent_relative,
+                                                                    destination_parent);
+            if (!equivalent) return std::unexpected{equivalent.error()};
+            if (*equivalent) return true;
+            auto ancestor = is_path_ancestor(parent_relative, destination_parent,
+                                             transaction.capabilities);
+            if (!ancestor) return std::unexpected{ancestor.error()};
+            if (*ancestor) return true;
+        }
+        return false;
+    };
     for (const auto& entry : transaction.entries) {
         if (entry.kind != TransactionEntryKind::replace && entry.kind != TransactionEntryKind::rename) continue;
         auto current = entry.destination.parent_path();
@@ -3337,6 +3427,9 @@ private:
                 }
             }
             const auto relative = generic_utf8_string(current.lexically_relative(transaction.root));
+            auto pending_migration = has_pending_parent_migration(current);
+            if (!pending_migration) return std::unexpected{pending_migration.error()};
+            if (*pending_migration) break;
             if (relative.empty() || is_reserved_metadata_path(relative)) {
                 return std::unexpected{error("output parent is unsafe", current.generic_string())};
             }
@@ -3747,6 +3840,15 @@ private:
             auto renamed = apply_rename_entry(transaction, entry);
             if (!renamed) return fail(renamed.error());
         } else {
+            auto resolved_temporary = resolve_existing_alias(
+                transaction.root, relative_path(transaction.root, entry.temporary),
+                transaction.capabilities);
+            if (!resolved_temporary) return fail(resolved_temporary.error());
+            if (resolved_temporary->filename() != entry.temporary.filename()) {
+                return fail(error("transaction staging path changed while applying output",
+                                  entry.temporary.generic_string()));
+            }
+            entry.temporary = *resolved_temporary;
             auto replaced = replace_file(entry.temporary, entry.destination);
             if (!replaced) return fail(replaced.error());
         }
@@ -3985,6 +4087,22 @@ private:
                                             SafeWriter::sha256(rendered_manifest),
                                             rendered_manifest});
     }
+    std::stable_sort(plan.entries.begin(), plan.entries.end(), [](const auto& left, const auto& right) {
+        const auto priority = [](TransactionEntryKind kind) {
+            switch (kind) {
+            case TransactionEntryKind::remove:
+                return 0;
+            case TransactionEntryKind::rename:
+                return 1;
+            case TransactionEntryKind::replace:
+                return 2;
+            case TransactionEntryKind::manifest:
+                return 3;
+            }
+            return 3;
+        };
+        return priority(left.kind) < priority(right.kind);
+    });
     plan.result.files_written = std::ranges::count_if(plan.entries, [](const auto& entry) {
         return entry.kind == TransactionEntryKind::replace || entry.kind == TransactionEntryKind::rename;
     });
