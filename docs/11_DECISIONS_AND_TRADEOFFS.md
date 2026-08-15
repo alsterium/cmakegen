@@ -200,6 +200,12 @@ case-sensitive settings are respected. These comparisons never use the process
 locale. If a required Unicode capability cannot be detected safely, the
 implementation must fail safe rather than claim collision safety.
 
+All manifest keys and generated relative paths are converted explicitly between
+the UTF-8 identity representation and native filesystem paths before alias
+resolution. This applies equally to writes, stale cleanup, and `clean`, so a
+non-UTF-8 Windows active code page cannot create a destination spelling that
+differs from manifest ownership.
+
 Why:
 
 - generated trees may be moved between case-sensitive and case-insensitive

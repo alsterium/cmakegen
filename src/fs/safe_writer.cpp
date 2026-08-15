@@ -871,7 +871,7 @@ Result<bool> FilesystemCapabilities::equivalent(std::string_view left, std::stri
                 !entry["path"].is_string() || !entry["sha256"].is_string()) {
                 return std::unexpected{error("manifest contains an invalid file entry", path.generic_string())};
             }
-            auto normalized = normalize_relative_path(entry["path"].get<std::string>());
+            auto normalized = normalize_relative_path(path_from_utf8(entry["path"].get<std::string>()));
             if (!normalized || *normalized != entry["path"].get<std::string>() ||
                 !portable_paths.emplace(portable_equivalence_key(*normalized)).second ||
                 !manifest.files.emplace(*normalized, entry["sha256"].get<std::string>()).second) {
@@ -1096,7 +1096,7 @@ Result<WriteResult> SafeWriter::write(const GeneratedFileSet& files, const Write
         if (!normalized) return std::unexpected{normalized.error()};
         auto unicode_valid = capabilities.validate_path(*normalized);
         if (!unicode_valid) return std::unexpected{unicode_valid.error()};
-        auto parents = reject_symlink_parents(project_root_, *normalized, capabilities);
+        auto parents = reject_symlink_parents(project_root_, path_from_utf8(*normalized), capabilities);
         if (!parents) return std::unexpected{parents.error()};
         if (!next_files.emplace(*normalized, &file).second) {
             return std::unexpected{error("generated file set contains duplicate output paths", *normalized)};
@@ -1131,11 +1131,11 @@ Result<WriteResult> SafeWriter::write(const GeneratedFileSet& files, const Write
             }
             if (retained) continue;
 
-            auto checked = normalize_relative_path(relative);
+            auto checked = normalize_relative_path(path_from_utf8(relative));
             if (!checked) return std::unexpected{checked.error()};
-            auto parent = reject_symlink_parents(project_root_, *checked, capabilities);
+            auto parent = reject_symlink_parents(project_root_, path_from_utf8(*checked), capabilities);
             if (!parent) return std::unexpected{parent.error()};
-            auto resolved_destination = resolve_existing_alias(project_root_, relative, capabilities);
+            auto resolved_destination = resolve_existing_alias(project_root_, path_from_utf8(relative), capabilities);
             if (!resolved_destination) return std::unexpected{resolved_destination.error()};
             const auto destination = *resolved_destination;
             auto status = std::filesystem::symlink_status(destination, ec);
@@ -1161,7 +1161,7 @@ Result<WriteResult> SafeWriter::write(const GeneratedFileSet& files, const Write
         }
     }
     for (const auto& [relative,file] : next_files) {
-        auto resolved_destination = resolve_existing_alias(project_root_, relative, capabilities);
+        auto resolved_destination = resolve_existing_alias(project_root_, path_from_utf8(relative), capabilities);
         if (!resolved_destination) return std::unexpected{resolved_destination.error()};
         const auto destination = *resolved_destination;
         auto status = std::filesystem::symlink_status(destination, ec);
@@ -1205,7 +1205,7 @@ Result<WriteResult> SafeWriter::write(const GeneratedFileSet& files, const Write
     }
     for (const auto& [relative, file] : next_files) {
         (void)file;
-        auto ancestors = reject_file_ancestor(project_root_, relative, capabilities, removals);
+        auto ancestors = reject_file_ancestor(project_root_, path_from_utf8(relative), capabilities, removals);
         if (!ancestors) return std::unexpected{ancestors.error()};
     }
     const auto rendered_manifest = render_manifest(next_manifest);
@@ -1273,13 +1273,13 @@ Result<WriteResult> SafeWriter::clean(bool dry_run, bool force) const {
 
     WriteResult result{};
     for (const auto& [relative, hash] : manifest->files) {
-        auto valid = normalize_relative_path(relative);
+        auto valid = normalize_relative_path(path_from_utf8(relative));
         if (!valid) return std::unexpected{valid.error()};
         auto unicode_valid = capabilities.validate_path(*valid);
         if (!unicode_valid) return std::unexpected{unicode_valid.error()};
-        auto parents = reject_symlink_parents(project_root_, *valid, capabilities);
+        auto parents = reject_symlink_parents(project_root_, path_from_utf8(*valid), capabilities);
         if (!parents) return std::unexpected{parents.error()};
-        auto resolved_path = resolve_existing_alias(project_root_, relative, capabilities);
+        auto resolved_path = resolve_existing_alias(project_root_, path_from_utf8(relative), capabilities);
         if (!resolved_path) return std::unexpected{resolved_path.error()};
         const auto path = *resolved_path;
         auto status = std::filesystem::symlink_status(path, ec);
@@ -1312,7 +1312,7 @@ Result<WriteResult> SafeWriter::clean(bool dry_run, bool force) const {
 
     for (const auto& [relative, hash] : manifest->files) {
         (void)hash;
-        auto resolved_path = resolve_existing_alias(project_root_, relative, capabilities);
+        auto resolved_path = resolve_existing_alias(project_root_, path_from_utf8(relative), capabilities);
         if (!resolved_path) return std::unexpected{resolved_path.error()};
         std::filesystem::remove(*resolved_path, ec);
         if (ec) return std::unexpected{error("cannot remove owned file: " + ec.message(), relative)};

@@ -115,3 +115,11 @@ Unicode-only extension are defined in
   case-insensitive comparison when either side requires it. The result is
   symmetric even when equivalent parent spellings lead to mounted volumes with
   different case modes.
+
+### Review follow-up (UTF-8 destination resolution)
+
+- Manifest keys and generated relative paths now pass through the explicit
+  UTF-8-to-native conversion before alias resolution, parent validation, and
+  normalization. This covers write destinations, stale cleanup, and `clean`.
+- The Windows Unicode path regression now verifies its requested spelling
+  through write, stale removal, and clean.

@@ -379,6 +379,12 @@ TEST_CASE("safe writer preserves native Windows paths as UTF-8 during preflight"
     REQUIRE(writer.write(files));
     CHECK(std::filesystem::exists(fixture.path() / utf8_path(filename)));
     CHECK(read_file(fixture.path() / ".cmakegen/manifest.json").find(filename) != std::string::npos);
+    REQUIRE(writer.write(file_set({{"replacement.txt", "replacement\n"}})));
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / utf8_path(filename)));
+
+    REQUIRE(writer.write(files));
+    REQUIRE(writer.clean());
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / utf8_path(filename)));
 }
 
 TEST_CASE("safe writer follows Windows Unicode case capability") {
