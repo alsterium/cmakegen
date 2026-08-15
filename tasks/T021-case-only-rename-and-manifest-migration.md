@@ -99,7 +99,7 @@ and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).
 - Rename temporary ownership is journaled before the first temporary move;
   cleanup and rollback leave an unclaimed pre-existing sibling untouched even
   when its hash matches the rename source.
-- Verification: the rename-temporary ownership case and full isolated
-  SafeWriter suite passed (32 runnable cases, 4 platform-appropriate skips,
-  321 assertions), and `git diff --check` passed. CI failures remain outside
-  this task.
+- Verification: the rename-temporary ownership case, intermediate-directory
+  descendant case, and full isolated SafeWriter suite passed (34 runnable
+  cases, 4 platform-appropriate skips, 335 assertions), and `git diff --check`
+  passed. CI failures remain outside this task.

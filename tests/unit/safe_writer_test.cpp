@@ -1421,6 +1421,21 @@ TEST_CASE("safe writer refuses to migrate an ancestor containing an unowned desc
     CHECK(read_file(fixture.path() / ".cmakegen/manifest.json") == previous_manifest);
 }
 
+TEST_CASE("safe writer inspects unowned descendants below intermediate rename directories") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/A/B/generated.txt", "generated\n"}})));
+    write_file(fixture.path() / "Foo/A/B/user.txt", "user\n");
+    const auto previous_manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+
+    CHECK_FALSE(writer.write(file_set({{"foo/A/B/generated.txt", "updated\n"}})));
+    CHECK(read_file(fixture.path() / "Foo/A/B/generated.txt") == "generated\n");
+    CHECK(read_file(fixture.path() / "Foo/A/B/user.txt") == "user\n");
+    CHECK(has_exact_directory_entry(fixture.path(), "Foo"));
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "foo"));
+    CHECK(read_file(fixture.path() / ".cmakegen/manifest.json") == previous_manifest);
+}
+
 TEST_CASE("safe writer protects an unowned case-only conflicting path") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};

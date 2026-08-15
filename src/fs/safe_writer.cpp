@@ -2495,7 +2495,8 @@ private:
             return std::unexpected{error("rename parent contains an unexpected transaction entry",
                                          entry.path().generic_string())};
         }
-        if (is_transaction_owned && std::filesystem::is_directory(child_status)) {
+        if ((is_transaction_owned || (is_allowed && allowed_directory)) &&
+            std::filesystem::is_directory(child_status)) {
             auto descendants = ensure_transaction_owned_subtree(transaction, entry.path());
             if (!descendants) return std::unexpected{descendants.error()};
         }
