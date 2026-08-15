@@ -2385,8 +2385,7 @@ private:
             if (std::filesystem::exists(status)) {
                 const bool recreated_for_transition =
                     std::ranges::any_of(transaction.created_directories,
-                                        [&entry](const auto& directory) { return directory == entry.destination; }) ||
-                    (transaction.creating_directory && *transaction.creating_directory == entry.destination);
+                                        [&entry](const auto& directory) { return directory == entry.destination; });
                 bool untouched_original = false;
                 if (!recreated_for_transition && entry.status != TransactionEntryStatus::applied &&
                     entry.had_original && std::filesystem::is_regular_file(status)) {
@@ -2929,6 +2928,11 @@ private:
         if (entry.kind == TransactionEntryKind::replace) ++replacement_seen;
     }
 
+    auto complete = post_state_is_complete(transaction);
+    if (!complete) return fail(complete.error());
+    if (!*complete) {
+        return fail(error("transaction post-state changed before commit", transaction.directory.generic_string()));
+    }
     transaction.state = "committed";
     transaction.phase = "commit";
     auto committed = write_journal(transaction);

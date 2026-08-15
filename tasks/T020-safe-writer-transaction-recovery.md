@@ -172,3 +172,12 @@ intended post-state.
   `build/t020-normal/cmakegen_tests "safe writer*"` passed with 36 runnable
   cases, 3 platform-appropriate skips, and 312 assertions; `git diff --check`
   passed. CI failures remain outside this task.
+- Rebased on the finalized T019 Unicode-path capability branch. Case-only or
+  Unicode-alias replacement remains safely rejected here; the explicit rename
+  transaction belongs to T021. Before recording `committed`, SafeWriter now
+  verifies the complete post-manifest tree. For an interrupted directory
+  creation, an empty directory indistinguishable from one created by another
+  process is never deleted during recovery; the transaction is retained with
+  recovery-required diagnostics. Verification: normal and bootstrap builds
+  passed; `cmakegen_tests "safe writer*" --reporter compact` passed with 37
+  cases, 3 platform skips, and 316 assertions; `git diff --check` passed.

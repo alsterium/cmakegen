@@ -301,7 +301,7 @@ TEST_CASE("safe writer journals output directories only after creating them") {
     CHECK(journal["created_directories"][0] == "generated");
 }
 
-TEST_CASE("safe writer recovers a directory created while its ownership was in progress") {
+TEST_CASE("safe writer preserves an indistinguishable directory created while ownership was in progress") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};
     REQUIRE(writer.write(file_set({{"generated", "old\n"}})));
@@ -318,9 +318,11 @@ TEST_CASE("safe writer recovers a directory created while its ownership was in p
     journal["creating_directory"] = "generated";
     write_file(transaction / "journal.json", journal.dump(2) + "\n");
 
-    REQUIRE(writer.write(file_set({{"generated/child.txt", "new\n"}})));
-    CHECK(read_file(fixture.path() / "generated/child.txt") == "new\n");
-    CHECK_FALSE(std::filesystem::exists(transaction));
+    const auto recovered = writer.write(file_set({{"generated/child.txt", "new\n"}}));
+    CHECK_FALSE(recovered);
+    CHECK(recovered.error().diagnostics().front().message.find("requires operator recovery") != std::string::npos);
+    CHECK(std::filesystem::is_directory(fixture.path() / "generated"));
+    CHECK(std::filesystem::exists(transaction));
 }
 
 TEST_CASE("safe writer reports platform-specific locked-file replacement failures") {
@@ -983,9 +985,8 @@ TEST_CASE("safe writer uses macOS Unicode case aliases for ownership and cleanup
     const auto first = writer.write(file_set({{utf8_path(upper), "first\n"}}));
     REQUIRE(first);
     const auto updated = writer.write(file_set({{utf8_path(lower), "second\n"}}));
-    REQUIRE(updated);
-    CHECK(updated->files_written == 1);
-    CHECK(read_file(fixture.path() / utf8_path(upper)) == "second\n");
+    CHECK_FALSE(updated);
+    CHECK(read_file(fixture.path() / utf8_path(upper)) == "first\n");
     REQUIRE(writer.clean());
     CHECK_FALSE(std::filesystem::exists(fixture.path() / utf8_path(upper)));
 }
@@ -1112,8 +1113,8 @@ TEST_CASE("safe writer recognizes manifest ownership through portable path alias
     REQUIRE(writer.write(file_set({{"Foo.txt", "first\n"}})));
 
     const auto updated = writer.write(file_set({{"foo.txt", "second\n"}}));
-    REQUIRE(updated);
-    CHECK(read_file(fixture.path() / "Foo.txt") == "second\n");
+    CHECK_FALSE(updated);
+    CHECK(read_file(fixture.path() / "Foo.txt") == "first\n");
     REQUIRE(writer.clean());
     CHECK_FALSE(std::filesystem::exists(fixture.path() / "Foo.txt"));
 }
