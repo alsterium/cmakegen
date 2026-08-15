@@ -77,3 +77,14 @@ Unicode-only extension are defined in
   with no registered tests, and `git diff --check` passed.
 - Follow-ups: T020 remains responsible for transaction rollback/recovery, and
   T021 remains responsible for case-only rename/manifest migration semantics.
+
+### Review follow-up
+
+- Windows Unicode comparisons now query the case-sensitivity capability from
+  each existing parent directory while resolving a relative path. Existing
+  alias, ancestor, and symlink-parent scans use the physical directory they
+  are enumerating rather than reusing the project-root setting.
+- Verification: normal build passed, the isolated SafeWriter suite passed 13
+  runnable cases with 2 platform-appropriate skips, and `git diff --check`
+  passed. The initial in-sandbox dependency download failed because DNS was
+  unavailable; the same build completed with the approved network retry.

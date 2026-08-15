@@ -186,10 +186,15 @@ This is a portability invariant: `Foo.txt` and `foo.txt` are
 collision-equivalent even on a case-sensitive host, so generated output cannot
 contain both portable spellings.
 
-T019 may add filesystem-capability-aware handling for additional Unicode case
-and normalization equivalences, but it must not replace or relax the portable
-ASCII/Win32 invariant. If Unicode capability cannot be detected safely, the
-implementation must fail safe rather than claim collision safety.
+The Unicode extension is filesystem-capability-aware and must not replace or
+relax the portable ASCII/Win32 invariant. On supported macOS APFS/HFS volumes,
+SafeWriter compares Unicode names using Core Foundation normalization and
+case-folding rules. On Windows, it validates UTF-8 through UTF-16 and uses
+ordinal comparison; the case-sensitivity flag is queried for each existing
+parent directory while a path is resolved, so per-directory case-sensitive
+settings are respected. These comparisons never use the process locale. If a
+required Unicode capability cannot be detected safely, the implementation must
+fail safe rather than claim collision safety.
 
 Why:
 
