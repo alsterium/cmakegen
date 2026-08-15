@@ -475,6 +475,39 @@ TEST_CASE("safe writer rejects symlinked parents while confirming post-state") {
     CHECK(std::filesystem::exists(transaction / "journal.json"));
 }
 
+TEST_CASE("safe writer rejects symlinked parents while confirming pre-state") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"first/generated.txt", "first-old\n"},
+                                   {"second/generated.txt", "second-old\n"}})));
+    const auto next = file_set({{"first/generated.txt", "first-new\n"},
+                                {"second/generated.txt", "second-new\n"}});
+
+    {
+        FailureInjectionScope injection{{FailurePoint::during_replacement, 1}};
+        cmakegen::detail::safe_writer_testing::queue_failure_injection({FailurePoint::rollback, 1});
+        const auto result = writer.write(next);
+        REQUIRE_FALSE(result);
+        CHECK(result.error().diagnostics().front().message.find("requires operator recovery") != std::string::npos);
+    }
+
+    const auto transaction = fixture.path() / ".cmakegen/transaction";
+    const auto external_output = fixture.path() / "external-output";
+    std::filesystem::create_directories(external_output);
+    write_file(external_output / "generated.txt", "second-old\n");
+    std::error_code error;
+    std::filesystem::remove_all(fixture.path() / "second", error);
+    REQUIRE_FALSE(error);
+    std::filesystem::create_directory_symlink(external_output, fixture.path() / "second", error);
+    if (error) SKIP("filesystem cannot create directory symlinks");
+
+    const auto recovery = writer.write(next);
+    REQUIRE_FALSE(recovery);
+    CHECK(recovery.error().diagnostics().front().message.find("symbolic link") != std::string::npos);
+    CHECK(read_file(external_output / "generated.txt") == "second-old\n");
+    CHECK(std::filesystem::exists(transaction / "journal.json"));
+}
+
 TEST_CASE("safe writer cleans recoverable journal-less transaction scaffolding") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};

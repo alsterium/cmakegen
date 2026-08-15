@@ -2214,6 +2214,8 @@ private:
 
 [[nodiscard]] Result<void> verify_pre_state(const Transaction& transaction) {
     for (const auto& entry : transaction.entries) {
+        auto parents = validate_recovery_path_parents(transaction, entry.destination);
+        if (!parents) return std::unexpected{parents.error()};
         std::filesystem::file_status status;
         auto inspected = safe_status(entry.destination, status);
         if (!inspected) return std::unexpected{inspected.error()};

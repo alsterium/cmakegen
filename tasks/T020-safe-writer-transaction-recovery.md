@@ -138,6 +138,8 @@ intended post-state.
 - Staging collision preflight now compares generated staging paths with the
   complete post-write manifest, including outputs retained when stale cleanup
   is disabled.
+- Pre-state verification revalidates every output parent before accepting a
+  partially restored transaction, including entries already marked restored.
 - Tests: added partial-staging, stale-journal-temporary, and journal-less
   recovery coverage, including preservation of unclaimed staging paths and
   journal-less backup validation. Added lifetime-lock contention and retained
@@ -148,6 +150,6 @@ intended post-state.
   pre-hash-preservation path.
 - Verification: `cmake --build build/t020-normal --parallel 2` and
   `cmake --build build/t020-bootstrap --parallel 2` passed;
-  `build/t020-normal/cmakegen_tests "safe writer*"` passed with 30 runnable
-  cases, 3 platform-appropriate skips, and 255 assertions; `git diff --check`
+  `build/t020-normal/cmakegen_tests "safe writer*"` passed with 31 runnable
+  cases, 3 platform-appropriate skips, and 267 assertions; `git diff --check`
   passed. CI failures remain outside this task.
