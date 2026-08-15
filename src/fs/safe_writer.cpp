@@ -1212,6 +1212,14 @@ constexpr std::array<std::uint32_t, 64> sha_constants = {
                 return std::unexpected{error("generated output collides with a transaction staging path",
                                              other)};
             }
+            auto staging_ancestor = is_path_ancestor(staging, other, capabilities);
+            if (!staging_ancestor) return std::unexpected{staging_ancestor.error()};
+            auto output_ancestor = is_path_ancestor(other, staging, capabilities);
+            if (!output_ancestor) return std::unexpected{output_ancestor.error()};
+            if (*staging_ancestor || *output_ancestor) {
+                return std::unexpected{error("generated output collides with a transaction staging path",
+                                             other)};
+            }
         }
     }
     return {};
