@@ -1463,6 +1463,27 @@ TEST_CASE("safe writer migrates a case-only parent shared by multiple outputs") 
     CHECK(has_exact_directory_entry(fixture.path(), "foo"));
 }
 
+TEST_CASE("safe writer rejects requested siblings that conflict with parent migration spelling") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/a.txt", "a-old\n"}, {"Foo/b.txt", "b-old\n"}})));
+    const auto previous_manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+    const auto next = file_set({{"foo/a.txt", "a-new\n"}, {"Foo/b.txt", "b-new\n"}});
+
+    const auto checked = writer.write(next, {.check = true});
+    REQUIRE_FALSE(checked);
+    CHECK(checked.error().diagnostics().front().message.find("parent spelling migration") != std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+
+    const auto dry_run = writer.write(next, {.dry_run = true});
+    REQUIRE_FALSE(dry_run);
+    CHECK(dry_run.error().diagnostics().front().message.find("parent spelling migration") != std::string::npos);
+    CHECK(read_file(fixture.path() / "Foo/a.txt") == "a-old\n");
+    CHECK(read_file(fixture.path() / "Foo/b.txt") == "b-old\n");
+    CHECK(read_file(fixture.path() / ".cmakegen/manifest.json") == previous_manifest);
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+}
+
 TEST_CASE("safe writer migrates retained owned siblings with stale cleanup disabled") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};

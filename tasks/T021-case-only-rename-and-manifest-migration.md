@@ -145,13 +145,17 @@ and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).
   post-write manifest.  This rejects retained outputs occupying a case-only
   rename's `.cmakegen-transaction.tmp` path during check and dry-run, before
   a transaction is created.
+- Explicitly requested siblings are no longer treated as retained files during
+  a parent spelling migration.  Requests with incompatible spellings for a
+  shared migrated parent are rejected during planning instead of creating
+  duplicate transaction entries or silently rewriting the manifest.
 - Verification: the forced-replacement, shared-parent rollback, and
   parent-migrated source-spelling, rename-temporary collision, and physical
   spelling, preflight-conflict, resolved-tree migration, retained-sibling,
   nested-retained-migration, forced-retained-migration,
   planned-rename-collision, shared-parent-conflict,
   occupied-rename-temporary, and deep-intermediate-directory cases passed; the
-  full isolated SafeWriter suite passed (49 runnable cases, 4
-  platform-appropriate skips, 487 assertions), and `git diff --check`
+  full isolated SafeWriter suite passed (50 runnable cases, 4
+  platform-appropriate skips, 501 assertions), and `git diff --check`
   passed. CI failures remain outside this
   task.

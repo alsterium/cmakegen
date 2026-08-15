@@ -3620,6 +3620,7 @@ pending_parent_migration_source(const Transaction& transaction,
     const Manifest& old_manifest,
     Manifest& next_manifest,
     PreparedPlan& plan,
+    const std::map<std::string, const GeneratedFile*, std::less<>>& requested_files,
     bool force) {
     Transaction transaction{};
     transaction.root = root;
@@ -3686,6 +3687,27 @@ pending_parent_migration_source(const Transaction& transaction,
                                            .lexically_relative(root)
                                            .generic_string();
         if (migrated_relative == old_relative) continue;
+
+        std::optional<std::string> requested_relative;
+        for (const auto& [candidate, file] : requested_files) {
+            (void)file;
+            auto equivalent = plan.capabilities.equivalent(old_relative, candidate);
+            if (!equivalent) return std::unexpected{equivalent.error()};
+            if (*equivalent) {
+                requested_relative = candidate;
+                break;
+            }
+        }
+        if (requested_relative) {
+            // This output has an explicit requested spelling, so it is not a
+            // retained sibling. A shared parent move cannot silently rewrite
+            // that request to a different spelling or add a duplicate rename.
+            if (*requested_relative != migrated_relative) {
+                return std::unexpected{error("requested output conflicts with a parent spelling migration",
+                                             *requested_relative)};
+            }
+            continue;
+        }
 
         auto resolved = resolve_existing_alias(root, old_relative, plan.capabilities);
         if (!resolved) return std::unexpected{resolved.error()};
@@ -4519,7 +4541,7 @@ pending_parent_migration_source(const Transaction& transaction,
     }
 
     auto retained_parent_entries = add_retained_parent_migration_entries(
-        root, *old_manifest, next_manifest, plan, options.force);
+        root, *old_manifest, next_manifest, plan, next_files, options.force);
     if (!retained_parent_entries) return std::unexpected{retained_parent_entries.error()};
 
     auto rename_valid = validate_generated_rename_collisions(plan.entries, next_manifest, capabilities);
