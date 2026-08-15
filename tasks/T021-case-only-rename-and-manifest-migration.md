@@ -106,8 +106,12 @@ and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).
   retargeting transaction artifacts. If a shared parent was restored before a
   later filename rollback, an equivalent physical source spelling such as
   `Foo/a.txt` is accepted and moved back to the recorded `Foo/A.txt` source.
+- Generated output paths that equal deterministic case-only rename temporaries
+  are rejected during preflight, and the legacy manifest-alias test now checks
+  the requested physical spelling rather than the previous alias.
 - Verification: the forced-replacement, shared-parent rollback, and
-  parent-migrated source-spelling cases passed; the full isolated SafeWriter
-  suite passed (36 runnable cases, 4 platform-appropriate skips, 357
+  parent-migrated source-spelling, rename-temporary collision, and physical
+  spelling cases passed; the full isolated SafeWriter suite passed (37
+  runnable cases, 4 platform-appropriate skips, 362
   assertions), and `git diff --check` passed. CI failures remain outside this
   task.

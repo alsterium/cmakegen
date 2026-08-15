@@ -878,6 +878,19 @@ TEST_CASE("safe writer rejects missing or modified retained outputs before openi
     CHECK(read_file(fixture.path() / "changed.txt") == "first\n");
 }
 
+TEST_CASE("safe writer rejects outputs that collide with case-only rename temporaries") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    const auto result = writer.write(file_set({
+        {"foo.txt", "foo\n"},
+        {".foo.txt.cmakegen-rename.tmp", "temporary\n"},
+    }));
+
+    REQUIRE_FALSE(result);
+    CHECK(result.error().diagnostics().front().message.find("rename temporary") != std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/manifest.json"));
+}
+
 TEST_CASE("safe writer verifies a manifest-owned file before replacing it") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};
@@ -1285,8 +1298,8 @@ TEST_CASE("safe writer recognizes manifest ownership through portable path alias
     REQUIRE(writer.write(file_set({{"Foo.txt", "first\n"}})));
 
     const auto updated = writer.write(file_set({{"foo.txt", "second\n"}}));
-    CHECK_FALSE(updated);
-    CHECK(read_file(fixture.path() / "Foo.txt") == "first\n");
+    REQUIRE(updated);
+    CHECK(read_file(fixture.path() / "foo.txt") == "second\n");
     REQUIRE(writer.clean());
     CHECK_FALSE(std::filesystem::exists(fixture.path() / "Foo.txt"));
 }
