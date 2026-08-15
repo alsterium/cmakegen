@@ -159,3 +159,18 @@ and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).
   platform-appropriate skips, 501 assertions), and `git diff --check`
   passed. CI failures remain outside this
   task.
+
+### Rebase review follow-up
+
+- Rebasing onto the finalized T020 recovery branch preserved its parent-path
+  and pre-hash validation around rename backups while retaining T021's
+  source-to-destination rename recovery.  Rename backups therefore revalidate
+  the physical source path before copying it, rather than weakening T020's
+  transaction boundary checks.
+- The macOS Unicode case-alias ownership regression now expects the requested
+  case-only rename to succeed and verifies the new content through the
+  requested spelling; the prior expectation contradicted T021's physical
+  migration contract.
+- Verification: normal and bootstrap builds passed; the isolated SafeWriter
+  suite passed 62 runnable cases with 4 platform-appropriate skips (601
+  assertions), and `git diff --check` passed.

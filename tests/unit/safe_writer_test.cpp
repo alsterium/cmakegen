@@ -1226,8 +1226,9 @@ TEST_CASE("safe writer uses macOS Unicode case aliases for ownership and cleanup
     const auto first = writer.write(file_set({{utf8_path(upper), "first\n"}}));
     REQUIRE(first);
     const auto updated = writer.write(file_set({{utf8_path(lower), "second\n"}}));
-    CHECK_FALSE(updated);
-    CHECK(read_file(fixture.path() / utf8_path(upper)) == "first\n");
+    REQUIRE(updated);
+    CHECK(updated->files_written == 1);
+    CHECK(read_file(fixture.path() / utf8_path(lower)) == "second\n");
     REQUIRE(writer.clean());
     CHECK_FALSE(std::filesystem::exists(fixture.path() / utf8_path(upper)));
 }
