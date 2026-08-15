@@ -1423,6 +1423,22 @@ TEST_CASE("safe writer migrates retained owned siblings with stale cleanup disab
     CHECK(manifest.find("\"path\": \"Foo/b.txt\"") == std::string::npos);
 }
 
+TEST_CASE("safe writer migrates retained files across nested parent migrations") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/A/x.txt", "x-old\n"}, {"Foo/B/y.txt", "y-old\n"}})));
+
+    REQUIRE(writer.write(file_set({{"foo/a/x.txt", "x-new\n"}}), {.cleanup_stale = false}));
+    CHECK(read_file(fixture.path() / "foo/a/x.txt") == "x-new\n");
+    CHECK(read_file(fixture.path() / "foo/B/y.txt") == "y-old\n");
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "Foo"));
+    CHECK(has_exact_directory_entry(fixture.path(), "foo"));
+    const auto manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+    CHECK(manifest.find("\"path\": \"foo/a/x.txt\"") != std::string::npos);
+    CHECK(manifest.find("\"path\": \"foo/B/y.txt\"") != std::string::npos);
+    CHECK(manifest.find("\"path\": \"Foo/B/y.txt\"") == std::string::npos);
+}
+
 TEST_CASE("safe writer bases later parent migrations on the resolved tree") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};

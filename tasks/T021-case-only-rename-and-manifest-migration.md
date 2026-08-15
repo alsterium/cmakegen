@@ -121,10 +121,15 @@ and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).
 - Intermediate ancestors on the path to a transaction artifact are treated
   as owned directory structure and are still recursively inspected for
   unowned descendants.
+- Retained outputs are matched against every changed parent prefix, so a
+  retained file in a nested sibling branch follows an outer directory
+  spelling migration even when the requested output is deeper in another
+  branch.
 - Verification: the forced-replacement, shared-parent rollback, and
   parent-migrated source-spelling, rename-temporary collision, and physical
-  spelling, preflight-conflict, resolved-tree migration, retained-sibling, and
-  deep-intermediate-directory cases passed; the full isolated SafeWriter
-  suite passed (41 runnable cases, 4 platform-appropriate skips, 400
+  spelling, preflight-conflict, resolved-tree migration, retained-sibling,
+  nested-retained-migration, and deep-intermediate-directory cases passed; the
+  full isolated SafeWriter suite passed (42 runnable cases, 4
+  platform-appropriate skips, 412
   assertions), and `git diff --check` passed. CI failures remain outside this
   task.

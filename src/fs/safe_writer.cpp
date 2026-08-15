@@ -3468,7 +3468,20 @@ void retarget_transaction_artifacts_after_directory_move(
             std::ranges::equal(source, destination)) {
             continue;
         }
-        migrations.push_back({std::move(source), std::move(destination)});
+        // Moving a deeply nested parent also moves every retained sibling
+        // below each changed ancestor.  Keep each changed prefix so a file
+        // such as Foo/B/y.txt follows Foo -> foo even when the requested
+        // rename only mentions Foo/A/x.txt -> foo/a/x.txt.
+        for (std::size_t count = 1; count <= source.size(); ++count) {
+            if (std::ranges::equal(source.begin(), source.begin() + static_cast<std::ptrdiff_t>(count),
+                                   destination.begin(), destination.begin() + static_cast<std::ptrdiff_t>(count))) {
+                continue;
+            }
+            migrations.push_back({
+                {source.begin(), source.begin() + static_cast<std::ptrdiff_t>(count)},
+                {destination.begin(), destination.begin() + static_cast<std::ptrdiff_t>(count)},
+            });
+        }
     }
     if (migrations.empty()) return {};
 
