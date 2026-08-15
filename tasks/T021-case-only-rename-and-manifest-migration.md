@@ -109,9 +109,12 @@ and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).
 - Generated output paths that equal deterministic case-only rename temporaries
   are rejected during preflight, and the legacy manifest-alias test now checks
   the requested physical spelling rather than the previous alias.
+- Parent subtree conflicts are validated while preparing the plan, so check
+  and dry-run report the same unowned-descendant error without creating a
+  transaction; the execution-time validation remains in place for races.
 - Verification: the forced-replacement, shared-parent rollback, and
   parent-migrated source-spelling, rename-temporary collision, and physical
-  spelling cases passed; the full isolated SafeWriter suite passed (37
-  runnable cases, 4 platform-appropriate skips, 362
+  spelling and preflight-conflict cases passed; the full isolated SafeWriter
+  suite passed (38 runnable cases, 4 platform-appropriate skips, 371
   assertions), and `git diff --check` passed. CI failures remain outside this
   task.

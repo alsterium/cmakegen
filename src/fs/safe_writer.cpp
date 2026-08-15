@@ -2692,6 +2692,47 @@ void retarget_transaction_artifacts_after_directory_move(
     return {};
 }
 
+[[nodiscard]] Result<void> populate_transaction_entries(Transaction& transaction,
+                                                        const PreparedPlan& plan);
+
+[[nodiscard]] Result<void> validate_parent_migrations_before_transaction(
+    const std::filesystem::path& root, const PreparedPlan& plan) {
+    Transaction transaction{};
+    transaction.root = root;
+    transaction.directory = transaction_directory(root);
+    transaction.backups_directory = transaction.directory / "backups";
+    transaction.capabilities = plan.capabilities;
+    auto entries = populate_transaction_entries(transaction, plan);
+    if (!entries) return std::unexpected{entries.error()};
+
+    for (auto& entry : transaction.entries) {
+        if (entry.kind != TransactionEntryKind::rename) continue;
+
+        std::vector<std::string> source_components;
+        std::vector<std::string> destination_components;
+        auto parent_changed = has_parent_spelling_change(transaction, entry,
+                                                          source_components,
+                                                          destination_components);
+        if (!parent_changed) return std::unexpected{parent_changed.error()};
+        if (!*parent_changed) continue;
+
+        for (std::size_t index = source_components.size(); index > 0; --index) {
+            const auto component_index = index - 1;
+            if (source_components[component_index] == destination_components[component_index]) continue;
+
+            const auto source_directory = component_prefix(transaction.root, source_components, index);
+            const auto allowed_name = component_index + 1 == source_components.size()
+                                          ? entry.source.filename().generic_string()
+                                          : source_components[component_index + 1];
+            auto contents = ensure_parent_directory_contains_only(
+                transaction, source_directory, allowed_name,
+                component_index + 1 != source_components.size());
+            if (!contents) return std::unexpected{contents.error()};
+        }
+    }
+    return {};
+}
+
 [[nodiscard]] Result<void> alias_aware_rename(Transaction& transaction,
                                               TransactionEntry& entry) {
     const auto source_relative = relative_path(transaction.root, entry.source);
@@ -3335,19 +3376,8 @@ void retarget_transaction_artifacts_after_directory_move(
     return {};
 }
 
-[[nodiscard]] Result<Transaction> start_transaction(const std::filesystem::path& root,
-                                                    const PreparedPlan& plan) {
-    Transaction transaction{root,
-                            transaction_directory(root),
-                            transaction_directory(root) / "journal.json",
-                            transaction_directory(root) / "pre-manifest.json",
-                            transaction_directory(root) / "post-manifest.json",
-                            transaction_directory(root) / "backups"};
-    transaction.pre_manifest_exists = plan.pre_manifest.present;
-    transaction.pre_manifest_content = plan.pre_manifest.content;
-    transaction.post_manifest_exists = plan.post_manifest.present;
-    transaction.post_manifest_content = plan.post_manifest.content;
-    transaction.capabilities = plan.capabilities;
+[[nodiscard]] Result<void> populate_transaction_entries(Transaction& transaction,
+                                                        const PreparedPlan& plan) {
     transaction.entries.reserve(plan.entries.size());
     for (std::size_t index = 0; index < plan.entries.size(); ++index) {
         const auto& planned = plan.entries[index];
@@ -3366,9 +3396,9 @@ void retarget_transaction_artifacts_after_directory_move(
             (planned.kind == TransactionEntryKind::rename && planned.pre_hash != planned.post_hash) ||
             (planned.kind == TransactionEntryKind::manifest && planned.post_exists)) {
             auto staging_parent = planned.destination.parent_path();
-            if (planned.kind == TransactionEntryKind::replace && staging_parent != root) {
+            if (planned.kind == TransactionEntryKind::replace && staging_parent != transaction.root) {
                 auto resolved_parent = resolve_existing_alias(
-                    root, relative_path(root, staging_parent), transaction.capabilities);
+                    transaction.root, relative_path(transaction.root, staging_parent), transaction.capabilities);
                 if (!resolved_parent) return std::unexpected{resolved_parent.error()};
                 std::filesystem::file_status parent_status;
                 auto inspected_parent = safe_status(*resolved_parent, parent_status);
@@ -3398,6 +3428,24 @@ void retarget_transaction_artifacts_after_directory_move(
         }
         transaction.entries.push_back(std::move(entry));
     }
+    return {};
+}
+
+[[nodiscard]] Result<Transaction> start_transaction(const std::filesystem::path& root,
+                                                    const PreparedPlan& plan) {
+    Transaction transaction{root,
+                            transaction_directory(root),
+                            transaction_directory(root) / "journal.json",
+                            transaction_directory(root) / "pre-manifest.json",
+                            transaction_directory(root) / "post-manifest.json",
+                            transaction_directory(root) / "backups"};
+    transaction.pre_manifest_exists = plan.pre_manifest.present;
+    transaction.pre_manifest_content = plan.pre_manifest.content;
+    transaction.post_manifest_exists = plan.post_manifest.present;
+    transaction.post_manifest_content = plan.post_manifest.content;
+    transaction.capabilities = plan.capabilities;
+    auto entries = populate_transaction_entries(transaction, plan);
+    if (!entries) return std::unexpected{entries.error()};
 
     auto directory = ensure_transaction_directory_is_new(transaction);
     if (!directory) return std::unexpected{directory.error()};
@@ -4192,6 +4240,8 @@ void retarget_transaction_artifacts_after_directory_move(
         };
         return priority(left.kind) < priority(right.kind);
     });
+    auto parent_migrations_valid = validate_parent_migrations_before_transaction(root, plan);
+    if (!parent_migrations_valid) return std::unexpected{parent_migrations_valid.error()};
     plan.result.files_written = std::ranges::count_if(plan.entries, [](const auto& entry) {
         return entry.kind == TransactionEntryKind::replace || entry.kind == TransactionEntryKind::rename;
     });

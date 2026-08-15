@@ -1484,6 +1484,24 @@ TEST_CASE("safe writer inspects unowned descendants below intermediate rename di
     CHECK(read_file(fixture.path() / ".cmakegen/manifest.json") == previous_manifest);
 }
 
+TEST_CASE("safe writer validates parent conflicts before check and dry-run") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/Sub/generated.txt", "generated\n"}})));
+    write_file(fixture.path() / "Foo/Sub/user.txt", "user\n");
+
+    const auto next = file_set({{"foo/Sub/generated.txt", "updated\n"}});
+    const auto checked = writer.write(next, {.check = true});
+    REQUIRE_FALSE(checked);
+    CHECK(checked.error().diagnostics().front().message.find("unowned descendant") != std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+
+    const auto dry_run = writer.write(next, {.dry_run = true});
+    REQUIRE_FALSE(dry_run);
+    CHECK(dry_run.error().diagnostics().front().message.find("unowned descendant") != std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+}
+
 TEST_CASE("safe writer protects an unowned case-only conflicting path") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};
