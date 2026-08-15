@@ -1412,6 +1412,7 @@ struct TransactionEntry {
     std::string post_hash;
     std::string content;
     bool staging_claimed = false;
+    bool rename_claimed = false;
 };
 
 struct Transaction {
@@ -1498,6 +1499,7 @@ struct PreparedPlan {
         serialized["post_exists"] = entry.post_exists;
         serialized["post_sha256"] = entry.post_hash;
         serialized["staging_claimed"] = entry.staging_claimed;
+        serialized["rename_claimed"] = entry.rename_claimed;
         json["entries"].push_back(std::move(serialized));
     }
     return json;
@@ -1850,6 +1852,17 @@ private:
                 }
                 staging_claimed = value["staging_claimed"].get<bool>();
             }
+            // Older journals did not record rename ownership.  Treat that
+            // state as unclaimed so recovery never deletes an ambiguous
+            // sibling merely because its content matches the source hash.
+            bool rename_claimed = false;
+            if (value.contains("rename_claimed")) {
+                if (!value["rename_claimed"].is_boolean()) {
+                    return std::unexpected{error("transaction journal contains an invalid rename ownership flag",
+                                                 journal.generic_string())};
+                }
+                rename_claimed = value["rename_claimed"].get<bool>();
+            }
 
             const auto logical_path = value["path"].get<std::string>();
             const auto source_value = value.value("source", "");
@@ -1995,7 +2008,8 @@ private:
                 value["post_exists"].get<bool>(),
                 post_hash,
                 {},
-                staging_claimed});
+                staging_claimed,
+                rename_claimed});
             ++index;
         }
     } catch (const nlohmann::json::exception&) {
@@ -2104,8 +2118,11 @@ private:
     return remove_if_present(entry.temporary, "staged output");
 }
 
-[[nodiscard]] Result<void> remove_rename_temporary(const TransactionEntry& entry) {
-    if (entry.rename_temporary.empty()) return {};
+[[nodiscard]] Result<void> remove_rename_temporary(const Transaction& transaction,
+                                                   const TransactionEntry& entry) {
+    if (entry.rename_temporary.empty() || !entry.rename_claimed) return {};
+    auto parents = validate_recovery_path_parents(transaction, entry.rename_temporary);
+    if (!parents) return std::unexpected{parents.error()};
     std::error_code ec;
     const auto status = std::filesystem::symlink_status(entry.rename_temporary, ec);
     if (is_not_found(ec) || (!ec && status.type() == std::filesystem::file_type::not_found)) return {};
@@ -2117,10 +2134,13 @@ private:
     }
     auto content = read_file(entry.rename_temporary);
     if (!content) return std::unexpected{content.error()};
-    if (SafeWriter::sha256(*content) != entry.pre_hash) {
+    const auto content_hash = SafeWriter::sha256(*content);
+    if (content_hash != entry.pre_hash && content_hash != entry.post_hash) {
         return std::unexpected{error("rename temporary changed outside the active transaction",
                                      entry.rename_temporary.generic_string())};
     }
+    parents = validate_recovery_path_parents(transaction, entry.rename_temporary);
+    if (!parents) return std::unexpected{parents.error()};
     return remove_if_present(entry.rename_temporary, "rename temporary");
 }
 
@@ -2136,7 +2156,7 @@ private:
             auto journal = write_journal(transaction);
             if (!journal) return std::unexpected{journal.error()};
         }
-        auto rename_temporary = remove_rename_temporary(entry);
+        auto rename_temporary = remove_rename_temporary(transaction, entry);
         if (!rename_temporary) return std::unexpected{rename_temporary.error()};
     }
     auto backup_parents = validate_recovery_path_parents(
@@ -2351,6 +2371,15 @@ private:
                                      entry.rename_temporary.generic_string())};
     }
     return {};
+}
+
+[[nodiscard]] Result<void> claim_rename_temporary(Transaction& transaction,
+                                                  TransactionEntry& entry) {
+    if (entry.rename_temporary.empty()) return {};
+    auto temporary_absent = ensure_rename_temporary_is_absent(transaction, entry);
+    if (!temporary_absent) return std::unexpected{temporary_absent.error()};
+    entry.rename_claimed = true;
+    return write_journal(transaction);
 }
 
 [[nodiscard]] std::vector<std::string> relative_component_strings(const std::filesystem::path& root,
@@ -2678,8 +2707,8 @@ private:
     // temporary name.  The journal is written between both moves so recovery
     // can restore a rename interrupted after the first move.
     if (*resolved_destination == source_path) {
-        auto temporary_absent = ensure_rename_temporary_is_absent(transaction, entry);
-        if (!temporary_absent) return std::unexpected{temporary_absent.error()};
+        auto claimed = claim_rename_temporary(transaction, entry);
+        if (!claimed) return std::unexpected{claimed.error()};
         auto moved_to_temporary = move_path(source_path, entry.rename_temporary,
                                             "move rename source to temporary path");
         if (!moved_to_temporary) return std::unexpected{moved_to_temporary.error()};
@@ -3010,37 +3039,39 @@ private:
 
     auto source_relative = relative_path(transaction.root, entry.source);
     auto destination_relative = relative_path(transaction.root, entry.destination);
-    auto temporary_relative = relative_path(transaction.root, entry.rename_temporary);
-    auto resolved_temporary = resolve_existing_alias(transaction.root, temporary_relative,
-                                                     transaction.capabilities);
-    if (!resolved_temporary) return std::unexpected{resolved_temporary.error()};
-    std::filesystem::file_status temporary_status;
-    auto inspected_temporary = safe_status(*resolved_temporary, temporary_status);
-    if (!inspected_temporary) return std::unexpected{inspected_temporary.error()};
-    if (std::filesystem::exists(temporary_status)) {
-        if (resolved_temporary->filename() != entry.rename_temporary.filename() ||
-            std::filesystem::is_symlink(temporary_status) ||
-            !std::filesystem::is_regular_file(temporary_status)) {
-            return std::unexpected{error("rename temporary changed while transaction recovery was pending",
-                                         entry.rename_temporary.generic_string())};
+    if (entry.rename_claimed && !entry.rename_temporary.empty()) {
+        auto temporary_relative = relative_path(transaction.root, entry.rename_temporary);
+        auto resolved_temporary = resolve_existing_alias(transaction.root, temporary_relative,
+                                                         transaction.capabilities);
+        if (!resolved_temporary) return std::unexpected{resolved_temporary.error()};
+        std::filesystem::file_status temporary_status;
+        auto inspected_temporary = safe_status(*resolved_temporary, temporary_status);
+        if (!inspected_temporary) return std::unexpected{inspected_temporary.error()};
+        if (std::filesystem::exists(temporary_status)) {
+            if (resolved_temporary->filename() != entry.rename_temporary.filename() ||
+                std::filesystem::is_symlink(temporary_status) ||
+                !std::filesystem::is_regular_file(temporary_status)) {
+                return std::unexpected{error("rename temporary changed while transaction recovery was pending",
+                                             entry.rename_temporary.generic_string())};
+            }
+            // A crash can leave the journal with the old parent spelling after a
+            // case-only directory move.  Adopt the resolved transaction-owned
+            // alias before attempting rollback.
+            entry.rename_temporary = *resolved_temporary;
+            if (!entry.temporary.empty()) {
+                entry.temporary = entry.rename_temporary.parent_path() / entry.temporary.filename();
+            }
+            auto content = read_file(*resolved_temporary);
+            if (!content || SafeWriter::sha256(*content) != entry.pre_hash) {
+                return std::unexpected{error("rename temporary changed while transaction recovery was pending",
+                                             entry.rename_temporary.generic_string())};
+            }
+            auto restored_parents = restore_parent_spelling(transaction, entry);
+            if (!restored_parents) return std::unexpected{restored_parents.error()};
+            auto restored = move_path(entry.rename_temporary, entry.source,
+                                      "restore interrupted rename source");
+            if (!restored) return std::unexpected{restored.error()};
         }
-        // A crash can leave the journal with the old parent spelling after a
-        // case-only directory move.  Adopt the resolved transaction-owned
-        // alias before attempting rollback.
-        entry.rename_temporary = *resolved_temporary;
-        if (!entry.temporary.empty()) {
-            entry.temporary = entry.rename_temporary.parent_path() / entry.temporary.filename();
-        }
-        auto content = read_file(*resolved_temporary);
-        if (!content || SafeWriter::sha256(*content) != entry.pre_hash) {
-            return std::unexpected{error("rename temporary changed while transaction recovery was pending",
-                                         entry.rename_temporary.generic_string())};
-        }
-        auto restored_parents = restore_parent_spelling(transaction, entry);
-        if (!restored_parents) return std::unexpected{restored_parents.error()};
-        auto restored = move_path(entry.rename_temporary, entry.source,
-                                  "restore interrupted rename source");
-        if (!restored) return std::unexpected{restored.error()};
     }
 
     auto resolved_source = resolve_existing_alias(transaction.root, source_relative,
@@ -3093,8 +3124,8 @@ private:
             if (!entry.temporary.empty()) {
                 entry.temporary = entry.rename_temporary.parent_path() / entry.temporary.filename();
             }
-            auto temporary_absent = ensure_rename_temporary_is_absent(transaction, entry);
-            if (!temporary_absent) return std::unexpected{temporary_absent.error()};
+            auto claimed = claim_rename_temporary(transaction, entry);
+            if (!claimed) return std::unexpected{claimed.error()};
             auto moved_to_temporary = move_path(*resolved_destination, entry.rename_temporary,
                                                 "move renamed output to rollback temporary path");
             if (!moved_to_temporary) return std::unexpected{moved_to_temporary.error()};

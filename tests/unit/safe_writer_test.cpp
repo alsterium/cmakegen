@@ -1324,6 +1324,21 @@ TEST_CASE("safe writer realizes case-only renames and migrates the manifest spel
     CHECK(unchanged->files_written == 0);
 }
 
+TEST_CASE("safe writer preserves an unclaimed rename temporary with matching content") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo.txt", "first\n"}})));
+
+    const auto rename_temporary = fixture.path() / ".foo.txt.cmakegen-rename.tmp";
+    write_file(rename_temporary, "first\n");
+    const auto result = writer.write(file_set({{"foo.txt", "second\n"}}));
+
+    REQUIRE_FALSE(result);
+    CHECK(read_file(fixture.path() / "Foo.txt") == "first\n");
+    CHECK(read_file(rename_temporary) == "first\n");
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+}
+
 TEST_CASE("safe writer migrates a nested case-only parent directory spelling") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};

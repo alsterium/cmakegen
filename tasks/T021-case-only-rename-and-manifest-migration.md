@@ -96,6 +96,10 @@ and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).
 - Descendants are inspected recursively before moving an owned ancestor, and
   mixed rename/replace transactions suppress replacement-parent creation and
   stage new siblings below the existing physical parent until migration.
-- Verification: the nested-parent case and full isolated SafeWriter suite
-  passed (29 runnable cases, 4 platform-appropriate skips, 295 assertions),
-  and `git diff --check` passed. CI failures remain outside this task.
+- Rename temporary ownership is journaled before the first temporary move;
+  cleanup and rollback leave an unclaimed pre-existing sibling untouched even
+  when its hash matches the rename source.
+- Verification: the rename-temporary ownership case and full isolated
+  SafeWriter suite passed (32 runnable cases, 4 platform-appropriate skips,
+  321 assertions), and `git diff --check` passed. CI failures remain outside
+  this task.

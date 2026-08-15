@@ -299,7 +299,9 @@ their temporaries remain part of the directory migration. Recovery adopts a
 resolved transaction temporary when a crash leaves the journal one spelling
 behind. Descendants are checked recursively before an owned ancestor is moved,
 and replacement staging uses the existing physical parent until that migration
-has occurred.
+has occurred. Rename temporaries carry an explicit ownership flag, so a
+pre-existing sibling is preserved even when its content happens to match the
+rename source hash.
 
 Why:
 
