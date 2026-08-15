@@ -2727,6 +2727,17 @@ private:
             }
             parents = validate_recovery_path_parents(transaction, entry.destination);
             if (!parents) return std::unexpected{parents.error()};
+            auto backup_parents = validate_recovery_path_parents(transaction, entry.backup);
+            if (!backup_parents) return std::unexpected{backup_parents.error()};
+            std::error_code backup_error;
+            const auto backup_status = std::filesystem::symlink_status(entry.backup, backup_error);
+            if (backup_error && !is_not_found(backup_error)) {
+                return std::unexpected{error("cannot inspect transaction backup destination: " + backup_error.message(),
+                                             entry.backup.generic_string())};
+            }
+            if (!backup_error && backup_status.type() != std::filesystem::file_type::not_found) {
+                return std::unexpected{error("transaction backup destination already exists", entry.backup.generic_string())};
+            }
             auto moved = move_to_backup(entry.destination, entry.backup);
             if (!moved) return std::unexpected{moved.error()};
         }
@@ -3048,6 +3059,31 @@ private:
     if (!staging_valid) return std::unexpected{staging_valid.error()};
     auto next_manifest_valid = validate_manifest_equivalence(next_manifest, capabilities);
     if (!next_manifest_valid) return std::unexpected{next_manifest_valid.error()};
+
+    if (!options.cleanup_stale) {
+        for (const auto& [relative, hash] : old_manifest->files) {
+            bool requested = false;
+            for (const auto& [next_relative, file] : next_files) {
+                (void)file;
+                auto equivalent = capabilities.equivalent(relative, next_relative);
+                if (!equivalent) return std::unexpected{equivalent.error()};
+                if (*equivalent) {
+                    requested = true;
+                    break;
+                }
+            }
+            if (requested) continue;
+            auto parents = reject_symlink_parents(root, relative, capabilities);
+            if (!parents) return std::unexpected{parents.error()};
+            auto resolved = resolve_existing_alias(root, relative, capabilities);
+            if (!resolved) return std::unexpected{resolved.error()};
+            auto content = existing_file_content(*resolved, "retained manifest-owned output");
+            if (!content) return std::unexpected{content.error()};
+            if (!content->first || SafeWriter::sha256(content->second) != hash) {
+                return std::unexpected{error("retained manifest-owned output no longer matches its recorded hash", relative)};
+            }
+        }
+    }
 
     PreparedPlan plan;
     plan.pre_manifest = pre_manifest;

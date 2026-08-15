@@ -787,6 +787,26 @@ TEST_CASE("safe writer rejects retained outputs that collide with staging paths"
     CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
 }
 
+TEST_CASE("safe writer rejects missing or modified retained outputs before opening a transaction") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"retained.txt", "old\n"}, {"changed.txt", "first\n"}})));
+
+    std::filesystem::remove(fixture.path() / "retained.txt");
+    const auto missing = writer.write(file_set({{"changed.txt", "second\n"}}), {.cleanup_stale = false});
+    CHECK_FALSE(missing);
+    CHECK(missing.error().diagnostics().front().message.find("retained manifest-owned output") != std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+    CHECK(read_file(fixture.path() / "changed.txt") == "first\n");
+
+    write_file(fixture.path() / "retained.txt", "external\n");
+    const auto modified = writer.write(file_set({{"changed.txt", "second\n"}}), {.cleanup_stale = false});
+    CHECK_FALSE(modified);
+    CHECK(modified.error().diagnostics().front().message.find("retained manifest-owned output") != std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+    CHECK(read_file(fixture.path() / "changed.txt") == "first\n");
+}
+
 TEST_CASE("safe writer verifies a manifest-owned file before replacing it") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};

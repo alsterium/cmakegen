@@ -188,3 +188,7 @@ intended post-state.
 - Terminal cleanup also verifies every remaining transaction backup against
   its recorded pre-hash, preserving a backup changed after `committed` rather
   than deleting an external replacement.
+- Before every backup rename, SafeWriter revalidates the backup parent chain
+  and requires the numbered backup destination to be absent. Planning also
+  validates retained manifest outputs when stale cleanup is disabled, avoiding
+  a transaction that cannot later satisfy either pre- or post-state checks.
