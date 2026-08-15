@@ -78,3 +78,17 @@ and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).
   passed.
 - Follow-ups: The unrelated CMake renderer test #14 remains outside T021 and
   was not modified.
+
+### Review follow-up
+
+- Case-only parent components are now migrated from deepest to outermost
+  (`Foo/file.txt` → `foo/file.txt`) while the transaction-owned rename and
+  content temporaries move with them. Destination-parent creation avoids
+  creating a second portable-equivalent directory, and rollback reverses the
+  parent spelling migration before restoring the old file and hash.
+- Parent migration refuses to move directories containing entries outside the
+  active transaction, preserving unowned files. Nested-parent coverage now
+  verifies exact directory spelling and rollback after the physical rename.
+- Verification: the nested-parent case and full isolated SafeWriter suite
+  passed (23 runnable cases, 4 platform-appropriate skips, 238 assertions),
+  and `git diff --check` passed. CI failures remain outside this task.

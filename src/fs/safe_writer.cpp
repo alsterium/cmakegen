@@ -1906,9 +1906,34 @@ private:
                  value["pre_sha256"].get<std::string>() != value["post_sha256"].get<std::string>()) ||
                 (is_manifest && value["post_exists"].get<bool>())) {
                 temporary = root / path_from_utf8(temporary_value);
-                if (temporary_value != generic_utf8_string(
-                                           transaction_temp_path(root / path_from_utf8(destination))
-                                               .lexically_relative(root))) {
+                if (is_rename) {
+                    auto normalized_temporary = normalize_relative_path(path_from_utf8(temporary_value));
+                    const auto expected_temporary_name =
+                        generic_utf8_string(transaction_temp_path(
+                                                root / path_from_utf8(destination)).filename());
+                    const auto temporary_parent = path_from_utf8(temporary_value).parent_path();
+                    const auto source_parent = source.lexically_relative(root).parent_path();
+                    const auto destination_parent = path_from_utf8(destination).parent_path();
+                    if (!normalized_temporary || generic_utf8_string(*normalized_temporary) != temporary_value ||
+                        generic_utf8_string(path_from_utf8(temporary_value).filename()) !=
+                            expected_temporary_name ||
+                        portable_equivalence_key(generic_utf8_string(temporary_parent)).starts_with(".cmakegen")) {
+                        return std::unexpected{error("transaction journal contains an invalid temporary path",
+                                                     journal.generic_string())};
+                    }
+                    auto matches_source_parent = capabilities.equivalent(generic_utf8_string(temporary_parent),
+                                                                          generic_utf8_string(source_parent));
+                    if (!matches_source_parent) return std::unexpected{matches_source_parent.error()};
+                    auto matches_destination_parent = capabilities.equivalent(generic_utf8_string(temporary_parent),
+                                                                               generic_utf8_string(destination_parent));
+                    if (!matches_destination_parent) return std::unexpected{matches_destination_parent.error()};
+                    if (!*matches_source_parent && !*matches_destination_parent) {
+                        return std::unexpected{error("transaction journal contains an unsafe temporary path",
+                                                     journal.generic_string())};
+                    }
+                } else if (temporary_value != generic_utf8_string(
+                                                      transaction_temp_path(root / path_from_utf8(destination))
+                                                          .lexically_relative(root))) {
                     return std::unexpected{error("transaction journal contains an invalid temporary path",
                                                  journal.generic_string())};
                 }
@@ -1919,14 +1944,31 @@ private:
             const auto rename_temporary_value = value.value("rename_temporary", "");
             std::filesystem::path rename_temporary;
             if (is_rename && !rename_temporary_value.empty()) {
-                rename_temporary = root / path_from_utf8(rename_temporary_value);
-                if (rename_temporary_value != generic_utf8_string(
-                                                  rename_transaction_temp_path(
-                                                      root / path_from_utf8(destination), source)
-                                                      .lexically_relative(root))) {
+                auto normalized_temporary = normalize_relative_path(path_from_utf8(rename_temporary_value));
+                const auto expected_temporary_name =
+                    generic_utf8_string(rename_transaction_temp_path(
+                                            root / path_from_utf8(destination), source).filename());
+                const auto temporary_parent = path_from_utf8(rename_temporary_value).parent_path();
+                const auto source_parent = source.lexically_relative(root).parent_path();
+                const auto destination_parent = path_from_utf8(destination).parent_path();
+                if (!normalized_temporary || generic_utf8_string(*normalized_temporary) != rename_temporary_value ||
+                    generic_utf8_string(path_from_utf8(rename_temporary_value).filename()) !=
+                        expected_temporary_name ||
+                    portable_equivalence_key(generic_utf8_string(temporary_parent)).starts_with(".cmakegen")) {
                     return std::unexpected{error("transaction journal contains an invalid rename temporary path",
                                                  journal.generic_string())};
                 }
+                auto matches_source_parent = capabilities.equivalent(generic_utf8_string(temporary_parent),
+                                                                      generic_utf8_string(source_parent));
+                if (!matches_source_parent) return std::unexpected{matches_source_parent.error()};
+                auto matches_destination_parent = capabilities.equivalent(generic_utf8_string(temporary_parent),
+                                                                           generic_utf8_string(destination_parent));
+                if (!matches_destination_parent) return std::unexpected{matches_destination_parent.error()};
+                if (!*matches_source_parent && !*matches_destination_parent) {
+                    return std::unexpected{error("transaction journal contains an unsafe rename temporary path",
+                                                 journal.generic_string())};
+                }
+                rename_temporary = root / *normalized_temporary;
             } else if (!is_rename && !rename_temporary_value.empty()) {
                 return std::unexpected{error("transaction journal contains an unexpected rename temporary path",
                                              journal.generic_string())};
@@ -2311,6 +2353,196 @@ private:
     return {};
 }
 
+[[nodiscard]] std::vector<std::string> relative_component_strings(const std::filesystem::path& root,
+                                                                   const std::filesystem::path& path) {
+    std::vector<std::string> result;
+    const auto relative = path.lexically_relative(root);
+    for (const auto& component : relative) result.push_back(component.generic_string());
+    return result;
+}
+
+[[nodiscard]] std::filesystem::path component_prefix(const std::filesystem::path& root,
+                                                      const std::vector<std::string>& components,
+                                                      std::size_t count) {
+    auto result = root;
+    for (std::size_t index = 0; index < count; ++index) result /= components[index];
+    return result;
+}
+
+[[nodiscard]] Result<void> ensure_parent_directory_contains_only(
+    const std::filesystem::path& directory, std::string_view allowed_name,
+    bool allowed_directory, std::string_view additional_file_name = {}) {
+    std::error_code ec;
+    const auto status = std::filesystem::symlink_status(directory, ec);
+    if (ec || !std::filesystem::is_directory(status) || std::filesystem::is_symlink(status)) {
+        return std::unexpected{error("rename parent is not a regular directory",
+                                     directory.generic_string())};
+    }
+    std::filesystem::directory_iterator entries(directory, ec);
+    if (ec) {
+        return std::unexpected{error("cannot inspect rename parent: " + ec.message(),
+                                     directory.generic_string())};
+    }
+    bool found_allowed = false;
+    for (const auto& entry : entries) {
+        const auto name = entry.path().filename().generic_string();
+        const bool is_allowed = name == allowed_name;
+        const bool is_additional_file = !additional_file_name.empty() && name == additional_file_name;
+        if (!is_allowed && !is_additional_file) {
+            return std::unexpected{error("cannot migrate a rename parent containing an unowned entry",
+                                         directory.generic_string())};
+        }
+        found_allowed = found_allowed || is_allowed;
+        const auto child_status = std::filesystem::symlink_status(entry.path(), ec);
+        if (ec || std::filesystem::is_symlink(child_status) ||
+            (is_allowed && allowed_directory && !std::filesystem::is_directory(child_status)) ||
+            (is_allowed && !allowed_directory && !std::filesystem::is_regular_file(child_status)) ||
+            (is_additional_file && !std::filesystem::is_regular_file(child_status))) {
+            return std::unexpected{error("rename parent contains an unexpected transaction entry",
+                                         entry.path().generic_string())};
+        }
+    }
+    if (!found_allowed) {
+        return std::unexpected{error("rename parent no longer contains the transaction entry",
+                                     directory.generic_string())};
+    }
+    return {};
+}
+
+[[nodiscard]] Result<bool> has_parent_spelling_change(const Transaction& transaction,
+                                                       const TransactionEntry& entry,
+                                                       std::vector<std::string>& source_components,
+                                                       std::vector<std::string>& destination_components) {
+    source_components = relative_component_strings(transaction.root, entry.source.parent_path());
+    destination_components = relative_component_strings(transaction.root, entry.destination.parent_path());
+    if (source_components.size() != destination_components.size()) {
+        return std::unexpected{error("rename changes the parent directory structure",
+                                     entry.destination.generic_string())};
+    }
+    bool changed = false;
+    for (std::size_t index = 0; index < source_components.size(); ++index) {
+        changed = changed || source_components[index] != destination_components[index];
+    }
+    if (!changed) return false;
+
+    const auto source_parent = relative_path(transaction.root, entry.source.parent_path());
+    const auto destination_parent = relative_path(transaction.root, entry.destination.parent_path());
+    auto equivalent = transaction.capabilities.equivalent(source_parent, destination_parent);
+    if (!equivalent) return std::unexpected{equivalent.error()};
+    if (!*equivalent) {
+        return std::unexpected{error("rename parent paths are not equivalent",
+                                     entry.destination.generic_string())};
+    }
+    return true;
+}
+
+[[nodiscard]] Result<void> migrate_parent_spelling_forward(
+    Transaction& transaction, TransactionEntry& entry,
+    const std::vector<std::string>& source_components,
+    const std::vector<std::string>& destination_components) {
+    for (std::size_t index = source_components.size(); index > 0; --index) {
+        const auto component_index = index - 1;
+        if (source_components[component_index] == destination_components[component_index]) continue;
+
+        const auto source_directory = component_prefix(transaction.root, source_components, index);
+        auto destination_directory = component_prefix(transaction.root, source_components, component_index);
+        destination_directory /= destination_components[component_index];
+        const auto allowed_name = component_index + 1 == source_components.size()
+                                      ? entry.rename_temporary.filename().generic_string()
+                                      : destination_components[component_index + 1];
+        const auto additional_file_name = entry.temporary.empty()
+                                              ? std::string{}
+                                              : entry.temporary.filename().generic_string();
+        auto contents = ensure_parent_directory_contains_only(
+            source_directory, allowed_name, component_index + 1 != source_components.size(),
+            additional_file_name);
+        if (!contents) return std::unexpected{contents.error()};
+
+        std::error_code ec;
+        const auto destination_status = std::filesystem::symlink_status(destination_directory, ec);
+        if (!is_not_found(ec) && ec) {
+            return std::unexpected{error("cannot inspect requested rename parent: " + ec.message(),
+                                         destination_directory.generic_string())};
+        }
+        if (!is_not_found(ec) && std::filesystem::exists(destination_status) &&
+            !std::filesystem::equivalent(source_directory, destination_directory, ec)) {
+            return std::unexpected{error("requested rename parent is already occupied",
+                                         destination_directory.generic_string())};
+        }
+
+        auto moved = move_path(source_directory, destination_directory,
+                               "migrate rename parent spelling");
+        if (!moved) return std::unexpected{moved.error()};
+
+        entry.rename_temporary = component_prefix(transaction.root, source_components, component_index);
+        for (std::size_t suffix = component_index; suffix < destination_components.size(); ++suffix) {
+            entry.rename_temporary /= destination_components[suffix];
+        }
+        entry.rename_temporary /= "." + entry.destination.filename().string() + ".cmakegen-rename.tmp";
+        if (!entry.temporary.empty()) {
+            entry.temporary = entry.rename_temporary.parent_path() / entry.temporary.filename();
+        }
+        auto journal = write_journal(transaction);
+        if (!journal) return std::unexpected{journal.error()};
+    }
+    return {};
+}
+
+[[nodiscard]] Result<void> restore_parent_spelling(
+    Transaction& transaction, TransactionEntry& entry) {
+    std::vector<std::string> source_components;
+    std::vector<std::string> destination_components;
+    auto parent_changed = has_parent_spelling_change(transaction, entry,
+                                                      source_components,
+                                                      destination_components);
+    if (!parent_changed) return std::unexpected{parent_changed.error()};
+    if (!*parent_changed) return {};
+
+    auto current_components = relative_component_strings(transaction.root,
+                                                         entry.rename_temporary.parent_path());
+    if (current_components.size() != source_components.size()) {
+        return std::unexpected{error("rename temporary has an unexpected parent path",
+                                     entry.rename_temporary.generic_string())};
+    }
+    const auto temporary_name = entry.rename_temporary.filename().generic_string();
+    for (std::size_t index = 0; index < source_components.size(); ++index) {
+        if (source_components[index] == destination_components[index]) continue;
+        if (current_components[index] == source_components[index]) continue;
+        if (current_components[index] != destination_components[index]) {
+            return std::unexpected{error("rename temporary has an unexpected parent spelling",
+                                         entry.rename_temporary.generic_string())};
+        }
+
+        const auto current_directory = component_prefix(transaction.root, current_components, index + 1);
+        auto source_directory = component_prefix(transaction.root, current_components, index);
+        source_directory /= source_components[index];
+        const auto allowed_name = index + 1 == current_components.size()
+                                      ? temporary_name
+                                      : current_components[index + 1];
+        const auto additional_file_name = entry.temporary.empty()
+                                              ? std::string{}
+                                              : entry.temporary.filename().generic_string();
+        auto contents = ensure_parent_directory_contains_only(
+            current_directory, allowed_name, index + 1 != current_components.size(),
+            additional_file_name);
+        if (!contents) return std::unexpected{contents.error()};
+
+        auto moved = move_path(current_directory, source_directory,
+                               "restore rename parent spelling");
+        if (!moved) return std::unexpected{moved.error()};
+        current_components[index] = source_components[index];
+        entry.rename_temporary = component_prefix(transaction.root, current_components,
+                                                   current_components.size());
+        entry.rename_temporary /= temporary_name;
+        if (!entry.temporary.empty()) {
+            entry.temporary = entry.rename_temporary.parent_path() / entry.temporary.filename();
+        }
+        auto journal = write_journal(transaction);
+        if (!journal) return std::unexpected{journal.error()};
+    }
+    return {};
+}
+
 [[nodiscard]] Result<void> alias_aware_rename(Transaction& transaction,
                                               TransactionEntry& entry) {
     const auto source_relative = relative_path(transaction.root, entry.source);
@@ -2344,6 +2576,13 @@ private:
         return std::unexpected{error("rename destination already exists", entry.destination.generic_string())};
     }
 
+    std::vector<std::string> source_parent_components;
+    std::vector<std::string> destination_parent_components;
+    auto parent_changed = has_parent_spelling_change(transaction, entry,
+                                                      source_parent_components,
+                                                      destination_parent_components);
+    if (!parent_changed) return std::unexpected{parent_changed.error()};
+
     // On a case-insensitive filesystem the source and requested destination
     // resolve to one directory entry.  A direct rename can be a no-op (and
     // Windows may reject it), so force a distinct spelling through a sibling
@@ -2356,6 +2595,12 @@ private:
         if (!moved_to_temporary) return std::unexpected{moved_to_temporary.error()};
         auto journal = write_journal(transaction);
         if (!journal) return std::unexpected{journal.error()};
+        if (*parent_changed) {
+            auto migrated = migrate_parent_spelling_forward(transaction, entry,
+                                                             source_parent_components,
+                                                             destination_parent_components);
+            if (!migrated) return std::unexpected{migrated.error()};
+        }
         auto moved_to_destination = move_path(entry.rename_temporary, entry.destination,
                                                "move rename temporary to requested destination");
         if (!moved_to_destination) return std::unexpected{moved_to_destination.error()};
@@ -2694,7 +2939,10 @@ private:
             return std::unexpected{error("rename temporary changed while transaction recovery was pending",
                                          entry.rename_temporary.generic_string())};
         }
-        auto restored = move_path(*resolved_temporary, entry.source, "restore interrupted rename source");
+        auto restored_parents = restore_parent_spelling(transaction, entry);
+        if (!restored_parents) return std::unexpected{restored_parents.error()};
+        auto restored = move_path(entry.rename_temporary, entry.source,
+                                  "restore interrupted rename source");
         if (!restored) return std::unexpected{restored.error()};
     }
 
@@ -2749,6 +2997,8 @@ private:
             auto moved_to_temporary = move_path(entry.destination, entry.rename_temporary,
                                                 "move renamed output to rollback temporary path");
             if (!moved_to_temporary) return std::unexpected{moved_to_temporary.error()};
+            auto restored_parents = restore_parent_spelling(transaction, entry);
+            if (!restored_parents) return std::unexpected{restored_parents.error()};
             auto moved_to_source = move_path(entry.rename_temporary, entry.source,
                                              "restore old output spelling");
             if (!moved_to_source) return std::unexpected{moved_to_source.error()};
@@ -2927,7 +3177,11 @@ private:
         if (planned.kind == TransactionEntryKind::replace ||
             (planned.kind == TransactionEntryKind::rename && planned.pre_hash != planned.post_hash) ||
             (planned.kind == TransactionEntryKind::manifest && planned.post_exists)) {
-            entry.temporary = transaction_temp_path(planned.destination);
+            const auto temporary_destination = planned.kind == TransactionEntryKind::rename &&
+                                                       planned.source.parent_path() != planned.destination.parent_path()
+                                                   ? planned.source.parent_path() / planned.destination.filename()
+                                                   : planned.destination;
+            entry.temporary = transaction_temp_path(temporary_destination);
         }
         if (planned.kind == TransactionEntryKind::rename) {
             entry.rename_temporary = rename_transaction_temp_path(planned.destination, planned.source);
@@ -3001,6 +3255,28 @@ private:
                                                  current.generic_string())};
                 }
                 break;
+            }
+            if (entry.kind == TransactionEntryKind::rename) {
+                const auto relative = generic_utf8_string(current.lexically_relative(transaction.root));
+                auto resolved = resolve_existing_alias(transaction.root, relative,
+                                                       transaction.capabilities);
+                if (!resolved) return std::unexpected{resolved.error()};
+                if (*resolved != current) {
+                    std::filesystem::file_status alias_status;
+                    auto inspected_alias = safe_status(*resolved, alias_status);
+                    if (!inspected_alias) return std::unexpected{inspected_alias.error()};
+                    if (std::filesystem::exists(alias_status)) {
+                        if (std::filesystem::is_symlink(alias_status) ||
+                            !std::filesystem::is_directory(alias_status)) {
+                            return std::unexpected{error("output parent is not a directory",
+                                                         resolved->generic_string())};
+                        }
+                        // A case-only rename entry migrates this existing
+                        // physical parent; creating the requested alias here
+                        // would leave two portable-equivalent directories.
+                        break;
+                    }
+                }
             }
             const auto relative = generic_utf8_string(current.lexically_relative(transaction.root));
             if (relative.empty() || is_reserved_metadata_path(relative)) {
