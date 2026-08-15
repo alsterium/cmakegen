@@ -348,6 +348,22 @@ TEST_CASE("safe writer uses macOS Unicode case aliases for ownership and cleanup
     CHECK_FALSE(std::filesystem::exists(fixture.path() / utf8_path(upper)));
 }
 
+TEST_CASE("safe writer preserves portable aliases below macOS Unicode-equivalent parents") {
+    TemporaryDirectory fixture;
+    const std::string composed_parent = "caf\xc3\xa9";
+    const std::string decomposed_parent = "cafe\xcc\x81";
+    if (!filesystem_has_alias(fixture.path(), composed_parent, decomposed_parent)) {
+        SKIP("filesystem does not normalize this Unicode parent alias");
+    }
+
+    cmakegen::GeneratedFileSet files;
+    REQUIRE(files.add({utf8_path(composed_parent + "/Foo.txt"), "first\n"}));
+    REQUIRE(files.add({utf8_path(decomposed_parent + "/foo.txt"), "second\n"}));
+    cmakegen::SafeWriter writer{fixture.path()};
+    CHECK_FALSE(writer.write(files));
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/manifest.json"));
+}
+
 TEST_CASE("safe writer preserves distinct macOS Unicode names and manifest order") {
     TemporaryDirectory fixture;
     const std::string accented = "caf\xc3\xa9.txt";

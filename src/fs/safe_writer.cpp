@@ -389,7 +389,7 @@ Result<void> FilesystemCapabilities::validate_path(std::string_view path) const 
 [[nodiscard]] Result<std::filesystem::path> resolve_windows_existing_directory(
     const std::filesystem::path& parent, std::string_view component, bool parent_case_sensitive) {
     std::error_code ec;
-    const auto exact = parent / std::filesystem::path{std::string{component}};
+    const auto exact = parent / path_from_utf8(component);
     (void)std::filesystem::symlink_status(exact, ec);
     if (ec && ec != std::errc::no_such_file_or_directory) {
         return std::unexpected{error("cannot inspect destination directory: " + ec.message(), exact.generic_string())};
@@ -427,7 +427,7 @@ struct WindowsPathCursor {
 [[nodiscard]] Result<WindowsPathCursor> advance_windows_path_cursor(
     const FilesystemCapabilities& capabilities, WindowsPathCursor cursor, std::string_view component) {
     if (!cursor.exists) {
-        return WindowsPathCursor{cursor.directory / std::filesystem::path{std::string{component}}, false,
+        return WindowsPathCursor{cursor.directory / path_from_utf8(component), false,
                                  cursor.case_sensitive};
     }
 
@@ -529,6 +529,32 @@ struct MacOSPathCursor {
     return cursor;
 }
 #endif
+
+// Validate a non-ASCII destination against the capability of the physical
+// directory that will contain it.  Pairwise equivalence checks alone do not
+// visit an empty target directory, so they cannot establish this safety
+// boundary for a single output beneath a nested mount.
+[[nodiscard]] Result<void> validate_target_unicode_capability(
+    const FilesystemCapabilities& capabilities, std::string_view relative) {
+    auto valid = capabilities.validate_path(relative);
+    if (!valid) return std::unexpected{valid.error()};
+#ifdef __APPLE__
+    if (!has_non_ascii(relative)) return {};
+    const auto parent = generic_utf8_string(path_from_utf8(relative).parent_path());
+    auto cursor = macos_parent_for_relative(capabilities, parent);
+    if (!cursor) return std::unexpected{cursor.error()};
+    const auto& capability_directory = cursor->exists ? cursor->directory : cursor->capability_directory;
+    auto mode = detect_macos_unicode_mode(capability_directory);
+    if (!mode) return std::unexpected{mode.error()};
+    if (*mode == UnicodeFilesystemMode::unsupported) {
+        return std::unexpected{error("cannot determine Unicode filesystem equivalence safely; target filesystem capability is unsupported",
+                                     std::string{relative})};
+    }
+    auto key = macos_unicode_key(relative, *mode == UnicodeFilesystemMode::macos_case_insensitive);
+    if (!key) return std::unexpected{key.error()};
+#endif
+    return {};
+}
 
 [[nodiscard]] Result<std::string> normalize_relative_path(const std::filesystem::path& path) {
     if (path.native().find('\\') != std::filesystem::path::string_type::npos) {
@@ -654,10 +680,12 @@ Result<bool> FilesystemCapabilities::equivalent_path(std::string_view left, std:
                                                                     : left_cursor->capability_directory;
         const auto right_capability_directory = right_cursor->exists ? right_cursor->directory
                                                                       : right_cursor->capability_directory;
-        auto component_equivalent = macos_unicode_equivalent_in_directories(
-            left_capability_directory, right_capability_directory, left_components[index], right_components[index]);
-        if (!component_equivalent) return std::unexpected{component_equivalent.error()};
-        if (!*component_equivalent) return false;
+        if (portable_equivalence_key(left_components[index]) != portable_equivalence_key(right_components[index])) {
+            auto component_equivalent = macos_unicode_equivalent_in_directories(
+                left_capability_directory, right_capability_directory, left_components[index], right_components[index]);
+            if (!component_equivalent) return std::unexpected{component_equivalent.error()};
+            if (!*component_equivalent) return false;
+        }
         if (!left_parent.empty()) left_parent += '/';
         left_parent += left_components[index];
         if (!right_parent.empty()) right_parent += '/';
@@ -899,7 +927,7 @@ Result<bool> FilesystemCapabilities::equivalent(std::string_view left, std::stri
                                                           const FilesystemCapabilities& capabilities) {
     for (const auto& [path, hash] : manifest.files) {
         (void)hash;
-        auto valid = capabilities.validate_path(path);
+        auto valid = validate_target_unicode_capability(capabilities, path);
         if (!valid) return std::unexpected{valid.error()};
     }
     for (auto left = manifest.files.begin(); left != manifest.files.end(); ++left) {
@@ -1099,7 +1127,7 @@ Result<WriteResult> SafeWriter::write(const GeneratedFileSet& files, const Write
     for (const auto& file : files.files()) {
         auto normalized = normalize_relative_path(file.path);
         if (!normalized) return std::unexpected{normalized.error()};
-        auto unicode_valid = capabilities.validate_path(*normalized);
+        auto unicode_valid = validate_target_unicode_capability(capabilities, *normalized);
         if (!unicode_valid) return std::unexpected{unicode_valid.error()};
         auto parents = reject_symlink_parents(project_root_, path_from_utf8(*normalized), capabilities);
         if (!parents) return std::unexpected{parents.error()};
@@ -1280,7 +1308,7 @@ Result<WriteResult> SafeWriter::clean(bool dry_run, bool force) const {
     for (const auto& [relative, hash] : manifest->files) {
         auto valid = normalize_relative_path(path_from_utf8(relative));
         if (!valid) return std::unexpected{valid.error()};
-        auto unicode_valid = capabilities.validate_path(*valid);
+        auto unicode_valid = validate_target_unicode_capability(capabilities, *valid);
         if (!unicode_valid) return std::unexpected{unicode_valid.error()};
         auto parents = reject_symlink_parents(project_root_, path_from_utf8(*valid), capabilities);
         if (!parents) return std::unexpected{parents.error()};

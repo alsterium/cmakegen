@@ -131,3 +131,19 @@ Unicode-only extension are defined in
   This preserves non-ACP names such as emoji through atomic output staging.
 - The Windows Unicode regression covers an emoji filename through write and
   clean in addition to UTF-8 manifest ownership paths.
+
+### Review follow-up (nested capability validation)
+
+- Windows directory cursors now reconstruct every UTF-8 component through the
+  native UTF-8 path conversion, including nonexistent descendants. This keeps
+  per-directory case-sensitivity discovery attached to the requested path
+  rather than an ACP-mangled alias.
+- macOS applies the portable ASCII/Win32 alias rule at every path component,
+  including below Unicode-normalization-equivalent parents. Each non-ASCII
+  destination and manifest entry also validates the last existing physical
+  parent capability, so an unsupported nested mount fails safely even for a
+  single output.
+- Verification: normal and bootstrap builds passed; the isolated SafeWriter
+  suite passed 14 cases with 2 platform-appropriate skips (89 assertions),
+  bootstrap CTest completed with no registered tests, and `git diff --check`
+  passed.
