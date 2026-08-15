@@ -140,9 +140,11 @@ intended post-state.
   is disabled.
 - Pre-state verification revalidates every output parent before accepting a
   partially restored transaction, including entries already marked restored.
-- Directory creation records only paths whose `create_directory` call actually
-  created them; a directory that appears during the race window is removed
-  from the rollback set and the journal is updated before staging continues.
+- Directory creation keeps planned paths out of the journal. Each path becomes
+  transaction-owned and is persisted only after its `create_directory` call
+  succeeds, so recovery cannot remove a directory another process creates in
+  the pre-creation window. Existing outputs are revalidated as regular files
+  with their recorded pre-hash immediately before they are moved to backups.
 - Tests: added partial-staging, stale-journal-temporary, and journal-less
   recovery coverage, including preservation of unclaimed staging paths and
   journal-less backup validation. Added lifetime-lock contention and retained
@@ -150,9 +152,10 @@ intended post-state.
   symlinked post-state output-parent recovery coverage and staging-path
   ancestor collision coverage. Backup parents are also revalidated before
   restoration. The existing Windows locked-file test now exercises the
-  pre-hash-preservation path.
+  pre-hash-preservation path. Added coverage that an interrupted
+  file-to-directory transition journals the directory only after creation.
 - Verification: `cmake --build build/t020-normal --parallel 2` and
   `cmake --build build/t020-bootstrap --parallel 2` passed;
-  `build/t020-normal/cmakegen_tests "safe writer*"` passed with 31 runnable
-  cases, 3 platform-appropriate skips, and 267 assertions; `git diff --check`
+  `build/t020-normal/cmakegen_tests "safe writer*"` passed with 32 runnable
+  cases, 3 platform-appropriate skips, and 275 assertions; `git diff --check`
   passed. CI failures remain outside this task.

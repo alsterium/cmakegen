@@ -1365,6 +1365,10 @@ struct Transaction {
     bool post_manifest_exists = false;
     std::string post_manifest_content;
     std::vector<TransactionEntry> entries;
+    // This is intentionally not serialized.  A path becomes transaction-owned
+    // only after create_directory succeeds and it is appended to
+    // created_directories below.
+    std::vector<std::filesystem::path> planned_directories;
     std::vector<std::filesystem::path> created_directories;
     FilesystemCapabilities capabilities;
 };
@@ -2498,7 +2502,7 @@ private:
                 if (is_scheduled_removal(current)) {
                     const auto relative = current.lexically_relative(transaction.root).generic_string();
                     if (seen.emplace(portable_equivalence_key(relative)).second) {
-                        transaction.created_directories.push_back(current);
+                        transaction.planned_directories.push_back(current);
                     }
                     current = current.parent_path();
                     continue;
@@ -2514,39 +2518,33 @@ private:
                 return std::unexpected{error("output parent is unsafe", current.generic_string())};
             }
             if (seen.emplace(portable_equivalence_key(relative)).second) {
-                transaction.created_directories.push_back(current);
+                transaction.planned_directories.push_back(current);
             }
             current = current.parent_path();
         }
     }
-    std::ranges::sort(transaction.created_directories, [](const auto& left, const auto& right) {
+    std::ranges::sort(transaction.planned_directories, [](const auto& left, const auto& right) {
         return left.native().size() < right.native().size();
     });
     return {};
 }
 
 [[nodiscard]] Result<void> create_transaction_directories(Transaction& transaction) {
-    std::vector<std::filesystem::path> actually_created;
-    actually_created.reserve(transaction.created_directories.size());
-    bool reclassified_directory = false;
-    for (const auto& directory : transaction.created_directories) {
+    for (const auto& directory : transaction.planned_directories) {
         std::error_code ec;
         const bool created = std::filesystem::create_directory(directory, ec);
         if (ec) return std::unexpected{error("cannot create output directory: " + ec.message(),
                                              directory.generic_string())};
         if (created) {
-            actually_created.push_back(directory);
-        } else {
-            // The directory appeared after preflight.  It is not owned by
-            // this transaction and must not be removed during rollback.
-            reclassified_directory = true;
+            transaction.created_directories.push_back(directory);
+            // Do not journal planned paths.  Recording ownership only after
+            // creation prevents recovery from deleting a directory another
+            // process created during the preflight-to-create window.
+            auto journal = write_journal(transaction);
+            if (!journal) return std::unexpected{journal.error()};
         }
     }
-    transaction.created_directories = std::move(actually_created);
-    if (reclassified_directory) {
-        auto journal = write_journal(transaction);
-        if (!journal) return std::unexpected{journal.error()};
-    }
+    transaction.planned_directories.clear();
     return {};
 }
 
@@ -2606,6 +2604,23 @@ private:
             entry.status = TransactionEntryStatus::backing_up;
             auto before = write_journal(transaction);
             if (!before) return std::unexpected{before.error()};
+            auto parents = validate_recovery_path_parents(transaction, entry.destination);
+            if (!parents) return std::unexpected{parents.error()};
+            std::filesystem::file_status status;
+            auto inspected = safe_status(entry.destination, status);
+            if (!inspected) return std::unexpected{inspected.error()};
+            if (!std::filesystem::exists(status) || std::filesystem::is_symlink(status) ||
+                !std::filesystem::is_regular_file(status)) {
+                return std::unexpected{error("destination changed before transaction backup",
+                                             entry.destination.generic_string())};
+            }
+            auto content = read_file(entry.destination);
+            if (!content || SafeWriter::sha256(*content) != entry.pre_hash) {
+                return std::unexpected{error("destination content changed before transaction backup",
+                                             entry.destination.generic_string())};
+            }
+            parents = validate_recovery_path_parents(transaction, entry.destination);
+            if (!parents) return std::unexpected{parents.error()};
             auto moved = move_to_backup(entry.destination, entry.backup);
             if (!moved) return std::unexpected{moved.error()};
         }

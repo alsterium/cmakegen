@@ -281,6 +281,26 @@ TEST_CASE("safe writer removes recreated parents when staging fails") {
     CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
 }
 
+TEST_CASE("safe writer journals output directories only after creating them") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"generated", "old\n"}})));
+
+    {
+        FailureInjectionScope injection{{FailurePoint::during_staging, 0}};
+        cmakegen::detail::safe_writer_testing::queue_failure_injection({FailurePoint::rollback, 0});
+        const auto result = writer.write(file_set({{"generated/child.txt", "new\n"}}));
+        REQUIRE_FALSE(result);
+        CHECK(result.error().diagnostics().front().message.find("requires operator recovery") != std::string::npos);
+    }
+
+    const auto transaction = fixture.path() / ".cmakegen/transaction";
+    const auto journal = nlohmann::json::parse(read_file(transaction / "journal.json"));
+    REQUIRE(journal["created_directories"].is_array());
+    REQUIRE(journal["created_directories"].size() == 1);
+    CHECK(journal["created_directories"][0] == "generated");
+}
+
 TEST_CASE("safe writer reports platform-specific locked-file replacement failures") {
 #ifndef _WIN32
     SKIP("POSIX permits renaming an open file; Windows share-mode locking is tested on Windows");
