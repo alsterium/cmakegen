@@ -212,3 +212,12 @@ and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).
 - Verification: normal and bootstrap builds passed; the isolated SafeWriter
   suite passed 70 runnable cases with 4 platform-appropriate skips (673
   assertions), and `git diff --check` passed.
+
+### Stack rebase follow-up (T020 ef7ab98)
+
+- Retained-output preflight from T020 now honors T021's force policy: a
+  modified retained output keeps ownership with its current hash, including
+  while a case-only parent migration retargets its manifest spelling.
+- Verification: normal and bootstrap builds passed; the isolated SafeWriter
+  suite passed 72 runnable cases with 4 platform-appropriate skips (691
+  assertions), and `git diff --check` passed.

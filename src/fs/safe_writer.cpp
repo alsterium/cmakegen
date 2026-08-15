@@ -4507,9 +4507,14 @@ pending_parent_migration_source(const Transaction& transaction,
             if (!resolved) return std::unexpected{resolved.error()};
             auto content = existing_file_content(*resolved, "retained manifest-owned output");
             if (!content) return std::unexpected{content.error()};
-            if (!content->first || SafeWriter::sha256(content->second) != hash) {
+            if (!content->first) {
                 return std::unexpected{error("retained manifest-owned output no longer matches its recorded hash", relative)};
             }
+            const auto current_hash = SafeWriter::sha256(content->second);
+            if (current_hash != hash && !options.force) {
+                return std::unexpected{error("retained manifest-owned output no longer matches its recorded hash", relative)};
+            }
+            if (current_hash != hash) next_manifest.files.insert_or_assign(relative, current_hash);
         }
     }
 
