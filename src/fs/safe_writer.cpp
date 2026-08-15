@@ -2786,6 +2786,24 @@ void retarget_transaction_artifacts_after_directory_move(
     return {};
 }
 
+[[nodiscard]] Result<void> validate_rename_temporaries_before_transaction(
+    const std::filesystem::path& root, const PreparedPlan& plan) {
+    Transaction transaction{};
+    transaction.root = root;
+    transaction.directory = transaction_directory(root);
+    transaction.backups_directory = transaction.directory / "backups";
+    transaction.capabilities = plan.capabilities;
+    auto entries = populate_transaction_entries(transaction, plan);
+    if (!entries) return std::unexpected{entries.error()};
+
+    for (const auto& entry : transaction.entries) {
+        if (entry.kind != TransactionEntryKind::rename) continue;
+        auto temporary_absent = ensure_rename_temporary_is_absent(transaction, entry);
+        if (!temporary_absent) return std::unexpected{temporary_absent.error()};
+    }
+    return {};
+}
+
 [[nodiscard]] Result<void> alias_aware_rename(Transaction& transaction,
                                               TransactionEntry& entry) {
     const auto source_relative = relative_path(transaction.root, entry.source);
@@ -4409,6 +4427,8 @@ void retarget_transaction_artifacts_after_directory_move(
     });
     auto parent_migrations_valid = validate_parent_migrations_before_transaction(root, plan);
     if (!parent_migrations_valid) return std::unexpected{parent_migrations_valid.error()};
+    auto rename_temporaries_valid = validate_rename_temporaries_before_transaction(root, plan);
+    if (!rename_temporaries_valid) return std::unexpected{rename_temporaries_valid.error()};
     plan.result.files_written = std::ranges::count_if(plan.entries, [](const auto& entry) {
         return entry.kind == TransactionEntryKind::replace || entry.kind == TransactionEntryKind::rename;
     });

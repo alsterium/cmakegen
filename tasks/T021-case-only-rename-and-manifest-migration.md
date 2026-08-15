@@ -132,13 +132,15 @@ and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).
   outputs.
 - Parent migration planning rejects incompatible requested spellings for the
   same portable-equivalent ancestor before any transaction is created.
+- Occupied case-only rename temporaries are rejected during plan preparation,
+  so check and dry-run use the same target validation as a real write.
 - Verification: the forced-replacement, shared-parent rollback, and
   parent-migrated source-spelling, rename-temporary collision, and physical
   spelling, preflight-conflict, resolved-tree migration, retained-sibling,
   nested-retained-migration, forced-retained-migration,
-  planned-rename-collision, shared-parent-conflict, and
-  deep-intermediate-directory cases passed; the
-  full isolated SafeWriter suite passed (44 runnable cases, 4
-  platform-appropriate skips, 446
+  planned-rename-collision, shared-parent-conflict,
+  occupied-rename-temporary, and deep-intermediate-directory cases passed; the
+  full isolated SafeWriter suite passed (46 runnable cases, 4
+  platform-appropriate skips, 458
   assertions), and `git diff --check` passed. CI failures remain outside this
   task.

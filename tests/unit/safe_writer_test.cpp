@@ -1605,6 +1605,27 @@ TEST_CASE("safe writer rejects conflicting spellings for a shared parent migrati
     CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
 }
 
+TEST_CASE("safe writer validates occupied rename temporaries before journaling") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo.txt", "old\n"}})));
+    write_file(fixture.path() / ".foo.txt.cmakegen-rename.tmp", "unowned\n");
+    const auto next = file_set({{"foo.txt", "new\n"}});
+
+    const auto checked = writer.write(next, {.check = true});
+    REQUIRE_FALSE(checked);
+    CHECK(checked.error().diagnostics().front().message.find("occupied") != std::string::npos);
+    const auto dry_run = writer.write(next, {.dry_run = true});
+    REQUIRE_FALSE(dry_run);
+    CHECK(dry_run.error().diagnostics().front().message.find("occupied") != std::string::npos);
+    const auto result = writer.write(next);
+    REQUIRE_FALSE(result);
+    CHECK(result.error().diagnostics().front().message.find("occupied") != std::string::npos);
+    CHECK(read_file(fixture.path() / "Foo.txt") == "old\n");
+    CHECK(read_file(fixture.path() / ".foo.txt.cmakegen-rename.tmp") == "unowned\n");
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+}
+
 TEST_CASE("safe writer protects an unowned case-only conflicting path") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};
