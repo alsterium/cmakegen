@@ -421,6 +421,19 @@ TEST_CASE("safe writer protects unowned files unless force is requested") {
     CHECK(read_file(fixture.path() / "CMakeLists.txt") == "generated\n");
 }
 
+TEST_CASE("safe writer rejects outputs that collide with deterministic staging paths") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    const auto result = writer.write(file_set({
+        {"foo", "foo\n"},
+        {".foo.cmakegen-transaction.tmp", "temporary\n"},
+    }));
+
+    REQUIRE_FALSE(result);
+    CHECK(result.error().diagnostics().front().message.find("staging path") != std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/manifest.json"));
+}
+
 TEST_CASE("safe writer verifies a manifest-owned file before replacing it") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};

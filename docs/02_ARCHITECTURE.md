@@ -299,6 +299,8 @@ post-manifest has been verified. Recreated file-to-directory parents are
 removed before their previous file backups are restored, transaction-directory
 acquisition is exclusive for the transaction lifetime, and recovery revalidates
 destination/staging parents and retained backup hashes before mutation.
+Preflight rejects generated destinations that collide with deterministic
+transaction staging paths.
 
 ## 12. Self-host architecture
 

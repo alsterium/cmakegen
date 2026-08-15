@@ -1198,6 +1198,25 @@ constexpr std::array<std::uint32_t, 64> sha_constants = {
     return {};
 }
 
+[[nodiscard]] Result<void> validate_generated_staging_collisions(
+    const std::map<std::string, const GeneratedFile*, std::less<>>& files,
+    const FilesystemCapabilities& capabilities) {
+    for (const auto& [relative, file] : files) {
+        (void)file;
+        const auto staging = transaction_temp_path(std::filesystem::path{relative}).generic_string();
+        for (const auto& [other, other_file] : files) {
+            (void)other_file;
+            auto equivalent = capabilities.equivalent(other, staging);
+            if (!equivalent) return std::unexpected{equivalent.error()};
+            if (*equivalent) {
+                return std::unexpected{error("generated output collides with a transaction staging path",
+                                             other)};
+            }
+        }
+    }
+    return {};
+}
+
 enum class TransactionEntryKind {
     remove,
     replace,
@@ -2289,27 +2308,36 @@ private:
                 const bool recreated_for_transition = std::ranges::any_of(
                     transaction.created_directories,
                     [&entry](const auto& directory) { return directory == entry.destination; });
-                if ((!recreated_for_transition && entry.status != TransactionEntryStatus::applied) ||
-                    std::filesystem::is_symlink(status) ||
-                    !std::filesystem::is_directory(status)) {
+                bool untouched_original = false;
+                if (!recreated_for_transition && entry.status != TransactionEntryStatus::applied &&
+                    entry.had_original && std::filesystem::is_regular_file(status)) {
+                    auto content = read_file(entry.destination);
+                    untouched_original = content && SafeWriter::sha256(*content) == entry.pre_hash;
+                }
+                if ((!untouched_original && !recreated_for_transition &&
+                     entry.status != TransactionEntryStatus::applied) ||
+                    (!untouched_original && (std::filesystem::is_symlink(status) ||
+                                             !std::filesystem::is_directory(status)))) {
                     return std::unexpected{error("stale destination changed while transaction recovery was pending",
                                                  entry.destination.generic_string())};
                 }
-                std::error_code ec;
-                if (!std::filesystem::is_empty(entry.destination, ec)) {
-                    if (ec) {
-                        return std::unexpected{error("cannot inspect recreated output directory: " + ec.message(),
+                if (!untouched_original) {
+                    std::error_code ec;
+                    if (!std::filesystem::is_empty(entry.destination, ec)) {
+                        if (ec) {
+                            return std::unexpected{error("cannot inspect recreated output directory: " + ec.message(),
+                                                         entry.destination.generic_string())};
+                        }
+                        return std::unexpected{error("cannot remove a recreated output directory containing an unowned file",
                                                      entry.destination.generic_string())};
                     }
-                    return std::unexpected{error("cannot remove a recreated output directory containing an unowned file",
-                                                 entry.destination.generic_string())};
-                }
-                auto parents = validate_recovery_path_parents(transaction, entry.destination);
-                if (!parents) return std::unexpected{parents.error()};
-                std::filesystem::remove(entry.destination, ec);
-                if (ec) {
-                    return std::unexpected{error("cannot remove recreated output directory: " + ec.message(),
-                                                 entry.destination.generic_string())};
+                    auto parents = validate_recovery_path_parents(transaction, entry.destination);
+                    if (!parents) return std::unexpected{parents.error()};
+                    std::filesystem::remove(entry.destination, ec);
+                    if (ec) {
+                        return std::unexpected{error("cannot remove recreated output directory: " + ec.message(),
+                                                     entry.destination.generic_string())};
+                    }
                 }
             }
         }
@@ -2847,6 +2875,8 @@ private:
 
     auto output_valid = validate_generated_file_equivalence(next_files, capabilities);
     if (!output_valid) return std::unexpected{output_valid.error()};
+    auto staging_valid = validate_generated_staging_collisions(next_files, capabilities);
+    if (!staging_valid) return std::unexpected{staging_valid.error()};
     auto next_manifest_valid = validate_manifest_equivalence(next_manifest, capabilities);
     if (!next_manifest_valid) return std::unexpected{next_manifest_valid.error()};
 

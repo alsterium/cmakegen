@@ -280,6 +280,9 @@ recovering an active transaction. Recovery revalidates destination and staging
 parents immediately before mutation and validates retained backup type/content
 before removing a destination; a competing writer never cleans another
 writer's artifacts.
+Generated destinations are also checked against every deterministic staging
+path before a transaction starts, so one output can never overwrite another
+output's staging file.
 
 Why:
 

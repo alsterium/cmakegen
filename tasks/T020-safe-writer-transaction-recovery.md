@@ -128,7 +128,10 @@ intended post-state.
   prevents a competing writer from recovering active artifacts, and recovery
   revalidates destination/staging parents and retained backup hashes before
   mutation. Manifest-pending recovery verifies every post-manifest output
-  including unchanged entries.
+  including unchanged entries. Preflight rejects generated destinations that
+  collide with another output's deterministic staging path, and rollback
+  accepts an untouched remove destination when its pre-state hash still
+  matches.
 - Tests: added partial-staging, stale-journal-temporary, and journal-less
   recovery coverage, including preservation of unclaimed staging paths and
   journal-less backup validation. Added lifetime-lock contention and retained
@@ -136,6 +139,6 @@ intended post-state.
   exercises the pre-hash-preservation path.
 - Verification: `cmake --build build/t020-normal --parallel 2` and
   `cmake --build build/t020-bootstrap --parallel 2` passed;
-  `build/t020-normal/cmakegen_tests "safe writer*"` passed with 24 runnable
-  cases, 3 platform-appropriate skips, and 212 assertions; `git diff --check`
+  `build/t020-normal/cmakegen_tests "safe writer*"` passed with 25 runnable
+  cases, 3 platform-appropriate skips, and 217 assertions; `git diff --check`
   passed. CI failures remain outside this task.
