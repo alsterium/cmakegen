@@ -99,7 +99,15 @@ and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).
 - Rename temporary ownership is journaled before the first temporary move;
   cleanup and rollback leave an unclaimed pre-existing sibling untouched even
   when its hash matches the rename source.
-- Verification: the rename-temporary ownership case, intermediate-directory
-  descendant case, and full isolated SafeWriter suite passed (34 runnable
-  cases, 4 platform-appropriate skips, 335 assertions), and `git diff --check`
-  passed. CI failures remain outside this task.
+- Forced replacements are retargeted when a case-only parent is migrated, so
+  the replacement staging path remains below the physical parent after the
+  rename and cannot be mistaken for an unowned destination.
+- Rollback keeps logical source and destination spellings stable while
+  retargeting transaction artifacts. If a shared parent was restored before a
+  later filename rollback, an equivalent physical source spelling such as
+  `Foo/a.txt` is accepted and moved back to the recorded `Foo/A.txt` source.
+- Verification: the forced-replacement, shared-parent rollback, and
+  parent-migrated source-spelling cases passed; the full isolated SafeWriter
+  suite passed (36 runnable cases, 4 platform-appropriate skips, 357
+  assertions), and `git diff --check` passed. CI failures remain outside this
+  task.

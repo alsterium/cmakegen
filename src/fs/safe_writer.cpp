@@ -2508,6 +2508,31 @@ private:
     return {};
 }
 
+// Parent spelling migrations move transaction-owned staging artifacts along
+// with the output subtree. Keep logical source/destination spellings stable
+// so rollback can still identify the pre-transaction names.
+void retarget_transaction_artifacts_after_directory_move(
+    Transaction& transaction,
+    const std::filesystem::path& source_directory,
+    const std::filesystem::path& destination_directory) {
+    const auto retarget = [&source_directory, &destination_directory](std::filesystem::path& path) {
+        if (path.empty()) return;
+        const auto relative = path.lexically_relative(source_directory);
+        const auto relative_value = relative.generic_string();
+        if (relative.empty() || relative.is_absolute() || relative_value == ".." ||
+            relative_value.starts_with("../")) {
+            return;
+        }
+        path = relative_value == "." ? destination_directory : destination_directory / relative;
+    };
+
+    for (auto& entry : transaction.entries) {
+        retarget(entry.temporary);
+        retarget(entry.rename_temporary);
+    }
+    for (auto& directory : transaction.created_directories) retarget(directory);
+}
+
 [[nodiscard]] Result<bool> has_parent_spelling_change(const Transaction& transaction,
                                                        const TransactionEntry& entry,
                                                        std::vector<std::string>& source_components,
@@ -2573,6 +2598,8 @@ private:
         auto moved = move_path(source_directory, destination_directory,
                                "migrate rename parent spelling");
         if (!moved) return std::unexpected{moved.error()};
+        retarget_transaction_artifacts_after_directory_move(transaction, source_directory,
+                                                             destination_directory);
 
         entry.rename_temporary = component_prefix(transaction.root, source_components, component_index);
         for (std::size_t suffix = component_index; suffix < destination_components.size(); ++suffix) {
@@ -2631,6 +2658,8 @@ private:
         auto moved = move_path(current_directory, source_directory,
                                "restore rename parent spelling");
         if (!moved) return std::unexpected{moved.error()};
+        retarget_transaction_artifacts_after_directory_move(transaction, current_directory,
+                                                             source_directory);
         current_components[index] = source_components[index];
         entry.rename_temporary = component_prefix(transaction.root, current_components,
                                                    current_components.size());
@@ -3090,12 +3119,18 @@ private:
     if (!inspected_destination) return std::unexpected{inspected_destination.error()};
     const bool source_exists = std::filesystem::exists(source_status);
     const bool destination_exists = std::filesystem::exists(destination_status);
+    const bool source_and_destination_share_physical_path =
+        source_exists && destination_exists && *resolved_source == *resolved_destination;
+    const bool case_only_rename_was_claimed =
+        entry.rename_claimed && source_and_destination_share_physical_path;
 
-    if (source_exists && *resolved_source != entry.source && *resolved_source != entry.destination) {
+    if (source_exists && !source_and_destination_share_physical_path &&
+        *resolved_source != entry.source && *resolved_source != entry.destination) {
         return std::unexpected{error("rename rollback found an unexpected source spelling",
                                      entry.source.generic_string())};
     }
-    if (destination_exists && *resolved_destination != entry.destination &&
+    if (destination_exists && !source_and_destination_share_physical_path &&
+        *resolved_destination != entry.destination &&
         *resolved_destination != entry.source) {
         return std::unexpected{error("rename rollback found an unexpected destination spelling",
                                      entry.destination.generic_string())};
@@ -3106,7 +3141,8 @@ private:
                                      entry.destination.generic_string())};
     }
 
-    if (destination_exists && *resolved_destination == entry.destination) {
+    if (destination_exists && (case_only_rename_was_claimed ||
+                               (*resolved_destination == entry.destination && !source_exists))) {
         auto content = existing_file_content(*resolved_destination, "renamed output");
         if (!content) return std::unexpected{content.error()};
         if (!content->first ||
@@ -3119,8 +3155,8 @@ private:
         // The old and new spellings are one physical object on an
         // insensitive filesystem.  Force the reverse spelling through the
         // same sibling temporary used by the forward rename.
-        if (*resolved_source == *resolved_destination ||
-            (source_exists && *resolved_source == entry.source)) {
+        if (case_only_rename_was_claimed ||
+            (entry.rename_claimed && source_exists && *resolved_source == entry.source)) {
             entry.rename_temporary = resolved_destination->parent_path() / entry.rename_temporary.filename();
             if (!entry.temporary.empty()) {
                 entry.temporary = entry.rename_temporary.parent_path() / entry.temporary.filename();

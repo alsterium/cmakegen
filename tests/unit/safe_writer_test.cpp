@@ -1394,12 +1394,47 @@ TEST_CASE("safe writer migrates a case-only parent shared by multiple outputs") 
     CHECK(has_exact_directory_entry(fixture.path(), "foo"));
 }
 
+TEST_CASE("safe writer rolls back filename and shared-parent spelling migrations together") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/A.txt", "a-old\n"}, {"Foo/B.txt", "b-old\n"}})));
+    const auto previous_manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+
+    {
+        FailureInjectionScope injection{{FailurePoint::after_replacement, 1}};
+        const auto result = writer.write(file_set({{"foo/a.txt", "a-new\n"}, {"foo/b.txt", "b-new\n"}}));
+        REQUIRE_FALSE(result);
+        CHECK(result.error().diagnostics().front().message.find("rollback completed") != std::string::npos);
+    }
+
+    CHECK(read_file(fixture.path() / "Foo/A.txt") == "a-old\n");
+    CHECK(read_file(fixture.path() / "Foo/B.txt") == "b-old\n");
+    CHECK(has_exact_directory_entry(fixture.path(), "Foo"));
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "foo"));
+    CHECK(read_file(fixture.path() / ".cmakegen/manifest.json") == previous_manifest);
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+}
+
 TEST_CASE("safe writer migrates a shared parent before creating a sibling output") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};
     REQUIRE(writer.write(file_set({{"Foo/a.txt", "a-old\n"}})));
 
     REQUIRE(writer.write(file_set({{"foo/a.txt", "a-new\n"}, {"foo/b.txt", "b-new\n"}})));
+    CHECK(read_file(fixture.path() / "foo/a.txt") == "a-new\n");
+    CHECK(read_file(fixture.path() / "foo/b.txt") == "b-new\n");
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "Foo"));
+    CHECK(has_exact_directory_entry(fixture.path(), "foo"));
+}
+
+TEST_CASE("safe writer retargets forced replacements after parent migration") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/a.txt", "a-old\n"}})));
+    write_file(fixture.path() / "Foo/b.txt", "user\n");
+
+    REQUIRE(writer.write(file_set({{"foo/a.txt", "a-new\n"}, {"foo/b.txt", "b-new\n"}}),
+                         {.force = true}));
     CHECK(read_file(fixture.path() / "foo/a.txt") == "a-new\n");
     CHECK(read_file(fixture.path() / "foo/b.txt") == "b-new\n");
     CHECK_FALSE(has_exact_directory_entry(fixture.path(), "Foo"));
