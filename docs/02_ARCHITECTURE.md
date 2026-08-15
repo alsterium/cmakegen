@@ -270,9 +270,10 @@ Write pattern:
 
 1. render all outputs in memory
 2. validate target destinations
-3. create a deterministic transaction journal with pre/post manifest metadata
-   and output backups
-4. write sibling temporary files and flush/close
+3. create a deterministic transaction journal with pre/post manifest metadata;
+   create the numbered backup directory before moving existing outputs
+4. record ownership of each sibling temporary path in the journal, then write
+   the temporary file and flush/close
 5. move existing owned outputs into the transaction backups
 6. atomically replace outputs where supported
 7. update the manifest last
@@ -285,9 +286,11 @@ order and verifies the pre-transaction hashes and manifest bytes before
 reporting the failure. If rollback or automatic recovery fails, it writes a
 deterministic uncommitted state under `.cmakegen/transaction/` containing
 `journal.json`, `pre-manifest.json`, `post-manifest.json`, and `backups/`.
-Check and dry-run stop before creating that state. Recovery never deletes
-unowned files and does not advance the manifest until the complete post-state
-has been verified.
+Check and dry-run stop before creating that state. Recovery removes a partial
+transaction-owned sibling temporary even when its hash is incomplete, while
+never deleting unowned files. A journal-less transaction is cleaned only when
+its contents match the known setup/cleanup scaffolding. Recovery does not
+advance the manifest until the complete post-state has been verified.
 
 ## 12. Self-host architecture
 

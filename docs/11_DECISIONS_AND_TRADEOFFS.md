@@ -262,6 +262,13 @@ set is verified before the failure is reported. If rollback or automatic
 recovery cannot complete, the transaction remains explicitly uncommitted under
 `.cmakegen/transaction/` for operator recovery.
 
+Each sibling staging path is marked in the journal before it is written, so an
+interrupted partial staging file can be removed as transaction-owned during
+rollback. Stale journal temporary files are discarded before the next journal
+write. Setup and cleanup interruptions that leave no journal are recoverable
+only for the known transaction scaffolding; unexpected artifacts remain
+protected for operator inspection.
+
 Why:
 
 - sequential filesystem replacement can expose a partial generated tree

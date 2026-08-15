@@ -45,6 +45,7 @@ namespace detail::safe_writer_testing {
 
 enum class FailurePoint {
     before_replacement,
+    during_staging,
     during_replacement,
     after_replacement,
     manifest_update,

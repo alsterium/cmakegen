@@ -77,6 +77,14 @@ destinations after the outputs are quiescent, then rerun the command; never
 remove an unowned file to force recovery. A successful retry removes the
 transaction directory automatically.
 
+An interrupted setup or cleanup may leave a transaction directory without
+`journal.json`. SafeWriter automatically removes that directory only when it
+contains the known metadata, temporary, and numbered-backup scaffolding; an
+unexpected artifact still requires operator inspection. Sibling staging paths
+are recorded as transaction-owned before writing, so a partial staging file is
+removed during automatic rollback even when its hash does not match the
+intended post-state.
+
 ## Execution record
 
 - Date: 2026-08-12
@@ -101,3 +109,18 @@ transaction directory automatically.
   modified SafeWriter files.
 - Follow-ups: none for T020; the full-suite CMake renderer failure #14 is
   outside this task and remains a local verification residual.
+
+### Review follow-up
+
+- A destination whose current hash still matches `pre_sha256` is retained
+  when a backup move fails before it can be applied. Journal temporary files
+  are discarded before retrying an atomic journal write. Staging ownership is
+  journaled before each write, allowing partial transaction temporaries to be
+  removed safely during rollback. Journal-less setup/cleanup scaffolding is
+  cleaned when its contents are known and transaction-owned.
+- Tests: added partial-staging, stale-journal-temporary, and journal-less
+  recovery coverage. The existing Windows locked-file test now exercises the
+  pre-hash-preservation path.
+- Verification: the isolated SafeWriter suite passed 19 runnable cases with
+  3 platform-appropriate skips, and `git diff --check` passed. CI failures
+  remain outside this task.

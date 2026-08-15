@@ -1092,9 +1092,30 @@ Result<bool> FilesystemCapabilities::equivalent(std::string_view left, std::stri
     return {};
 }
 
+[[nodiscard]] Result<void> discard_atomic_temporary(const std::filesystem::path& temporary) {
+    std::error_code ec;
+    const auto status = std::filesystem::symlink_status(temporary, ec);
+    if (is_not_found(ec) || (!ec && status.type() == std::filesystem::file_type::not_found)) return {};
+    if (ec) {
+        return std::unexpected{error("cannot inspect transaction temporary: " + ec.message(),
+                                     temporary.generic_string())};
+    }
+    if (std::filesystem::is_symlink(status) || !std::filesystem::is_regular_file(status)) {
+        return std::unexpected{error("transaction temporary is not a regular file", temporary.generic_string())};
+    }
+    std::filesystem::remove(temporary, ec);
+    if (ec) {
+        return std::unexpected{error("cannot remove stale transaction temporary: " + ec.message(),
+                                     temporary.generic_string())};
+    }
+    return {};
+}
+
 [[nodiscard]] Result<void> atomic_write_text(const std::filesystem::path& destination,
                                               std::string_view content) {
     const auto temporary = destination.string() + ".tmp";
+    auto discarded = discard_atomic_temporary(temporary);
+    if (!discarded) return std::unexpected{discarded.error()};
     auto written = write_file_without_replacement(temporary, content);
     if (!written) return std::unexpected{written.error()};
     auto replaced = replace_file(temporary, destination);
@@ -1171,6 +1192,8 @@ enum class TransactionEntryStatus {
     pending,
     backing_up,
     backed_up,
+    staging,
+    staged,
     in_progress,
     applied,
     restored,
@@ -1196,6 +1219,10 @@ enum class TransactionEntryStatus {
         return "backing_up";
     case TransactionEntryStatus::backed_up:
         return "backed_up";
+    case TransactionEntryStatus::staging:
+        return "staging";
+    case TransactionEntryStatus::staged:
+        return "staged";
     case TransactionEntryStatus::in_progress:
         return "in_progress";
     case TransactionEntryStatus::applied:
@@ -1217,6 +1244,8 @@ enum class TransactionEntryStatus {
     if (value == "pending") return TransactionEntryStatus::pending;
     if (value == "backing_up") return TransactionEntryStatus::backing_up;
     if (value == "backed_up") return TransactionEntryStatus::backed_up;
+    if (value == "staging") return TransactionEntryStatus::staging;
+    if (value == "staged") return TransactionEntryStatus::staged;
     if (value == "in_progress") return TransactionEntryStatus::in_progress;
     if (value == "applied") return TransactionEntryStatus::applied;
     if (value == "restored") return TransactionEntryStatus::restored;
@@ -1372,6 +1401,8 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
     switch (point) {
     case Point::before_replacement:
         return "before replacement";
+    case Point::during_staging:
+        return "during staging";
     case Point::during_replacement:
         return "during replacement";
     case Point::after_replacement:
@@ -1664,6 +1695,14 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
     if (std::filesystem::is_symlink(status) || !std::filesystem::is_regular_file(status)) {
         return std::unexpected{error("staged output is not a regular file", entry.temporary.generic_string())};
     }
+    if (entry.status == TransactionEntryStatus::staging || entry.status == TransactionEntryStatus::staged) {
+        // The journal records that this deterministic temporary path was
+        // claimed by the transaction before its contents were written.  A
+        // crash can therefore leave a short or otherwise partial file here;
+        // it is safe to remove the transaction-owned artifact without
+        // treating its hash as an external edit.
+        return remove_if_present(entry.temporary, "staged output");
+    }
     auto content = read_file(entry.temporary);
     if (!content) return std::unexpected{content.error()};
     if (SafeWriter::sha256(*content) != entry.post_hash) {
@@ -1690,12 +1729,15 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
     auto post_tmp = remove_if_present(transaction.post_metadata_path.string() + ".tmp",
                                       "post-manifest metadata temporary");
     if (!post_tmp) return std::unexpected{post_tmp.error()};
-    auto journal = remove_if_present(transaction.journal, "transaction journal");
-    if (!journal) return std::unexpected{journal.error()};
     auto pre = remove_if_present(transaction.pre_metadata_path, "pre-manifest metadata");
     if (!pre) return std::unexpected{pre.error()};
     auto post = remove_if_present(transaction.post_metadata_path, "post-manifest metadata");
     if (!post) return std::unexpected{post.error()};
+    // Keep the journal until all other transaction artifacts are gone.  If
+    // cleanup is interrupted after this point, the journal-less recovery path
+    // can safely remove only the known transaction-owned scaffolding.
+    auto journal = remove_if_present(transaction.journal, "transaction journal");
+    if (!journal) return std::unexpected{journal.error()};
     auto backups = remove_directory_if_empty(transaction.backups_directory);
     if (!backups) return std::unexpected{backups.error()};
     auto directory = remove_directory_if_empty(transaction.directory);
@@ -1704,6 +1746,87 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
     // no manifest ever existed.  Remove only an empty metadata directory so
     // unowned files under .cmakegen are never touched.
     return remove_metadata_directory_if_empty(transaction.root / ".cmakegen");
+}
+
+[[nodiscard]] bool is_transaction_backup_filename(std::string_view name) {
+    if (name.size() != 10 || name.substr(6) != ".bak") return false;
+    return std::ranges::all_of(name.substr(0, 6), [](char character) {
+        return character >= '0' && character <= '9';
+    });
+}
+
+[[nodiscard]] bool is_journalless_transaction_file(std::string_view name) {
+    return name == "pre-manifest.json" || name == "post-manifest.json" ||
+           name == "journal.json.tmp" || name == "pre-manifest.json.tmp" ||
+           name == "post-manifest.json.tmp";
+}
+
+[[nodiscard]] Result<void> cleanup_journalless_transaction(const std::filesystem::path& root) {
+    const auto directory = transaction_directory(root);
+    std::error_code ec;
+    const auto directory_status = std::filesystem::symlink_status(directory, ec);
+    if (is_not_found(ec) || (!ec && directory_status.type() == std::filesystem::file_type::not_found)) return {};
+    if (ec) {
+        return std::unexpected{error("cannot inspect journal-less transaction: " + ec.message(),
+                                     directory.generic_string())};
+    }
+    if (std::filesystem::is_symlink(directory_status) || !std::filesystem::is_directory(directory_status)) {
+        return std::unexpected{error("journal-less transaction path is not a directory", directory.generic_string())};
+    }
+
+    std::filesystem::directory_iterator entries(directory, ec);
+    if (ec) {
+        return std::unexpected{error("cannot inspect journal-less transaction: " + ec.message(),
+                                     directory.generic_string())};
+    }
+    for (const auto& entry : entries) {
+        const auto name = entry.path().filename().generic_string();
+        const auto status = std::filesystem::symlink_status(entry.path(), ec);
+        if (ec) {
+            return std::unexpected{error("cannot inspect journal-less transaction artifact: " + ec.message(),
+                                         entry.path().generic_string())};
+        }
+        if (name == "backups") {
+            if (std::filesystem::is_symlink(status) || !std::filesystem::is_directory(status)) {
+                return std::unexpected{error("journal-less transaction backup path is not a directory",
+                                             entry.path().generic_string())};
+            }
+            std::filesystem::directory_iterator backups(entry.path(), ec);
+            if (ec) {
+                return std::unexpected{error("cannot inspect journal-less transaction backups: " + ec.message(),
+                                             entry.path().generic_string())};
+            }
+            for (const auto& backup : backups) {
+                const auto backup_status = std::filesystem::symlink_status(backup.path(), ec);
+                if (ec) {
+                    return std::unexpected{error("cannot inspect journal-less transaction backup: " + ec.message(),
+                                                 backup.path().generic_string())};
+                }
+                if (std::filesystem::is_symlink(backup_status) ||
+                    !std::filesystem::is_regular_file(backup_status) ||
+                    !is_transaction_backup_filename(backup.path().filename().generic_string())) {
+                    return std::unexpected{error("journal-less transaction contains an unexpected backup artifact",
+                                                 backup.path().generic_string())};
+                }
+                auto removed = remove_if_present(backup.path(), "journal-less transaction backup");
+                if (!removed) return std::unexpected{removed.error()};
+            }
+            auto removed_backups = remove_directory_if_empty(entry.path());
+            if (!removed_backups) return std::unexpected{removed_backups.error()};
+            continue;
+        }
+        if (!is_journalless_transaction_file(name) || std::filesystem::is_symlink(status) ||
+            !std::filesystem::is_regular_file(status)) {
+            return std::unexpected{error("journal-less transaction contains an unexpected artifact",
+                                         entry.path().generic_string())};
+        }
+        auto removed = remove_if_present(entry.path(), "journal-less transaction artifact");
+        if (!removed) return std::unexpected{removed.error()};
+    }
+
+    auto removed_directory = remove_directory_if_empty(directory);
+    if (!removed_directory) return std::unexpected{removed_directory.error()};
+    return remove_metadata_directory_if_empty(root / ".cmakegen");
 }
 
 [[nodiscard]] Result<void> safe_status(const std::filesystem::path& path,
@@ -1729,6 +1852,15 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
     if (!std::filesystem::exists(status)) return {};
 
     if (!may_have_been_applied) {
+        if (entry.had_original && std::filesystem::is_regular_file(status)) {
+            auto content = read_file(entry.destination);
+            if (content && SafeWriter::sha256(*content) == entry.pre_hash) {
+                // The journal may have been persisted as `backing_up` before
+                // the move failed.  This is still the original destination,
+                // not an output that rollback must remove.
+                return {};
+            }
+        }
         return std::unexpected{error("destination changed while transaction was being rolled back",
                                      entry.destination.generic_string())};
     }
@@ -1989,7 +2121,7 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
                                                    transaction.capabilities);
     if (!metadata_parent) return std::unexpected{metadata_parent.error()};
     std::error_code ec;
-    std::filesystem::create_directories(transaction.backups_directory, ec);
+    std::filesystem::create_directories(transaction.directory, ec);
     if (ec) {
         return std::unexpected{error("cannot create transaction directory: " + ec.message(),
                                      transaction.directory.generic_string())};
@@ -2124,13 +2256,38 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
 }
 
 [[nodiscard]] Result<void> stage_transaction_outputs(Transaction& transaction) {
-    for (const auto& entry : transaction.entries) {
+    using Point = detail::safe_writer_testing::FailurePoint;
+    std::size_t staging_seen = 0;
+    for (auto& entry : transaction.entries) {
         if ((!entry.post_exists) ||
             (entry.kind != TransactionEntryKind::replace && entry.kind != TransactionEntryKind::manifest)) {
             continue;
         }
+        std::error_code staging_error;
+        const auto staging_status = std::filesystem::symlink_status(entry.temporary, staging_error);
+        if (!is_not_found(staging_error) &&
+            (staging_error || staging_status.type() != std::filesystem::file_type::not_found)) {
+            return std::unexpected{error("transaction staging path already exists",
+                                         entry.temporary.generic_string())};
+        }
+        entry.status = TransactionEntryStatus::staging;
+        auto before = write_journal(transaction);
+        if (!before) return std::unexpected{before.error()};
+        if (consume_failure(Point::during_staging, staging_seen)) {
+            std::ofstream partial(entry.temporary, std::ios::binary | std::ios::trunc);
+            if (partial) {
+                const auto partial_size = entry.content.size() / 2;
+                partial.write(entry.content.data(), static_cast<std::streamsize>(partial_size));
+                partial.close();
+            }
+            return std::unexpected{injected_failure(failure_point_name(Point::during_staging), entry.temporary)};
+        }
         auto staged = write_file_without_replacement(entry.temporary, entry.content);
         if (!staged) return std::unexpected{staged.error()};
+        entry.status = TransactionEntryStatus::staged;
+        auto after = write_journal(transaction);
+        if (!after) return std::unexpected{after.error()};
+        ++staging_seen;
     }
     return {};
 }
@@ -2140,6 +2297,13 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
     transaction.phase = "backup";
     auto phase = write_journal(transaction);
     if (!phase) return std::unexpected{phase.error()};
+
+    std::error_code directory_error;
+    std::filesystem::create_directories(transaction.backups_directory, directory_error);
+    if (directory_error) {
+        return std::unexpected{error("cannot create transaction backup directory: " + directory_error.message(),
+                                     transaction.backups_directory.generic_string())};
+    }
 
     for (auto& entry : transaction.entries) {
         if (entry.had_original) {
@@ -2214,8 +2378,13 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
     std::error_code ec;
     const auto journal_status = std::filesystem::symlink_status(journal, ec);
     if (is_not_found(ec) || (!ec && journal_status.type() == std::filesystem::file_type::not_found)) {
-        return std::unexpected{error("transaction directory has no journal; manual recovery is required",
-                                     transaction_directory(root).generic_string())};
+        auto cleaned = cleanup_journalless_transaction(root);
+        if (!cleaned) {
+            return std::unexpected{error("transaction directory has no recoverable journal: " +
+                                             cleaned.error().diagnostics().front().message,
+                                         transaction_directory(root).generic_string())};
+        }
+        return {};
     }
     if (ec) return std::unexpected{error("cannot inspect transaction journal: " + ec.message(), journal.generic_string())};
     if (std::filesystem::is_symlink(journal_status) || !std::filesystem::is_regular_file(journal_status)) {

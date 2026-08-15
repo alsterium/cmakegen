@@ -147,6 +147,23 @@ TEST_CASE("safe writer rolls back output replacements when manifest update fails
     CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
 }
 
+TEST_CASE("safe writer removes a partial staged output during rollback") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"generated.txt", "old content\n"}})));
+
+    {
+        FailureInjectionScope injection{{FailurePoint::during_staging, 0}};
+        const auto result = writer.write(file_set({{"generated.txt", "new content\n"}}));
+        REQUIRE_FALSE(result);
+        CHECK(result.error().diagnostics().front().message.find("rollback completed") != std::string::npos);
+    }
+
+    CHECK(read_file(fixture.path() / "generated.txt") == "old content\n");
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".generated.txt.cmakegen-transaction.tmp"));
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+}
+
 TEST_CASE("safe writer rolls back a file-to-directory transition") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};
@@ -204,6 +221,7 @@ TEST_CASE("safe writer retains deterministic recovery artifacts when rollback fa
     REQUIRE(std::filesystem::exists(transaction / "post-manifest.json"));
     CHECK(read_file(transaction / "journal.json").find("\"state\": \"recovery_required\"") != std::string::npos);
     CHECK(std::filesystem::exists(transaction / "backups"));
+    write_file(transaction / "journal.json.tmp", "interrupted journal write\n");
 
     {
         FailureInjectionScope recovery_injection{{FailurePoint::recovery, 0}};
@@ -217,6 +235,27 @@ TEST_CASE("safe writer retains deterministic recovery artifacts when rollback fa
     CHECK(read_file(fixture.path() / "first.txt") == "first-new\n");
     CHECK(read_file(fixture.path() / "second.txt") == "second-new\n");
     CHECK_FALSE(std::filesystem::exists(transaction));
+}
+
+TEST_CASE("safe writer cleans recoverable journal-less transaction scaffolding") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+
+    SECTION("transaction setup interrupted before the journal") {
+        std::filesystem::create_directories(fixture.path() / ".cmakegen/transaction/backups");
+    }
+
+    SECTION("cleanup interrupted after the journal was removed") {
+        const auto transaction = fixture.path() / ".cmakegen/transaction";
+        std::filesystem::create_directories(transaction / "backups");
+        write_file(transaction / "pre-manifest.json", "metadata\n");
+        write_file(transaction / "post-manifest.json", "metadata\n");
+        write_file(transaction / "journal.json.tmp", "stale\n");
+    }
+
+    REQUIRE(writer.write(file_set({{"generated.txt", "generated\n"}})));
+    CHECK(read_file(fixture.path() / "generated.txt") == "generated\n");
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
 }
 
 TEST_CASE("safe writer protects unowned files unless force is requested") {
