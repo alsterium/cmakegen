@@ -169,7 +169,10 @@ TEST_CASE("CMake renderer encodes dynamic values as literal single CMake argumen
     RenderedSourcesByTarget sources;
     sources["App"].common = {{"source dir/file;part.cpp", SourceKind::source}};
 
-    const auto rendered = render_cmake(project, graph_for(project), sources);
+    // The semantic validator deliberately rejects semicolon-containing
+    // dependency names. This renderer-only escaping case supplies the
+    // renderer's otherwise unused graph contract directly.
+    const auto rendered = render_cmake(project, TargetGraph{}, sources);
     CHECK(rendered.root_cmake_lists.find("include(\"cmake/with spaces\\;and-list.cmake\")") != std::string::npos);
     CHECK(rendered.generated_cmake.find("\"source dir/file\\;part.cpp\"") != std::string::npos);
     CHECK(rendered.generated_cmake.find("\"directory with spaces\\;and-list\\\\part\\\"quote\"") != std::string::npos);

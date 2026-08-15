@@ -105,6 +105,22 @@ public: Vec<T>
 interface: Vec<T>
 ```
 
+Normalized string-valued scoped entries use a provenance-carrying wrapper:
+
+```text
+ScopedValue<T>
+  value: T
+  diagnostic_path: Optional<String>
+  diagnostic_location: Optional<SourceLocation>
+```
+
+`include_dirs`, `compile_definitions`, and `compile_options` therefore retain
+the exact YAML entry that produced each effective value through
+`ScopedStringValues`. Renderers consume only `value`; semantic validation uses
+the retained path and 1-based source location. `LinkDependency` keeps its
+existing equivalent provenance fields because dependency graph validation
+already consumes them directly.
+
 User shorthand defaults:
 
 - `includeDirectories: [x]` => PRIVATE

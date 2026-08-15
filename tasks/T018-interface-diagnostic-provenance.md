@@ -49,3 +49,29 @@ T008.
 
 Recorded in [T008](T008-dependency-graph-and-semantic-validation.md): the
 current diagnostic retains the scope but not the exact YAML entry location.
+
+## Execution record
+
+- Date: 2026-08-12
+- Summary: Added provenance-carrying normalized scoped string values for common
+  and platform include directories, definitions, and compile options. Preserved
+  parser paths and source locations through normalization, surfaced exact entry
+  provenance in interface-library semantic diagnostics, adapted rendering,
+  dumps, and CLI path rebasing, and documented the shared-model compatibility
+  decision in ADR-013.
+- Verification: `cmake -S bootstrap -B build/bootstrap` (pass), `cmake --build
+  build/bootstrap --parallel 2` (pass), `cmake -S . -B build/normal` (pass),
+  `cmake --build build/normal --parallel 2` (pass), `ctest --test-dir
+  build/normal --output-on-failure` (pass; 145/145 tests, 1 skipped), bootstrap
+  `generate --check` (pass; `No changes.`), and `git diff --check` (pass).
+- Generated files: unchanged; bootstrap source drift and self-host generated
+  output remain synchronized.
+- Follow-ups: none.
+
+### Review follow-up
+
+- Added the scoped-entry index to interface-scope fallback diagnostic paths so
+  manually constructed projects distinguish multiple invalid values.
+- Verification: normal configure/build passed; the targeted CTest filter was
+  not registered by this build, so the built test executable was used for the
+  relevant regression coverage.

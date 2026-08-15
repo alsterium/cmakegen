@@ -191,10 +191,10 @@ struct ResolvedProject {
     return result;
 }
 
-void rebase_scoped_paths(ScopedValues<std::string>& values, const std::filesystem::path& source_root,
+void rebase_scoped_paths(ScopedStringValues& values, const std::filesystem::path& source_root,
                          const std::filesystem::path& output_root) {
     for (auto* scope : {&values.private_values, &values.public_values, &values.interface_values})
-        for (auto& value : *scope) value = rebase_project_path(value, source_root, output_root);
+        for (auto& value : *scope) value.value = rebase_project_path(value.value, source_root, output_root);
 }
 
 void rebase_render_paths(Project& project, const std::filesystem::path& source_root,

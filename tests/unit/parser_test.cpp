@@ -474,11 +474,16 @@ presets:
     const auto& core = result->targets[0];
     CHECK(core.include_directories.public_values[0].value == "include");
     CHECK(core.include_directories.private_values[0].path == "targets.Core.includeDirectories.private[0]");
+    CHECK(core.include_directories.public_values[0].location == SourceLocation{24, 16});
+    CHECK(core.include_directories.private_values[0].location == SourceLocation{25, 17});
     CHECK(core.definitions.private_values[0].value == "CORE_INTERNAL=1");
+    CHECK(core.definitions.private_values[0].location == SourceLocation{27, 17});
     CHECK(core.compile_options.private_values[0].value == "-Wall");
+    CHECK(core.compile_options.private_values[0].location == SourceLocation{29, 17});
     CHECK(core.dependencies.public_values[0].value == "fmt::fmt");
     REQUIRE(core.macos);
     CHECK(core.macos->definitions.private_values[0].value == "CORE_MACOS=1");
+    CHECK(core.macos->definitions.private_values[0].location == SourceLocation{35, 21});
     CHECK(result->targets[1].dependencies.private_values[0].value == "Core");
     REQUIRE(result->presets);
     REQUIRE(result->presets->size() == 2);
