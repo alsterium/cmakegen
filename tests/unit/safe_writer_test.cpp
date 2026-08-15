@@ -465,6 +465,59 @@ TEST_CASE("safe writer preserves staging paths recreated after publication") {
     CHECK_FALSE(std::filesystem::exists(transaction));
 }
 
+TEST_CASE("safe writer preserves staging recreated after an interrupted publication") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"generated.txt", "old\n"}})));
+
+    {
+        FailureInjectionScope injection{{FailurePoint::after_replacement, 0}};
+        cmakegen::detail::safe_writer_testing::queue_failure_injection({FailurePoint::rollback, 0});
+        REQUIRE_FALSE(writer.write(file_set({{"generated.txt", "new\n"}})));
+    }
+
+    const auto transaction = fixture.path() / ".cmakegen/transaction";
+    const auto staging = fixture.path() / ".generated.txt.cmakegen-transaction.tmp";
+    write_file(staging, "new\n");
+    auto journal = nlohmann::json::parse(read_file(transaction / "journal.json"));
+    journal["entries"][0]["status"] = "in_progress";
+    journal["entries"][0]["staging_claimed"] = true;
+    write_file(transaction / "journal.json", journal.dump(2) + "\n");
+
+    const auto recovery = writer.write(file_set({{"generated.txt", "new\n"}}));
+    CHECK_FALSE(recovery);
+    CHECK(recovery.error().diagnostics().front().message.find("staging ownership is ambiguous") != std::string::npos);
+    CHECK(read_file(staging) == "new\n");
+    CHECK(std::filesystem::exists(transaction / "journal.json"));
+}
+
+TEST_CASE("safe writer preserves backups recreated after rollback") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"generated.txt", "old\n"}})));
+
+    {
+        FailureInjectionScope injection{{FailurePoint::during_replacement, 0}};
+        cmakegen::detail::safe_writer_testing::queue_failure_injection({FailurePoint::rollback, 0});
+        REQUIRE_FALSE(writer.write(file_set({{"generated.txt", "new\n"}})));
+    }
+
+    const auto transaction = fixture.path() / ".cmakegen/transaction";
+    auto journal = nlohmann::json::parse(read_file(transaction / "journal.json"));
+    journal["entries"][0]["status"] = "restored";
+    journal["state"] = "rolled_back";
+    journal["phase"] = "rollback";
+    write_file(transaction / "journal.json", journal.dump(2) + "\n");
+    const auto backup = transaction / journal["entries"][0]["backup"].get<std::string>();
+    write_file(backup, "external backup\n");
+
+    const auto recovery = writer.write(file_set({{"generated.txt", "new\n"}}));
+    CHECK_FALSE(recovery);
+    CHECK(recovery.error().diagnostics().front().message.find("backup recreated after restoration") != std::string::npos);
+    CHECK(read_file(backup) == "external backup\n");
+    CHECK(std::filesystem::exists(transaction / "journal.json"));
+}
+
 TEST_CASE("safe writer preserves unclaimed directories at removed destinations during recovery") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};

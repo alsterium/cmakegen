@@ -1923,6 +1923,22 @@ private:
     if (std::filesystem::is_symlink(status) || !std::filesystem::is_regular_file(status)) {
         return std::unexpected{error("staged output is not a regular file", entry.temporary.generic_string())};
     }
+    if (entry.status == TransactionEntryStatus::in_progress) {
+        std::error_code destination_error;
+        std::filesystem::file_status destination_status;
+        destination_status = std::filesystem::symlink_status(entry.destination, destination_error);
+        if (destination_error && !is_not_found(destination_error)) {
+            return std::unexpected{error("cannot inspect published output: " + destination_error.message(),
+                                         entry.destination.generic_string())};
+        }
+        if (!destination_error && std::filesystem::is_regular_file(destination_status)) {
+            auto destination = read_file(entry.destination);
+            if (destination && SafeWriter::sha256(*destination) == entry.post_hash) {
+                return std::unexpected{error("staging ownership is ambiguous after an interrupted replacement",
+                                             entry.temporary.generic_string())};
+            }
+        }
+    }
     if (entry.status == TransactionEntryStatus::staging || entry.status == TransactionEntryStatus::staged) {
         // The journal records that this deterministic temporary path was
         // claimed by the transaction before its contents were written.  A
@@ -1951,8 +1967,23 @@ private:
         transaction, transaction.backups_directory / ".cmakegen-backup-check");
     if (!backup_parents) return std::unexpected{backup_parents.error()};
     for (const auto& entry : transaction.entries) {
+        if (entry.backup.empty()) continue;
         backup_parents = validate_recovery_path_parents(transaction, entry.backup);
         if (!backup_parents) return std::unexpected{backup_parents.error()};
+        if (entry.status == TransactionEntryStatus::restored) {
+            std::error_code backup_error;
+            std::filesystem::file_status status;
+            status = std::filesystem::symlink_status(entry.backup, backup_error);
+            if (backup_error && !is_not_found(backup_error)) {
+                return std::unexpected{error("cannot inspect restored backup: " + backup_error.message(),
+                                             entry.backup.generic_string())};
+            }
+            if (std::filesystem::exists(status)) {
+                return std::unexpected{error("backup recreated after restoration; preserving external artifact",
+                                             entry.backup.generic_string())};
+            }
+            continue;
+        }
         auto backup = remove_if_present(entry.backup, "transaction backup");
         if (!backup) return std::unexpected{backup.error()};
     }

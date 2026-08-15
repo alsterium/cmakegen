@@ -181,3 +181,7 @@ intended post-state.
   recovery-required diagnostics. Verification: normal and bootstrap builds
   passed; `cmakegen_tests "safe writer*" --reporter compact` passed with 37
   cases, 3 platform skips, and 316 assertions; `git diff --check` passed.
+- Recovery preserves a backup recreated after its recorded restore, and a
+  staging file recreated after an interrupted publish whose journal still
+  claims it. Both cases retain the transaction with recovery-required
+  diagnostics instead of deleting an indistinguishable external artifact.
