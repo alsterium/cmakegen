@@ -90,5 +90,5 @@ and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).
   active transaction, preserving unowned files. Nested-parent coverage now
   verifies exact directory spelling and rollback after the physical rename.
 - Verification: the nested-parent case and full isolated SafeWriter suite
-  passed (23 runnable cases, 4 platform-appropriate skips, 238 assertions),
+  passed (25 runnable cases, 4 platform-appropriate skips, 252 assertions),
   and `git diff --check` passed. CI failures remain outside this task.
