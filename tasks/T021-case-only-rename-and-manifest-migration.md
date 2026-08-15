@@ -125,11 +125,13 @@ and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).
   retained file in a nested sibling branch follows an outer directory
   spelling migration even when the requested output is deeper in another
   branch.
+- Forced parent migrations permit modified retained outputs and record the
+  retained content's current hash while preserving its content.
 - Verification: the forced-replacement, shared-parent rollback, and
   parent-migrated source-spelling, rename-temporary collision, and physical
   spelling, preflight-conflict, resolved-tree migration, retained-sibling,
-  nested-retained-migration, and deep-intermediate-directory cases passed; the
-  full isolated SafeWriter suite passed (42 runnable cases, 4
-  platform-appropriate skips, 412
+  nested-retained-migration, forced-retained-migration, and
+  deep-intermediate-directory cases passed; the full isolated SafeWriter suite
+  passed (43 runnable cases, 4 platform-appropriate skips, 421
   assertions), and `git diff --check` passed. CI failures remain outside this
   task.

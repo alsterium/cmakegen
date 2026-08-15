@@ -1439,6 +1439,21 @@ TEST_CASE("safe writer migrates retained files across nested parent migrations")
     CHECK(manifest.find("\"path\": \"Foo/B/y.txt\"") == std::string::npos);
 }
 
+TEST_CASE("safe writer force migrates modified retained siblings") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/a.txt", "a-old\n"}, {"Foo/b.txt", "b-old\n"}})));
+    write_file(fixture.path() / "Foo/b.txt", "user edit\n");
+
+    REQUIRE(writer.write(file_set({{"foo/a.txt", "a-new\n"}}),
+                         {.force = true, .cleanup_stale = false}));
+    CHECK(read_file(fixture.path() / "foo/b.txt") == "user edit\n");
+    const auto manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+    CHECK(manifest.find("\"path\": \"foo/b.txt\"") != std::string::npos);
+    CHECK(manifest.find(cmakegen::SafeWriter::sha256("user edit\n")) != std::string::npos);
+    CHECK(manifest.find("\"path\": \"Foo/b.txt\"") == std::string::npos);
+}
+
 TEST_CASE("safe writer bases later parent migrations on the resolved tree") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};

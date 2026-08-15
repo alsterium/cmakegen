@@ -3446,7 +3446,8 @@ void retarget_transaction_artifacts_after_directory_move(
     const std::filesystem::path& root,
     const Manifest& old_manifest,
     Manifest& next_manifest,
-    PreparedPlan& plan) {
+    PreparedPlan& plan,
+    bool force) {
     Transaction transaction{};
     transaction.root = root;
     transaction.directory = transaction_directory(root);
@@ -3513,6 +3514,16 @@ void retarget_transaction_artifacts_after_directory_move(
                                            .generic_string();
         if (migrated_relative == old_relative) continue;
 
+        auto resolved = resolve_existing_alias(root, old_relative, plan.capabilities);
+        if (!resolved) return std::unexpected{resolved.error()};
+        auto content = existing_file_content(*resolved, "retained parent-migration path");
+        if (!content) return std::unexpected{content.error()};
+        const auto retained_hash = content->first ? SafeWriter::sha256(content->second) : hash;
+        if (retained_hash != hash && !force) {
+            return std::unexpected{error("refusing to migrate a retained generated file modified since its recorded hash",
+                                         old_relative)};
+        }
+
         next_manifest.files.erase(old_relative);
         auto collision = find_equivalent_manifest_path(next_manifest, migrated_relative,
                                                         plan.capabilities);
@@ -3521,24 +3532,15 @@ void retarget_transaction_artifacts_after_directory_move(
             return std::unexpected{error("retained manifest path collides with a parent migration",
                                          migrated_relative)};
         }
-        next_manifest.files.insert_or_assign(migrated_relative, hash);
-
-        auto resolved = resolve_existing_alias(root, old_relative, plan.capabilities);
-        if (!resolved) return std::unexpected{resolved.error()};
-        auto content = existing_file_content(*resolved, "retained parent-migration path");
-        if (!content) return std::unexpected{content.error()};
+        next_manifest.files.insert_or_assign(migrated_relative, retained_hash);
         if (!content->first) continue;
-        if (SafeWriter::sha256(content->second) != hash) {
-            return std::unexpected{error("refusing to migrate a retained generated file modified since its recorded hash",
-                                         old_relative)};
-        }
         plan.entries.push_back(PlannedEntry{TransactionEntryKind::rename,
                                             migrated_relative,
                                             root / migrated_relative,
                                             true,
-                                            hash,
+                                            retained_hash,
                                             true,
-                                            hash,
+                                            retained_hash,
                                             {},
                                             *resolved});
     }
@@ -4325,7 +4327,7 @@ void retarget_transaction_artifacts_after_directory_move(
     }
 
     auto retained_parent_entries = add_retained_parent_migration_entries(
-        root, *old_manifest, next_manifest, plan);
+        root, *old_manifest, next_manifest, plan, options.force);
     if (!retained_parent_entries) return std::unexpected{retained_parent_entries.error()};
 
     const auto rendered_manifest = render_manifest(next_manifest);
