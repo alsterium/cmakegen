@@ -1474,6 +1474,39 @@ struct PreparedPlan {
     return {};
 }
 
+[[nodiscard]] Result<void> validate_planned_staging_collisions(
+    const std::vector<PlannedEntry>& entries,
+    const Manifest& post_manifest,
+    const FilesystemCapabilities& capabilities) {
+    for (const auto& entry : entries) {
+        const bool needs_staging = entry.kind == TransactionEntryKind::replace ||
+                                   (entry.kind == TransactionEntryKind::rename &&
+                                    entry.pre_hash != entry.post_hash);
+        if (!needs_staging) continue;
+        const auto staging_parent = entry.kind == TransactionEntryKind::rename &&
+                                            entry.source.parent_path() != entry.destination.parent_path()
+                                        ? entry.source.parent_path()
+                                        : entry.destination.parent_path();
+        const auto staging = transaction_temp_path(staging_parent / entry.destination.filename())
+                                 .lexically_relative(capabilities.project_root)
+                                 .generic_string();
+        for (const auto& [other, hash] : post_manifest.files) {
+            (void)hash;
+            auto equivalent = capabilities.equivalent(other, staging);
+            if (!equivalent) return std::unexpected{equivalent.error()};
+            auto staging_ancestor = is_path_ancestor(staging, other, capabilities);
+            if (!staging_ancestor) return std::unexpected{staging_ancestor.error()};
+            auto output_ancestor = is_path_ancestor(other, staging, capabilities);
+            if (!output_ancestor) return std::unexpected{output_ancestor.error()};
+            if (*equivalent || *staging_ancestor || *output_ancestor) {
+                return std::unexpected{error("generated output collides with a transaction staging path",
+                                             other)};
+            }
+        }
+    }
+    return {};
+}
+
 [[nodiscard]] std::string relative_path(const std::filesystem::path& root,
                                         const std::filesystem::path& path) {
     return generic_utf8_string(path.lexically_relative(root));
@@ -4491,6 +4524,8 @@ pending_parent_migration_source(const Transaction& transaction,
 
     auto rename_valid = validate_generated_rename_collisions(plan.entries, next_manifest, capabilities);
     if (!rename_valid) return std::unexpected{rename_valid.error()};
+    auto staging_paths_valid = validate_planned_staging_collisions(plan.entries, next_manifest, capabilities);
+    if (!staging_paths_valid) return std::unexpected{staging_paths_valid.error()};
 
     const auto rendered_manifest = render_manifest(next_manifest);
     const bool manifest_changed = !pre_manifest.present || pre_manifest.content != rendered_manifest;

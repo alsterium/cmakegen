@@ -907,6 +907,27 @@ TEST_CASE("safe writer only checks rename temporary collisions for planned renam
     CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
 }
 
+TEST_CASE("safe writer checks rename staging paths against retained outputs") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo.txt", "old\n"}})));
+    REQUIRE(writer.write(file_set({{".foo.txt.cmakegen-transaction.tmp", "retained\n"}}),
+                         {.cleanup_stale = false}));
+
+    const auto next = file_set({{"foo.txt", "new\n"}});
+    const auto checked = writer.write(next, {.check = true, .cleanup_stale = false});
+    REQUIRE_FALSE(checked);
+    CHECK(checked.error().diagnostics().front().message.find("staging path") != std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+
+    const auto dry_run = writer.write(next, {.dry_run = true, .cleanup_stale = false});
+    REQUIRE_FALSE(dry_run);
+    CHECK(dry_run.error().diagnostics().front().message.find("staging path") != std::string::npos);
+    CHECK(read_file(fixture.path() / "Foo.txt") == "old\n");
+    CHECK(read_file(fixture.path() / ".foo.txt.cmakegen-transaction.tmp") == "retained\n");
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+}
+
 TEST_CASE("safe writer verifies a manifest-owned file before replacing it") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};
