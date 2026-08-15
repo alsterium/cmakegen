@@ -278,8 +278,8 @@ Write pattern:
 6. atomically replace outputs where supported
 7. update the manifest last
 8. remove journal, backups, and temporary files only after commit verification;
-   journal-less cleanup validates every recognized artifact before removing any
-   of them, and pre-existing staging paths remain outside transaction cleanup
+   remove the journal before its metadata so terminal recovery remains
+   loadable, and validate journal-less artifacts before removing any of them
 
 A failed render must produce no partial generated project.
 
@@ -294,7 +294,10 @@ never deleting unowned files. A sibling staging path that existed before the
 transaction is never claimed or removed. A journal-less transaction is
 cleaned only after its complete contents match the known setup/cleanup
 scaffolding; validation finishes before any backup is deleted. Recovery does
-not advance the manifest until the complete post-state has been verified.
+not advance the manifest until every output recorded in the complete
+post-manifest has been verified. Recreated file-to-directory parents are
+removed before their previous file backups are restored, and transaction
+directory acquisition is exclusive.
 
 ## 12. Self-host architecture
 

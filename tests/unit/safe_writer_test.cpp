@@ -198,6 +198,23 @@ TEST_CASE("safe writer rolls back a file-to-directory transition") {
     CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
 }
 
+TEST_CASE("safe writer removes recreated parents when staging fails") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"generated", "old\n"}})));
+
+    {
+        FailureInjectionScope injection{{FailurePoint::during_staging, 0}};
+        const auto result = writer.write(file_set({{"generated/child.txt", "new\n"}}));
+        REQUIRE_FALSE(result);
+        CHECK(result.error().diagnostics().front().message.find("rollback completed") != std::string::npos);
+    }
+
+    CHECK(read_file(fixture.path() / "generated") == "old\n");
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / "generated/child.txt"));
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+}
+
 TEST_CASE("safe writer reports platform-specific locked-file replacement failures") {
 #ifndef _WIN32
     SKIP("POSIX permits renaming an open file; Windows share-mode locking is tested on Windows");

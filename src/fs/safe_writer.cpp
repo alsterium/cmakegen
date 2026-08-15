@@ -916,16 +916,10 @@ Result<bool> FilesystemCapabilities::equivalent(std::string_view left, std::stri
     return std::string{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
 }
 
-[[nodiscard]] Result<Manifest> load_manifest(const std::filesystem::path& path) {
-    std::error_code ec;
-    if (!std::filesystem::exists(path, ec)) {
-        if (ec) return std::unexpected{error("cannot inspect manifest: " + ec.message(), path.generic_string())};
-        return Manifest{};
-    }
-    auto source = read_file(path);
-    if (!source) return std::unexpected{source.error()};
+[[nodiscard]] Result<Manifest> parse_manifest(const std::string& source,
+                                               const std::filesystem::path& path) {
     try {
-        const auto json = nlohmann::json::parse(*source);
+        const auto json = nlohmann::json::parse(source);
         if (!json.is_object() || json.value("version", 0) != 1 || !json.contains("files") || !json["files"].is_array()) {
             return std::unexpected{error("manifest has an unsupported format", path.generic_string())};
         }
@@ -947,6 +941,17 @@ Result<bool> FilesystemCapabilities::equivalent(std::string_view left, std::stri
     } catch (const nlohmann::json::exception&) {
         return std::unexpected{error("manifest is not valid JSON", path.generic_string())};
     }
+}
+
+[[nodiscard]] Result<Manifest> load_manifest(const std::filesystem::path& path) {
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec)) {
+        if (ec) return std::unexpected{error("cannot inspect manifest: " + ec.message(), path.generic_string())};
+        return Manifest{};
+    }
+    auto source = read_file(path);
+    if (!source) return std::unexpected{source.error()};
+    return parse_manifest(*source, path);
 }
 
 [[nodiscard]] Result<std::optional<std::string>> find_equivalent_manifest_path(
@@ -1748,15 +1753,15 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
     auto post_tmp = remove_if_present(transaction.post_metadata_path.string() + ".tmp",
                                       "post-manifest metadata temporary");
     if (!post_tmp) return std::unexpected{post_tmp.error()};
+    // Remove the journal before its metadata.  If cleanup is interrupted
+    // after this point, the journal-less recovery path validates and removes
+    // only the known transaction-owned scaffolding.
+    auto journal = remove_if_present(transaction.journal, "transaction journal");
+    if (!journal) return std::unexpected{journal.error()};
     auto pre = remove_if_present(transaction.pre_metadata_path, "pre-manifest metadata");
     if (!pre) return std::unexpected{pre.error()};
     auto post = remove_if_present(transaction.post_metadata_path, "post-manifest metadata");
     if (!post) return std::unexpected{post.error()};
-    // Keep the journal until all other transaction artifacts are gone.  If
-    // cleanup is interrupted after this point, the journal-less recovery path
-    // can safely remove only the known transaction-owned scaffolding.
-    auto journal = remove_if_present(transaction.journal, "transaction journal");
-    if (!journal) return std::unexpected{journal.error()};
     auto backups = remove_directory_if_empty(transaction.backups_directory);
     if (!backups) return std::unexpected{backups.error()};
     auto directory = remove_directory_if_empty(transaction.directory);
@@ -2090,7 +2095,10 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
             auto inspected = safe_status(entry.destination, status);
             if (!inspected) return std::unexpected{inspected.error()};
             if (std::filesystem::exists(status)) {
-                if (entry.status != TransactionEntryStatus::applied ||
+                const bool recreated_for_transition = std::ranges::any_of(
+                    transaction.created_directories,
+                    [&entry](const auto& directory) { return directory == entry.destination; });
+                if ((!recreated_for_transition && entry.status != TransactionEntryStatus::applied) ||
                     std::filesystem::is_symlink(status) ||
                     !std::filesystem::is_directory(status)) {
                     return std::unexpected{error("stale destination changed while transaction recovery was pending",
@@ -2153,9 +2161,18 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
                                                    transaction.capabilities);
     if (!metadata_parent) return std::unexpected{metadata_parent.error()};
     std::error_code ec;
-    std::filesystem::create_directories(transaction.directory, ec);
+    std::filesystem::create_directories(transaction.directory.parent_path(), ec);
+    if (ec) {
+        return std::unexpected{error("cannot create transaction metadata directory: " + ec.message(),
+                                     transaction.directory.parent_path().generic_string())};
+    }
+    const bool created = std::filesystem::create_directory(transaction.directory, ec);
     if (ec) {
         return std::unexpected{error("cannot create transaction directory: " + ec.message(),
+                                     transaction.directory.generic_string())};
+    }
+    if (!created) {
+        return std::unexpected{error("another SafeWriter transaction acquired the transaction directory",
                                      transaction.directory.generic_string())};
     }
     return {};
@@ -2353,6 +2370,10 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
     return {};
 }
 
+[[nodiscard]] Result<std::pair<bool, std::string>> existing_file_content(
+    const std::filesystem::path& path,
+    std::string_view description);
+
 [[nodiscard]] Result<bool> post_state_is_complete(const Transaction& transaction) {
     for (const auto& entry : transaction.entries) {
         std::filesystem::file_status status;
@@ -2364,6 +2385,22 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
             if (std::filesystem::is_symlink(status) || !std::filesystem::is_regular_file(status)) return false;
             auto content = read_file(entry.destination);
             if (!content || SafeWriter::sha256(*content) != entry.post_hash) return false;
+        }
+    }
+    if (transaction.post_manifest_exists) {
+        const auto manifest_path = transaction.root / manifest_relative_path;
+        auto post_manifest = parse_manifest(transaction.post_manifest_content, manifest_path);
+        if (!post_manifest) return std::unexpected{post_manifest.error()};
+        auto manifest_valid = validate_manifest_equivalence(*post_manifest, transaction.capabilities);
+        if (!manifest_valid) return std::unexpected{manifest_valid.error()};
+        for (const auto& [relative, hash] : post_manifest->files) {
+            const auto destination = transaction.root / relative;
+            auto resolved = resolve_existing_alias(transaction.root, relative,
+                                                   transaction.capabilities);
+            if (!resolved) return std::unexpected{resolved.error()};
+            if (*resolved != destination) return false;
+            auto content = existing_file_content(*resolved, "post-state output");
+            if (!content || !content->first || SafeWriter::sha256(content->second) != hash) return false;
         }
     }
     const auto manifest = transaction.root / manifest_relative_path;

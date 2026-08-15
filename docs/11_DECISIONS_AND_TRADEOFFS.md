@@ -269,7 +269,13 @@ unclaimed and preserved if staging cannot begin. Stale journal temporary files
 are discarded before the next journal write. Setup and cleanup interruptions
 that leave no journal are recoverable only for the known transaction
 scaffolding; the complete layout is validated before cleanup and unexpected
-artifacts remain protected for operator inspection.
+artifacts remain protected for operator inspection. Cleanup removes the
+terminal journal before its pre/post metadata, so an interruption cannot leave
+a terminal journal that requires already-removed metadata. Recovery removes a
+transaction-created empty parent before restoring a file-to-directory
+transition and verifies every output in the post-manifest before finalizing.
+Transaction directory creation is exclusive; a competing writer never cleans
+another writer's artifacts.
 
 Why:
 

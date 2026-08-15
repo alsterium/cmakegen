@@ -122,12 +122,16 @@ intended post-state.
   when its contents are known and transaction-owned. Output directories whose
   names merely begin with `.cmakegen` remain valid; only the reserved metadata
   component is rejected.
+- Cleanup removes the terminal journal before pre/post metadata, recreated
+  file-to-directory parents are removed before restoring their file backups,
+  transaction-directory creation is exclusive, and manifest-pending recovery
+  verifies every post-manifest output including unchanged entries.
 - Tests: added partial-staging, stale-journal-temporary, and journal-less
   recovery coverage, including preservation of unclaimed staging paths and
   journal-less backup validation. The existing Windows locked-file test now
   exercises the pre-hash-preservation path.
 - Verification: `cmake --build build/t020-normal --parallel 2` and
   `cmake --build build/t020-bootstrap --parallel 2` passed;
-  `build/t020-normal/cmakegen_tests "safe writer*"` passed with 21 runnable
-  cases, 3 platform-appropriate skips, and 185 assertions; `git diff --check`
+  `build/t020-normal/cmakegen_tests "safe writer*"` passed with 22 runnable
+  cases, 3 platform-appropriate skips, and 193 assertions; `git diff --check`
   passed. CI failures remain outside this task.
