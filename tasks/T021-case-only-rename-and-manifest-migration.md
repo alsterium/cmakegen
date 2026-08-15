@@ -174,3 +174,12 @@ and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).
 - Verification: normal and bootstrap builds passed; the isolated SafeWriter
   suite passed 62 runnable cases with 4 platform-appropriate skips (601
   assertions), and `git diff --check` passed.
+
+### Review follow-up (stale rename temporary)
+
+- Preflight now permits a deterministic case-only rename temporary when it is
+  a manifest-owned stale output scheduled for removal in the same transaction.
+  The remove entry is backed up before the rename claims its temporary path;
+  unowned occupancy remains rejected.
+- Verification: check, dry-run, and write coverage confirms the stale output
+  is retained during read-only modes and removed before a successful rename.

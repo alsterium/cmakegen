@@ -2907,6 +2907,15 @@ pending_parent_migration_source(const Transaction& transaction,
 
     for (const auto& entry : transaction.entries) {
         if (entry.kind != TransactionEntryKind::rename) continue;
+        // Stale cleanup backs this file up before any rename is applied.  It
+        // therefore cannot occupy the temporary at the point the rename
+        // claims it, and rejecting it here would make a previously generated
+        // output name permanently block a later case-only migration.
+        const bool removed_by_plan = std::ranges::any_of(transaction.entries, [&entry](const auto& candidate) {
+            return candidate.kind == TransactionEntryKind::remove &&
+                   candidate.destination == entry.rename_temporary;
+        });
+        if (removed_by_plan) continue;
         auto temporary_absent = ensure_rename_temporary_is_absent(transaction, entry);
         if (!temporary_absent) return std::unexpected{temporary_absent.error()};
     }
