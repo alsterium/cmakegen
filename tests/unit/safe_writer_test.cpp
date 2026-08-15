@@ -367,6 +367,18 @@ TEST_CASE("safe writer preserves distinct macOS Unicode names and manifest order
     CHECK(read_file(fixture.path() / ".cmakegen/manifest.json") == manifest);
 }
 #elif defined(_WIN32)
+TEST_CASE("safe writer preserves native Windows paths as UTF-8 during preflight") {
+    TemporaryDirectory fixture;
+    const std::string filename = "\xc3\x85.txt";
+    cmakegen::GeneratedFileSet files;
+    REQUIRE(files.add({utf8_path(filename), "contents\n"}));
+
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(files));
+    CHECK(std::filesystem::exists(fixture.path() / utf8_path(filename)));
+    CHECK(read_file(fixture.path() / ".cmakegen/manifest.json").find(filename) != std::string::npos);
+}
+
 TEST_CASE("safe writer follows Windows Unicode case capability") {
     TemporaryDirectory fixture;
     const std::string upper = "\xc3\x85.txt";

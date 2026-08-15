@@ -86,6 +86,15 @@ struct Manifest {
     });
 }
 
+// std::filesystem::path::string()/generic_string() use the active narrow
+// code page on Windows.  Path identities, manifests, and the Win32 Unicode
+// API instead use UTF-8 throughout, so never route a native Windows path
+// through that lossy representation.
+[[nodiscard]] std::string generic_utf8_string(const std::filesystem::path& path) {
+    const auto value = path.generic_u8string();
+    return {reinterpret_cast<const char*>(value.data()), value.size()};
+}
+
 [[nodiscard]] std::string trim_win32_components(std::string_view path) {
     std::string result;
     std::size_t start = 0;
@@ -134,6 +143,33 @@ struct FilesystemCapabilities {
 #endif
 
 #ifdef __APPLE__
+[[nodiscard]] Result<UnicodeFilesystemMode> detect_macos_unicode_mode(const std::filesystem::path& directory) {
+    struct statfs volume{};
+    if (::statfs(directory.c_str(), &volume) != 0) return UnicodeFilesystemMode::unsupported;
+
+    struct attrlist attributes{};
+    attributes.bitmapcount = ATTR_BIT_MAP_COUNT;
+    attributes.volattr = ATTR_VOL_CAPABILITIES;
+    struct CapabilitiesBuffer {
+        std::uint32_t length;
+        vol_capabilities_attr_t capabilities;
+    } buffer{};
+    if (::getattrlist(directory.c_str(), &attributes, &buffer, sizeof(buffer), 0) != 0 ||
+        buffer.length < sizeof(buffer)) {
+        return UnicodeFilesystemMode::unsupported;
+    }
+
+    constexpr auto format = VOL_CAPABILITIES_FORMAT;
+    constexpr std::uint32_t case_sensitive = VOL_CAP_FMT_CASE_SENSITIVE;
+    if ((buffer.capabilities.valid[format] & case_sensitive) == 0) return UnicodeFilesystemMode::unsupported;
+
+    const std::string filesystem_type{volume.f_fstypename};
+    if (filesystem_type != "apfs" && filesystem_type != "hfs") return UnicodeFilesystemMode::unsupported;
+    return (buffer.capabilities.capabilities[format] & case_sensitive) != 0
+               ? UnicodeFilesystemMode::macos_case_sensitive
+               : UnicodeFilesystemMode::macos_case_insensitive;
+}
+
 [[nodiscard]] Result<std::string> macos_unicode_key(std::string_view path, bool case_insensitive) {
     std::string result;
     std::size_t start = 0;
@@ -249,30 +285,9 @@ Result<void> FilesystemCapabilities::validate_path(std::string_view path) const 
     FilesystemCapabilities result;
     result.project_root = std::filesystem::absolute(root).lexically_normal();
 #ifdef __APPLE__
-    struct statfs volume{};
-    if (::statfs(root.c_str(), &volume) != 0) return result;
-
-    struct attrlist attributes{};
-    attributes.bitmapcount = ATTR_BIT_MAP_COUNT;
-    attributes.volattr = ATTR_VOL_CAPABILITIES;
-    struct CapabilitiesBuffer {
-        std::uint32_t length;
-        vol_capabilities_attr_t capabilities;
-    } buffer{};
-    if (::getattrlist(root.c_str(), &attributes, &buffer, sizeof(buffer), 0) != 0 ||
-        buffer.length < sizeof(buffer)) {
-        return result;
-    }
-
-    constexpr auto format = VOL_CAPABILITIES_FORMAT;
-    constexpr std::uint32_t case_sensitive = VOL_CAP_FMT_CASE_SENSITIVE;
-    if ((buffer.capabilities.valid[format] & case_sensitive) == 0) return result;
-
-    const std::string filesystem_type{volume.f_fstypename};
-    if (filesystem_type != "apfs" && filesystem_type != "hfs") return result;
-    result.unicode_mode = (buffer.capabilities.capabilities[format] & case_sensitive) != 0
-                              ? UnicodeFilesystemMode::macos_case_sensitive
-                              : UnicodeFilesystemMode::macos_case_insensitive;
+    auto mode = detect_macos_unicode_mode(result.project_root);
+    if (!mode) return std::unexpected{mode.error()};
+    result.unicode_mode = *mode;
 #elif defined(_WIN32)
     const auto native_root = result.project_root.native();
     std::wstring volume_path(32768, L'\0');
@@ -361,7 +376,7 @@ Result<void> FilesystemCapabilities::validate_path(std::string_view path) const 
 
     std::optional<std::filesystem::path> matched;
     for (const auto& entry : entries) {
-        auto equivalent = windows_unicode_equal(entry.path().filename().generic_string(), component,
+        auto equivalent = windows_unicode_equal(generic_utf8_string(entry.path().filename()), component,
                                                 !parent_case_sensitive);
         if (!equivalent) return std::unexpected{equivalent.error()};
         if (*equivalent) {
@@ -432,6 +447,61 @@ struct WindowsPathCursor {
 
 #endif
 
+#ifdef __APPLE__
+struct MacOSPathCursor {
+    std::filesystem::path directory;
+    std::filesystem::path capability_directory;
+    bool exists = true;
+};
+
+[[nodiscard]] Result<MacOSPathCursor> advance_macos_path_cursor(
+    const FilesystemCapabilities& capabilities, MacOSPathCursor cursor, std::string_view component) {
+    if (!cursor.exists) {
+        return MacOSPathCursor{cursor.directory / std::filesystem::path{std::string{component}},
+                               cursor.capability_directory, false};
+    }
+
+    std::error_code ec;
+    const auto exact = cursor.directory / std::filesystem::path{std::string{component}};
+    const auto exact_status = std::filesystem::symlink_status(exact, ec);
+    if (!ec && std::filesystem::is_directory(exact_status)) return MacOSPathCursor{exact, exact, true};
+    if (ec && ec != std::errc::no_such_file_or_directory) {
+        return std::unexpected{error("cannot inspect destination directory: " + ec.message(), generic_utf8_string(exact))};
+    }
+
+    ec.clear();
+    std::filesystem::directory_iterator entries(cursor.directory, ec);
+    if (ec == std::errc::no_such_file_or_directory) return MacOSPathCursor{exact, cursor.capability_directory, false};
+    if (ec) {
+        return std::unexpected{error("cannot inspect destination directory: " + ec.message(),
+                                     generic_utf8_string(cursor.directory))};
+    }
+    for (const auto& entry : entries) {
+        auto equivalent = capabilities.equivalent_in_directory(
+            cursor.directory, generic_utf8_string(entry.path().filename()), component);
+        if (!equivalent) return std::unexpected{equivalent.error()};
+        if (!*equivalent) continue;
+        const auto status = entry.symlink_status(ec);
+        if (ec) return std::unexpected{error("cannot inspect destination directory: " + ec.message(),
+                                              generic_utf8_string(entry.path()))};
+        if (std::filesystem::is_directory(status)) return MacOSPathCursor{entry.path(), entry.path(), true};
+        break;
+    }
+    return MacOSPathCursor{exact, cursor.capability_directory, false};
+}
+
+[[nodiscard]] Result<MacOSPathCursor> macos_parent_for_relative(
+    const FilesystemCapabilities& capabilities, std::string_view relative_parent) {
+    MacOSPathCursor cursor{capabilities.project_root, capabilities.project_root, true};
+    for (const auto component : path_components(relative_parent)) {
+        auto advanced = advance_macos_path_cursor(capabilities, cursor, component);
+        if (!advanced) return std::unexpected{advanced.error()};
+        cursor = *advanced;
+    }
+    return cursor;
+}
+#endif
+
 [[nodiscard]] Result<std::string> normalize_relative_path(const std::filesystem::path& path) {
     if (path.native().find('\\') != std::filesystem::path::string_type::npos) {
         return std::unexpected{error("generated path must use forward slashes", path.generic_string())};
@@ -451,7 +521,7 @@ struct WindowsPathCursor {
         return std::unexpected{error("generated path must name a file", path.generic_string())};
     }
     for (const auto& component : normalized) {
-        auto portable_component = component.generic_string();
+        auto portable_component = generic_utf8_string(component);
         while (!portable_component.empty() &&
                (portable_component.back() == '.' || portable_component.back() == ' ')) {
             portable_component.pop_back();
@@ -464,7 +534,7 @@ struct WindowsPathCursor {
             return std::unexpected{error("generated path cannot escape the project root", path.generic_string())};
         }
     }
-    const auto result = normalized.generic_string();
+    const auto result = generic_utf8_string(normalized);
     const auto insensitive = portable_equivalence_key(result);
     if (insensitive == ".cmakegen" || insensitive.starts_with(".cmakegen/")) {
         return std::unexpected{error("generated path is reserved for cmakegen metadata", result)};
@@ -490,21 +560,30 @@ Result<bool> FilesystemCapabilities::equivalent_in_directory(const std::filesyst
     if (portable_equivalence_key(left) == portable_equivalence_key(right)) return true;
     if (!has_non_ascii(left) && !has_non_ascii(right)) return false;
 
+#ifdef __APPLE__
+    auto mode = detect_macos_unicode_mode(parent);
+    if (!mode) return std::unexpected{mode.error()};
+    FilesystemCapabilities parent_capabilities = *this;
+    parent_capabilities.unicode_mode = *mode;
+    auto left_valid = parent_capabilities.validate_path(left);
+    if (!left_valid) return std::unexpected{left_valid.error()};
+    auto right_valid = parent_capabilities.validate_path(right);
+    if (!right_valid) return std::unexpected{right_valid.error()};
+    if (*mode == UnicodeFilesystemMode::macos_case_sensitive ||
+        *mode == UnicodeFilesystemMode::macos_case_insensitive) {
+        auto left_key = macos_unicode_key(left, *mode == UnicodeFilesystemMode::macos_case_insensitive);
+        if (!left_key) return std::unexpected{left_key.error()};
+        auto right_key = macos_unicode_key(right, *mode == UnicodeFilesystemMode::macos_case_insensitive);
+        if (!right_key) return std::unexpected{right_key.error()};
+        return *left_key == *right_key;
+    }
+    return std::unexpected{error("cannot determine Unicode filesystem equivalence safely; target filesystem capability is unsupported",
+                                 std::string{left})};
+#else
     auto left_valid = validate_path(left);
     if (!left_valid) return std::unexpected{left_valid.error()};
     auto right_valid = validate_path(right);
     if (!right_valid) return std::unexpected{right_valid.error()};
-
-#ifdef __APPLE__
-    if (unicode_mode == UnicodeFilesystemMode::macos_case_sensitive ||
-        unicode_mode == UnicodeFilesystemMode::macos_case_insensitive) {
-        auto left_key = macos_unicode_key(left, unicode_mode == UnicodeFilesystemMode::macos_case_insensitive);
-        if (!left_key) return std::unexpected{left_key.error()};
-        auto right_key = macos_unicode_key(right, unicode_mode == UnicodeFilesystemMode::macos_case_insensitive);
-        if (!right_key) return std::unexpected{right_key.error()};
-        return *left_key == *right_key;
-    }
-#endif
 #ifdef _WIN32
     if (unicode_mode == UnicodeFilesystemMode::windows_case_sensitive ||
         unicode_mode == UnicodeFilesystemMode::windows_case_insensitive) {
@@ -515,6 +594,7 @@ Result<bool> FilesystemCapabilities::equivalent_in_directory(const std::filesyst
 #endif
     return std::unexpected{error("cannot determine Unicode filesystem equivalence safely; target filesystem capability is unsupported",
                                  std::string{left})};
+#endif
 }
 
 Result<bool> FilesystemCapabilities::equivalent_path(std::string_view left, std::string_view right) const {
@@ -539,6 +619,29 @@ Result<bool> FilesystemCapabilities::equivalent_path(std::string_view left, std:
         if (!right_valid) return std::unexpected{right_valid.error()};
         const bool ignore_case = !(left_cursor->case_sensitive && right_cursor->case_sensitive);
         auto component_equivalent = windows_unicode_equal(left_components[index], right_components[index], ignore_case);
+        if (!component_equivalent) return std::unexpected{component_equivalent.error()};
+        if (!*component_equivalent) return false;
+        if (!left_parent.empty()) left_parent += '/';
+        left_parent += left_components[index];
+        if (!right_parent.empty()) right_parent += '/';
+        right_parent += right_components[index];
+    }
+    return true;
+#elif defined(__APPLE__)
+    const auto left_components = path_components(left);
+    const auto right_components = path_components(right);
+    if (left_components.size() != right_components.size()) return false;
+
+    std::string left_parent;
+    std::string right_parent;
+    for (std::size_t index = 0; index < left_components.size(); ++index) {
+        auto left_cursor = macos_parent_for_relative(*this, left_parent);
+        if (!left_cursor) return std::unexpected{left_cursor.error()};
+        auto right_cursor = macos_parent_for_relative(*this, right_parent);
+        if (!right_cursor) return std::unexpected{right_cursor.error()};
+        auto component_equivalent = equivalent_in_directory(
+            left_cursor->exists ? left_cursor->directory : left_cursor->capability_directory,
+            left_components[index], right_components[index]);
         if (!component_equivalent) return std::unexpected{component_equivalent.error()};
         if (!*component_equivalent) return false;
         if (!left_parent.empty()) left_parent += '/';
@@ -599,7 +702,7 @@ Result<bool> FilesystemCapabilities::equivalent(std::string_view left, std::stri
         if (ec) return std::unexpected{error("cannot inspect destination ancestor: " + ec.message(), parent.generic_string())};
         for (const auto& entry : entries) {
             auto equivalent = capabilities.equivalent_in_directory(
-                parent, entry.path().filename().generic_string(), component.generic_string());
+                parent, generic_utf8_string(entry.path().filename()), generic_utf8_string(component));
             if (!equivalent) return std::unexpected{equivalent.error()};
             if (*equivalent) {
                 return entry.path();
@@ -648,7 +751,7 @@ Result<bool> FilesystemCapabilities::equivalent(std::string_view left, std::stri
             std::optional<std::filesystem::path> matched;
             for (const auto& entry : entries) {
                 auto equivalent = capabilities.equivalent_in_directory(
-                    current, entry.path().filename().generic_string(), component.generic_string());
+                    current, generic_utf8_string(entry.path().filename()), generic_utf8_string(component));
                 if (!equivalent) return std::unexpected{equivalent.error()};
                 if (*equivalent) {
                     matched = entry.path();
@@ -708,7 +811,7 @@ Result<bool> FilesystemCapabilities::equivalent(std::string_view left, std::stri
         std::optional<std::filesystem::path> matched;
         for (const auto& entry : entries) {
             auto equivalent = capabilities.equivalent_in_directory(
-                current, entry.path().filename().generic_string(), component.generic_string());
+                current, generic_utf8_string(entry.path().filename()), generic_utf8_string(component));
             if (!equivalent) return std::unexpected{equivalent.error()};
             if (*equivalent) {
                 if (matched) {
@@ -927,7 +1030,7 @@ Result<void> GeneratedFileSet::add(GeneratedFile file) {
     if (!normalized) return std::unexpected{normalized.error()};
     const auto key = portable_equivalence_key(*normalized);
     for (const auto& existing : files_) {
-        const auto existing_path = existing.path.generic_string();
+        const auto existing_path = generic_utf8_string(existing.path);
         const auto existing_key = portable_equivalence_key(existing_path);
         if (existing_key == key) {
             return std::unexpected{error("generated file set contains duplicate portable output paths", *normalized)};

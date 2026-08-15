@@ -88,3 +88,18 @@ Unicode-only extension are defined in
   runnable cases with 2 platform-appropriate skips, and `git diff --check`
   passed. The initial in-sandbox dependency download failed because DNS was
   unavailable; the same build completed with the approved network retry.
+
+### Review follow-up (Unicode capability boundaries)
+
+- Native Windows filesystem paths are now converted with `generic_u8string()`
+  before SafeWriter validates them through the UTF-8/UTF-16 Unicode layer; the
+  Windows test covers a non-ASCII native path through preflight and manifest
+  rendering.
+- macOS Unicode comparison now discovers APFS/HFS case capability at each
+  existing physical parent and carries the last existing parent capability for
+  new descendants. This prevents a nested mounted volume from inheriting the
+  project-root comparison mode.
+- ADR-012 now records both finalized constraints.
+- Verification: normal and bootstrap builds passed; the isolated SafeWriter
+  suite passed 13 cases with 2 platform-appropriate skips; `git diff --check`
+  passed.
