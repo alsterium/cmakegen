@@ -115,10 +115,13 @@ and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).
 - Later entries in a multi-output nested parent migration derive their source
   components from the currently resolved physical tree, so an earlier
   ancestor move cannot leave a later `Foo/...` lookup stale.
+- When stale cleanup is disabled, retained manifest-owned siblings are added
+  to the parent migration and their manifest paths are updated with the
+  directory spelling change, preserving ownership of omitted outputs.
 - Verification: the forced-replacement, shared-parent rollback, and
   parent-migrated source-spelling, rename-temporary collision, and physical
-  spelling, preflight-conflict, and resolved-tree migration cases passed; the
-  full isolated SafeWriter suite passed (39 runnable cases, 4
-  platform-appropriate skips, 381
+  spelling, preflight-conflict, resolved-tree migration, and retained-sibling
+  cases passed; the full isolated SafeWriter suite passed (40 runnable cases,
+  4 platform-appropriate skips, 393
   assertions), and `git diff --check` passed. CI failures remain outside this
   task.

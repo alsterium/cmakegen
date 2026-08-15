@@ -1407,6 +1407,22 @@ TEST_CASE("safe writer migrates a case-only parent shared by multiple outputs") 
     CHECK(has_exact_directory_entry(fixture.path(), "foo"));
 }
 
+TEST_CASE("safe writer migrates retained owned siblings with stale cleanup disabled") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/a.txt", "a-old\n"}, {"Foo/b.txt", "b-old\n"}})));
+
+    REQUIRE(writer.write(file_set({{"foo/a.txt", "a-new\n"}}), {.cleanup_stale = false}));
+    CHECK(read_file(fixture.path() / "foo/a.txt") == "a-new\n");
+    CHECK(read_file(fixture.path() / "foo/b.txt") == "b-old\n");
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "Foo"));
+    CHECK(has_exact_directory_entry(fixture.path(), "foo"));
+    const auto manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+    CHECK(manifest.find("\"path\": \"foo/a.txt\"") != std::string::npos);
+    CHECK(manifest.find("\"path\": \"foo/b.txt\"") != std::string::npos);
+    CHECK(manifest.find("\"path\": \"Foo/b.txt\"") == std::string::npos);
+}
+
 TEST_CASE("safe writer bases later parent migrations on the resolved tree") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};

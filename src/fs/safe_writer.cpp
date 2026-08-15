@@ -3435,6 +3435,96 @@ void retarget_transaction_artifacts_after_directory_move(
     return {};
 }
 
+[[nodiscard]] Result<void> add_retained_parent_migration_entries(
+    const std::filesystem::path& root,
+    const Manifest& old_manifest,
+    Manifest& next_manifest,
+    PreparedPlan& plan) {
+    Transaction transaction{};
+    transaction.root = root;
+    transaction.directory = transaction_directory(root);
+    transaction.backups_directory = transaction.directory / "backups";
+    transaction.capabilities = plan.capabilities;
+    auto entries = populate_transaction_entries(transaction, plan);
+    if (!entries) return std::unexpected{entries.error()};
+
+    struct ParentMigration {
+        std::vector<std::string> source;
+        std::vector<std::string> destination;
+    };
+    std::vector<ParentMigration> migrations;
+    for (const auto& entry : transaction.entries) {
+        if (entry.kind != TransactionEntryKind::rename) continue;
+        auto source = relative_component_strings(transaction.root, entry.source.parent_path());
+        auto destination = relative_component_strings(transaction.root, entry.destination.parent_path());
+        if (source.size() != destination.size() ||
+            std::ranges::equal(source, destination)) {
+            continue;
+        }
+        migrations.push_back({std::move(source), std::move(destination)});
+    }
+    if (migrations.empty()) return {};
+
+    for (const auto& [old_relative, hash] : old_manifest.files) {
+        if (!next_manifest.files.contains(old_relative)) continue;
+
+        const ParentMigration* selected = nullptr;
+        const auto old_components = relative_component_strings(root, root / old_relative);
+        for (const auto& migration : migrations) {
+            if (migration.source.size() >= old_components.size()) continue;
+            const auto source_parent = component_prefix(root, migration.source,
+                                                        migration.source.size());
+            auto under = is_path_ancestor(relative_path(root, source_parent), old_relative,
+                                           plan.capabilities);
+            if (!under) return std::unexpected{under.error()};
+            if (*under && (!selected || migration.source.size() > selected->source.size())) {
+                selected = &migration;
+            }
+        }
+        if (!selected) continue;
+
+        std::vector<std::string> migrated_components = selected->destination;
+        migrated_components.insert(migrated_components.end(),
+                                   old_components.begin() + static_cast<std::ptrdiff_t>(selected->source.size()),
+                                   old_components.end());
+        const auto migrated_relative = component_prefix(root, migrated_components,
+                                                         migrated_components.size())
+                                           .lexically_relative(root)
+                                           .generic_string();
+        if (migrated_relative == old_relative) continue;
+
+        next_manifest.files.erase(old_relative);
+        auto collision = find_equivalent_manifest_path(next_manifest, migrated_relative,
+                                                        plan.capabilities);
+        if (!collision) return std::unexpected{collision.error()};
+        if (*collision) {
+            return std::unexpected{error("retained manifest path collides with a parent migration",
+                                         migrated_relative)};
+        }
+        next_manifest.files.insert_or_assign(migrated_relative, hash);
+
+        auto resolved = resolve_existing_alias(root, old_relative, plan.capabilities);
+        if (!resolved) return std::unexpected{resolved.error()};
+        auto content = existing_file_content(*resolved, "retained parent-migration path");
+        if (!content) return std::unexpected{content.error()};
+        if (!content->first) continue;
+        if (SafeWriter::sha256(content->second) != hash) {
+            return std::unexpected{error("refusing to migrate a retained generated file modified since its recorded hash",
+                                         old_relative)};
+        }
+        plan.entries.push_back(PlannedEntry{TransactionEntryKind::rename,
+                                            migrated_relative,
+                                            root / migrated_relative,
+                                            true,
+                                            hash,
+                                            true,
+                                            hash,
+                                            {},
+                                            *resolved});
+    }
+    return {};
+}
+
 [[nodiscard]] Result<Transaction> start_transaction(const std::filesystem::path& root,
                                                     const PreparedPlan& plan) {
     Transaction transaction{root,
@@ -4213,6 +4303,10 @@ void retarget_transaction_artifacts_after_directory_move(
         auto ancestors = reject_file_ancestor(root, relative, capabilities, stale_destinations);
         if (!ancestors) return std::unexpected{ancestors.error()};
     }
+
+    auto retained_parent_entries = add_retained_parent_migration_entries(
+        root, *old_manifest, next_manifest, plan);
+    if (!retained_parent_entries) return std::unexpected{retained_parent_entries.error()};
 
     const auto rendered_manifest = render_manifest(next_manifest);
     const bool manifest_changed = !pre_manifest.present || pre_manifest.content != rendered_manifest;
