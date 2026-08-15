@@ -1438,6 +1438,7 @@ struct Transaction {
     // Persisted before create_directory so recovery can distinguish an
     // interrupted file-to-directory transition from an unrelated directory.
     std::optional<std::filesystem::path> creating_directory;
+    std::optional<std::pair<std::filesystem::path, std::filesystem::path>> parent_migration;
     FilesystemCapabilities capabilities;
 };
 
@@ -1584,6 +1585,12 @@ struct PreparedPlan {
         json["creating_directory"] = relative_path(transaction.root, *transaction.creating_directory);
     } else {
         json["creating_directory"] = nullptr;
+    }
+    if (transaction.parent_migration) {
+        json["parent_migration"] = {{"source", relative_path(transaction.root, transaction.parent_migration->first)},
+                                    {"destination", relative_path(transaction.root, transaction.parent_migration->second)}};
+    } else {
+        json["parent_migration"] = nullptr;
     }
     json["entries"] = nlohmann::ordered_json::array();
     for (const auto& entry : transaction.entries) {
@@ -1926,6 +1933,19 @@ private:
             auto unicode_valid = capabilities.validate_path(*normalized);
             if (!unicode_valid) return std::unexpected{unicode_valid.error()};
             transaction.creating_directory = root / path_from_utf8(*normalized);
+        }
+        if (json.contains("parent_migration") && !json["parent_migration"].is_null()) {
+            const auto& migration = json["parent_migration"];
+            if (!migration.is_object() || !migration.contains("source") || !migration["source"].is_string() ||
+                !migration.contains("destination") || !migration["destination"].is_string()) {
+                return std::unexpected{error("transaction journal contains an invalid parent migration", journal.generic_string())};
+            }
+            auto source = normalize_relative_path(std::filesystem::path{migration["source"].get<std::string>()});
+            auto destination = normalize_relative_path(std::filesystem::path{migration["destination"].get<std::string>()});
+            if (!source || !destination || is_reserved_metadata_path(*source) || is_reserved_metadata_path(*destination)) {
+                return std::unexpected{error("transaction journal contains an unsafe parent migration", journal.generic_string())};
+            }
+            transaction.parent_migration = std::pair{root / *source, root / *destination};
         }
 
         std::size_t index = 0;
@@ -2656,6 +2676,57 @@ void retarget_transaction_artifacts_after_directory_move(
     for (auto& directory : transaction.created_directories) retarget(directory);
 }
 
+// Recovery persists physical paths, not the planning spellings.  Once the
+// journal proves that a parent move completed, retarget every path-bearing
+// entry field together so a later entry cannot observe a mixture of old and
+// new parent spellings.  The transform is applied only while the durable
+// migration intent is present, then the intent is cleared and journaled,
+// making repeated recovery idempotent.
+void retarget_transaction_entries_after_recovered_directory_move(
+    Transaction& transaction,
+    const std::filesystem::path& source_directory,
+    const std::filesystem::path& destination_directory) {
+    const auto retarget = [&source_directory, &destination_directory](std::filesystem::path& path) {
+        if (path.empty()) return;
+        const auto relative = path.lexically_relative(source_directory);
+        const auto value = relative.generic_string();
+        if (relative.empty() || relative.is_absolute() || value == ".." || value.starts_with("../")) return;
+        path = value == "." ? destination_directory : destination_directory / relative;
+    };
+    for (auto& entry : transaction.entries) {
+        retarget(entry.source);
+        retarget(entry.destination);
+        retarget(entry.backup);
+        retarget(entry.temporary);
+        retarget(entry.rename_temporary);
+    }
+    for (auto& directory : transaction.created_directories) retarget(directory);
+    if (transaction.creating_directory) retarget(*transaction.creating_directory);
+}
+
+[[nodiscard]] Result<void> reconcile_parent_migration(Transaction& transaction) {
+    if (!transaction.parent_migration) return {};
+    const auto [source, destination] = *transaction.parent_migration;
+    std::error_code ec;
+    const auto source_status = std::filesystem::symlink_status(source, ec);
+    if (ec && !is_not_found(ec)) return std::unexpected{error("cannot inspect pending parent migration", source.generic_string())};
+    ec.clear();
+    const auto destination_status = std::filesystem::symlink_status(destination, ec);
+    if (ec && !is_not_found(ec)) return std::unexpected{error("cannot inspect pending parent migration", destination.generic_string())};
+    const bool source_exists = source_status.type() != std::filesystem::file_type::not_found;
+    const bool destination_exists = destination_status.type() != std::filesystem::file_type::not_found;
+    if (source_exists == destination_exists ||
+        (source_exists && !std::filesystem::is_directory(source_status)) ||
+        (destination_exists && !std::filesystem::is_directory(destination_status))) {
+        return std::unexpected{error("pending parent migration has an ambiguous physical state", source.generic_string())};
+    }
+    if (destination_exists) {
+        retarget_transaction_entries_after_recovered_directory_move(transaction, source, destination);
+    }
+    transaction.parent_migration.reset();
+    return write_journal(transaction);
+}
+
 [[nodiscard]] Result<bool> has_parent_spelling_change(const Transaction& transaction,
                                                        const TransactionEntry& entry,
                                                        std::vector<std::string>& source_components,
@@ -2794,11 +2865,15 @@ pending_parent_migration_source(const Transaction& transaction,
                                          destination_directory.generic_string())};
         }
 
+        transaction.parent_migration = std::pair{source_directory, destination_directory};
+        auto intent = write_journal(transaction);
+        if (!intent) return std::unexpected{intent.error()};
         auto moved = move_path(source_directory, destination_directory,
                                "migrate rename parent spelling");
         if (!moved) return std::unexpected{moved.error()};
         retarget_transaction_artifacts_after_directory_move(transaction, source_directory,
                                                              destination_directory);
+        transaction.parent_migration.reset();
 
         entry.rename_temporary = component_prefix(transaction.root, source_components, component_index);
         for (std::size_t suffix = component_index; suffix < destination_components.size(); ++suffix) {
@@ -3496,6 +3571,12 @@ pending_parent_migration_source(const Transaction& transaction,
             auto moved_to_source = move_path(entry.rename_temporary, entry.source,
                                              "restore old output spelling");
             if (!moved_to_source) return std::unexpected{moved_to_source.error()};
+            // The rollback temporary was consumed.  Do not let later cleanup
+            // treat an externally recreated deterministic path as ours.
+            entry.rename_claimed = false;
+            entry.rename_completed = false;
+            auto restored = write_journal(transaction);
+            if (!restored) return std::unexpected{restored.error()};
         } else {
             auto moved_to_source = move_path(entry.destination, entry.source, "restore old output spelling");
             if (!moved_to_source) return std::unexpected{moved_to_source.error()};
@@ -4233,6 +4314,11 @@ pending_parent_migration_source(const Transaction& transaction,
     auto loaded = load_transaction(root, capabilities);
     if (!loaded) return std::unexpected{loaded.error()};
     auto& transaction = *loaded;
+    auto reconciled_migration = reconcile_parent_migration(transaction);
+    if (!reconciled_migration) {
+        return std::unexpected{recovery_required(transaction,
+                                                  reconciled_migration.error().diagnostics().front().message)};
+    }
     if (transaction.state == "committed" || transaction.state == "rolled_back") {
         auto cleanup = cleanup_transaction(transaction);
         if (!cleanup) {

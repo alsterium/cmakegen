@@ -221,3 +221,17 @@ and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).
 - Verification: normal and bootstrap builds passed; the isolated SafeWriter
   suite passed 72 runnable cases with 4 platform-appropriate skips (691
   assertions), and `git diff --check` passed.
+
+### Review follow-up (interrupted parent migration)
+
+- Parent spelling migration now records a durable migration intent before the
+  physical directory move. Recovery distinguishes an unchanged source tree
+  from a completed destination tree; only in the latter case it applies one
+  deterministic transform to every path-bearing transaction field and writes
+  the cleared intent back to the journal. Repeated recovery is therefore
+  idempotent and cannot mix old and moved sibling artifacts.
+- Rename-temporary ownership is also released after rollback consumes that
+  temporary, matching the forward rename cleanup boundary.
+- Verification: normal and bootstrap builds passed; the isolated SafeWriter
+  suite passed 72 runnable cases with 4 platform-appropriate skips (691
+  assertions), and `git diff --check` passed.
