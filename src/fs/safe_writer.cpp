@@ -81,6 +81,11 @@ struct Manifest {
     return result;
 }
 
+[[nodiscard]] bool is_reserved_metadata_path(std::string_view path) {
+    const auto key = portable_equivalence_key(path);
+    return key == ".cmakegen" || key.starts_with(".cmakegen/");
+}
+
 [[nodiscard]] std::vector<std::string_view> path_components(std::string_view path);
 
 [[nodiscard]] bool has_non_ascii(std::string_view path) {
@@ -615,8 +620,7 @@ struct MacOSPathCursor {
         }
     }
     const auto result = generic_utf8_string(normalized);
-    const auto insensitive = portable_equivalence_key(result);
-    if (insensitive == ".cmakegen" || insensitive.starts_with(".cmakegen/")) {
+    if (is_reserved_metadata_path(result)) {
         return std::unexpected{error("generated path is reserved for cmakegen metadata", result)};
     }
     return result;
@@ -1304,6 +1308,7 @@ struct TransactionEntry {
     bool post_exists = false;
     std::string post_hash;
     std::string content;
+    bool staging_claimed = false;
 };
 
 struct Transaction {
@@ -1373,6 +1378,7 @@ struct PreparedPlan {
         serialized["pre_sha256"] = entry.pre_hash;
         serialized["post_exists"] = entry.post_exists;
         serialized["post_sha256"] = entry.post_hash;
+        serialized["staging_claimed"] = entry.staging_claimed;
         json["entries"].push_back(std::move(serialized));
     }
     return json;
@@ -1534,7 +1540,7 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
             }
             auto normalized = normalize_relative_path(std::filesystem::path{value.get<std::string>()});
             if (!normalized || *normalized != value.get<std::string>() ||
-                portable_equivalence_key(*normalized).starts_with(".cmakegen")) {
+                is_reserved_metadata_path(*normalized)) {
                 return std::unexpected{error("transaction journal contains an unsafe created directory",
                                              journal.generic_string())};
             }
@@ -1562,6 +1568,18 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
             if (!kind) return std::unexpected{kind.error()};
             auto status = parse_entry_status(value["status"].get<std::string>());
             if (!status) return std::unexpected{status.error()};
+            bool staging_claimed = *status == TransactionEntryStatus::staging ||
+                                   *status == TransactionEntryStatus::staged ||
+                                   *status == TransactionEntryStatus::in_progress ||
+                                   *status == TransactionEntryStatus::applied ||
+                                   *status == TransactionEntryStatus::restored;
+            if (value.contains("staging_claimed")) {
+                if (!value["staging_claimed"].is_boolean()) {
+                    return std::unexpected{error("transaction journal contains an invalid staging ownership flag",
+                                                 journal.generic_string())};
+                }
+                staging_claimed = value["staging_claimed"].get<bool>();
+            }
 
             const auto logical_path = value["path"].get<std::string>();
             const auto destination = value["destination"].get<std::string>();
@@ -1627,7 +1645,8 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
                 pre_hash,
                 value["post_exists"].get<bool>(),
                 post_hash,
-                {}});
+                {},
+                staging_claimed});
             ++index;
         }
     } catch (const nlohmann::json::exception&) {
@@ -1685,7 +1704,7 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
 }
 
 [[nodiscard]] Result<void> remove_staged_file(const TransactionEntry& entry) {
-    if (entry.temporary.empty()) return {};
+    if (entry.temporary.empty() || !entry.staging_claimed) return {};
     std::error_code ec;
     const auto status = std::filesystem::symlink_status(entry.temporary, ec);
     if (is_not_found(ec) || ec == std::errc::not_a_directory ||
@@ -1779,6 +1798,9 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
         return std::unexpected{error("cannot inspect journal-less transaction: " + ec.message(),
                                      directory.generic_string())};
     }
+    std::vector<std::filesystem::path> metadata_artifacts;
+    std::vector<std::filesystem::path> backup_artifacts;
+    std::optional<std::filesystem::path> backups_directory;
     for (const auto& entry : entries) {
         const auto name = entry.path().filename().generic_string();
         const auto status = std::filesystem::symlink_status(entry.path(), ec);
@@ -1808,11 +1830,9 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
                     return std::unexpected{error("journal-less transaction contains an unexpected backup artifact",
                                                  backup.path().generic_string())};
                 }
-                auto removed = remove_if_present(backup.path(), "journal-less transaction backup");
-                if (!removed) return std::unexpected{removed.error()};
+                backup_artifacts.push_back(backup.path());
             }
-            auto removed_backups = remove_directory_if_empty(entry.path());
-            if (!removed_backups) return std::unexpected{removed_backups.error()};
+            backups_directory = entry.path();
             continue;
         }
         if (!is_journalless_transaction_file(name) || std::filesystem::is_symlink(status) ||
@@ -1820,7 +1840,19 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
             return std::unexpected{error("journal-less transaction contains an unexpected artifact",
                                          entry.path().generic_string())};
         }
-        auto removed = remove_if_present(entry.path(), "journal-less transaction artifact");
+        metadata_artifacts.push_back(entry.path());
+    }
+
+    for (const auto& backup : backup_artifacts) {
+        auto removed = remove_if_present(backup, "journal-less transaction backup");
+        if (!removed) return std::unexpected{removed.error()};
+    }
+    if (backups_directory) {
+        auto removed_backups = remove_directory_if_empty(*backups_directory);
+        if (!removed_backups) return std::unexpected{removed_backups.error()};
+    }
+    for (const auto& artifact : metadata_artifacts) {
+        auto removed = remove_if_present(artifact, "journal-less transaction artifact");
         if (!removed) return std::unexpected{removed.error()};
     }
 
@@ -2230,7 +2262,7 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
                 break;
             }
             const auto relative = current.lexically_relative(transaction.root).generic_string();
-            if (relative.empty() || portable_equivalence_key(relative).starts_with(".cmakegen")) {
+            if (relative.empty() || is_reserved_metadata_path(relative)) {
                 return std::unexpected{error("output parent is unsafe", current.generic_string())};
             }
             if (seen.emplace(portable_equivalence_key(relative)).second) {
@@ -2270,6 +2302,7 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
             return std::unexpected{error("transaction staging path already exists",
                                          entry.temporary.generic_string())};
         }
+        entry.staging_claimed = true;
         entry.status = TransactionEntryStatus::staging;
         auto before = write_journal(transaction);
         if (!before) return std::unexpected{before.error()};

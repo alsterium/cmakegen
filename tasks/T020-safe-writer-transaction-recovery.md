@@ -116,11 +116,18 @@ intended post-state.
   when a backup move fails before it can be applied. Journal temporary files
   are discarded before retrying an atomic journal write. Staging ownership is
   journaled before each write, allowing partial transaction temporaries to be
-  removed safely during rollback. Journal-less setup/cleanup scaffolding is
-  cleaned when its contents are known and transaction-owned.
+  removed safely during rollback. A pre-existing sibling staging path is
+  recorded as unclaimed and preserved. Journal-less setup/cleanup scaffolding
+  is fully validated before any known artifact is removed, and is cleaned only
+  when its contents are known and transaction-owned. Output directories whose
+  names merely begin with `.cmakegen` remain valid; only the reserved metadata
+  component is rejected.
 - Tests: added partial-staging, stale-journal-temporary, and journal-less
-  recovery coverage. The existing Windows locked-file test now exercises the
-  pre-hash-preservation path.
-- Verification: the isolated SafeWriter suite passed 19 runnable cases with
-  3 platform-appropriate skips, and `git diff --check` passed. CI failures
-  remain outside this task.
+  recovery coverage, including preservation of unclaimed staging paths and
+  journal-less backup validation. The existing Windows locked-file test now
+  exercises the pre-hash-preservation path.
+- Verification: `cmake --build build/t020-normal --parallel 2` and
+  `cmake --build build/t020-bootstrap --parallel 2` passed;
+  `build/t020-normal/cmakegen_tests "safe writer*"` passed with 21 runnable
+  cases, 3 platform-appropriate skips, and 185 assertions; `git diff --check`
+  passed. CI failures remain outside this task.

@@ -277,7 +277,9 @@ Write pattern:
 5. move existing owned outputs into the transaction backups
 6. atomically replace outputs where supported
 7. update the manifest last
-8. remove journal, backups, and temporary files only after commit verification
+8. remove journal, backups, and temporary files only after commit verification;
+   journal-less cleanup validates every recognized artifact before removing any
+   of them, and pre-existing staging paths remain outside transaction cleanup
 
 A failed render must produce no partial generated project.
 
@@ -288,9 +290,11 @@ deterministic uncommitted state under `.cmakegen/transaction/` containing
 `journal.json`, `pre-manifest.json`, `post-manifest.json`, and `backups/`.
 Check and dry-run stop before creating that state. Recovery removes a partial
 transaction-owned sibling temporary even when its hash is incomplete, while
-never deleting unowned files. A journal-less transaction is cleaned only when
-its contents match the known setup/cleanup scaffolding. Recovery does not
-advance the manifest until the complete post-state has been verified.
+never deleting unowned files. A sibling staging path that existed before the
+transaction is never claimed or removed. A journal-less transaction is
+cleaned only after its complete contents match the known setup/cleanup
+scaffolding; validation finishes before any backup is deleted. Recovery does
+not advance the manifest until the complete post-state has been verified.
 
 ## 12. Self-host architecture
 

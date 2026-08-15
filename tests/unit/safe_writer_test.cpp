@@ -164,6 +164,21 @@ TEST_CASE("safe writer removes a partial staged output during rollback") {
     CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
 }
 
+TEST_CASE("safe writer preserves a staging path it never claimed") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"generated.txt", "old content\n"}})));
+
+    const auto staging = fixture.path() / ".generated.txt.cmakegen-transaction.tmp";
+    write_file(staging, "user-owned staging content\n");
+    const auto result = writer.write(file_set({{"generated.txt", "new content\n"}}));
+
+    REQUIRE_FALSE(result);
+    CHECK(read_file(fixture.path() / "generated.txt") == "old content\n");
+    CHECK(read_file(staging) == "user-owned staging content\n");
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+}
+
 TEST_CASE("safe writer rolls back a file-to-directory transition") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};
@@ -251,6 +266,20 @@ TEST_CASE("safe writer cleans recoverable journal-less transaction scaffolding")
         write_file(transaction / "pre-manifest.json", "metadata\n");
         write_file(transaction / "post-manifest.json", "metadata\n");
         write_file(transaction / "journal.json.tmp", "stale\n");
+    }
+
+    SECTION("unexpected artifacts preserve recognized backups") {
+        const auto transaction = fixture.path() / ".cmakegen/transaction";
+        const auto backup = transaction / "backups/000000.bak";
+        std::filesystem::create_directories(backup.parent_path());
+        write_file(backup, "pre-transaction\n");
+        write_file(transaction / "unexpected", "do not remove\n");
+
+        const auto result = writer.write(file_set({{"generated.txt", "generated\n"}}));
+        REQUIRE_FALSE(result);
+        CHECK(read_file(backup) == "pre-transaction\n");
+        CHECK(read_file(transaction / "unexpected") == "do not remove\n");
+        return;
     }
 
     REQUIRE(writer.write(file_set({{"generated.txt", "generated\n"}})));
@@ -430,6 +459,14 @@ TEST_CASE("safe writer rejects portable metadata aliases and output collisions d
     cmakegen::GeneratedFileSet directory_destinations;
     CHECK_FALSE(directory_destinations.add({"directory/file/", "bad\n"}));
     CHECK_FALSE(directory_destinations.add({"directory/file/.", "bad\n"}));
+}
+
+TEST_CASE("safe writer allows output under a similarly prefixed metadata directory") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+
+    REQUIRE(writer.write(file_set({{".cmakegenerator/output.txt", "contents\n"}})));
+    CHECK(read_file(fixture.path() / ".cmakegenerator/output.txt") == "contents\n");
 }
 
 TEST_CASE("safe writer keeps portable ASCII aliases host independent") {
