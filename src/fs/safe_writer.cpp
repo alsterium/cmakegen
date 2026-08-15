@@ -553,6 +553,12 @@ struct MacOSPathCursor {
     auto key = macos_unicode_key(relative, *mode == UnicodeFilesystemMode::macos_case_insensitive);
     if (!key) return std::unexpected{key.error()};
 #endif
+#ifdef _WIN32
+    if (!has_non_ascii(relative)) return {};
+    const auto parent = generic_utf8_string(path_from_utf8(relative).parent_path());
+    auto cursor = windows_parent_for_relative(capabilities, parent);
+    if (!cursor) return std::unexpected{cursor.error()};
+#endif
     return {};
 }
 

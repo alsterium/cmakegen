@@ -147,3 +147,16 @@ Unicode-only extension are defined in
   suite passed 14 cases with 2 platform-appropriate skips (89 assertions),
   bootstrap CTest completed with no registered tests, and `git diff --check`
   passed.
+
+### Review follow-up (Windows target-parent validation)
+
+- Windows now traverses each non-ASCII destination to its last existing parent
+  before accepting the path. The per-directory `FileCaseSensitiveInfo` query
+  therefore rejects an indeterminate nested mount before its first generated
+  file is written.
+- The Windows Unicode path regression covers a non-ASCII filename inside an
+  existing nested output directory through write and clean.
+- Verification: normal and bootstrap builds passed; the isolated SafeWriter
+  suite passed 14 cases with 2 platform-appropriate skips (89 assertions),
+  bootstrap CTest completed with no registered tests, and `git diff --check`
+  passed.
