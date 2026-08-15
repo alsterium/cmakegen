@@ -192,3 +192,7 @@ intended post-state.
   and requires the numbered backup destination to be absent. Planning also
   validates retained manifest outputs when stale cleanup is disabled, avoiding
   a transaction that cannot later satisfy either pre- or post-state checks.
+- Rollback verifies planned entries against their captured pre-transaction
+  state, so forced replacement of a modified owned file restores correctly.
+  A journal-less transaction directory never deletes numbered backups: without
+  a journal they cannot be authenticated as transaction-owned.

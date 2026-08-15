@@ -731,6 +731,19 @@ TEST_CASE("safe writer cleans recoverable journal-less transaction scaffolding")
         return;
     }
 
+    SECTION("backup without a journal requires operator inspection") {
+        const auto transaction = fixture.path() / ".cmakegen/transaction";
+        const auto backup = transaction / "backups/000000.bak";
+        std::filesystem::create_directories(backup.parent_path());
+        write_file(backup, "external\n");
+
+        const auto result = writer.write(file_set({{"generated.txt", "generated\n"}}));
+        REQUIRE_FALSE(result);
+        CHECK(result.error().diagnostics().front().message.find("unverifiable backup") != std::string::npos);
+        CHECK(read_file(backup) == "external\n");
+        return;
+    }
+
     REQUIRE(writer.write(file_set({{"generated.txt", "generated\n"}})));
     CHECK(read_file(fixture.path() / "generated.txt") == "generated\n");
     CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));

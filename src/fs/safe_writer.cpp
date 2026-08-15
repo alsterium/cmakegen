@@ -2105,9 +2105,9 @@ private:
         metadata_artifacts.push_back(entry.path());
     }
 
-    for (const auto& backup : backup_artifacts) {
-        auto removed = remove_if_present(backup, "journal-less transaction backup");
-        if (!removed) return std::unexpected{removed.error()};
+    if (!backup_artifacts.empty()) {
+        return std::unexpected{error("journal-less transaction contains unverifiable backup artifacts",
+                                     directory.generic_string())};
     }
     if (backups_directory) {
         auto removed_backups = remove_directory_if_empty(*backups_directory);
@@ -2330,6 +2330,12 @@ private:
         if (!manifest_valid) return std::unexpected{manifest_valid.error()};
         for (const auto& [relative, hash] : pre_manifest->files) {
             const auto destination = transaction.root / relative;
+            const auto captured = std::ranges::find_if(transaction.entries, [&destination](const auto& entry) {
+                return entry.destination == destination;
+            });
+            // Planned entries capture actual pre-transaction bytes. Force may
+            // accept content that differs from the historical manifest hash.
+            if (captured != transaction.entries.end()) continue;
             auto parents = validate_recovery_path_parents(transaction, destination);
             if (!parents) return std::unexpected{parents.error()};
             auto resolved = resolve_existing_alias(transaction.root, relative,
@@ -2342,6 +2348,9 @@ private:
             std::filesystem::file_status output_status;
             auto inspected_output = safe_status(destination, output_status);
             if (!inspected_output) return std::unexpected{inspected_output.error()};
+            // Stale cleanup intentionally skips an output already absent
+            // before the transaction, leaving no planned entry.
+            if (!std::filesystem::exists(output_status)) continue;
             if (!std::filesystem::exists(output_status) || std::filesystem::is_symlink(output_status) ||
                 !std::filesystem::is_regular_file(output_status)) {
                 return std::unexpected{error("rollback did not restore a manifest-owned output",
