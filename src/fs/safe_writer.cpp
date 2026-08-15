@@ -1413,6 +1413,7 @@ struct TransactionEntry {
     std::string content;
     bool staging_claimed = false;
     bool rename_claimed = false;
+    bool rename_completed = false;
 };
 
 struct Transaction {
@@ -1605,6 +1606,7 @@ struct PreparedPlan {
         serialized["post_sha256"] = entry.post_hash;
         serialized["staging_claimed"] = entry.staging_claimed;
         serialized["rename_claimed"] = entry.rename_claimed;
+        serialized["rename_completed"] = entry.rename_completed;
         json["entries"].push_back(std::move(serialized));
     }
     return json;
@@ -1968,6 +1970,14 @@ private:
                 }
                 rename_claimed = value["rename_claimed"].get<bool>();
             }
+            bool rename_completed = false;
+            if (value.contains("rename_completed")) {
+                if (!value["rename_completed"].is_boolean()) {
+                    return std::unexpected{error("transaction journal contains an invalid rename completion flag",
+                                                 journal.generic_string())};
+                }
+                rename_completed = value["rename_completed"].get<bool>();
+            }
 
             const auto logical_path = value["path"].get<std::string>();
             const auto source_value = value.value("source", "");
@@ -2114,7 +2124,8 @@ private:
                 post_hash,
                 {},
                 staging_claimed,
-                rename_claimed});
+                rename_claimed,
+                rename_completed});
             ++index;
         }
     } catch (const nlohmann::json::exception&) {
@@ -3060,6 +3071,13 @@ pending_parent_migration_source(const Transaction& transaction,
         auto moved_to_destination = move_path(entry.rename_temporary, entry.destination,
                                                "move rename temporary to requested destination");
         if (!moved_to_destination) return std::unexpected{moved_to_destination.error()};
+        // The temporary no longer exists once the second move succeeds.  Keep
+        // completion history for rollback, but release ownership so cleanup
+        // cannot delete a later external file at this deterministic name.
+        entry.rename_claimed = false;
+        entry.rename_completed = true;
+        auto completed = write_journal(transaction);
+        if (!completed) return std::unexpected{completed.error()};
         return {};
     }
 
@@ -3429,7 +3447,7 @@ pending_parent_migration_source(const Transaction& transaction,
     const bool source_and_destination_share_physical_path =
         source_exists && destination_exists && *resolved_source == *resolved_destination;
     const bool case_only_rename_was_claimed =
-        entry.rename_claimed && source_and_destination_share_physical_path;
+        (entry.rename_claimed || entry.rename_completed) && source_and_destination_share_physical_path;
 
     if (source_exists && !source_and_destination_share_physical_path &&
         *resolved_source != entry.source && *resolved_source != entry.destination) {
@@ -3463,7 +3481,7 @@ pending_parent_migration_source(const Transaction& transaction,
         // insensitive filesystem.  Force the reverse spelling through the
         // same sibling temporary used by the forward rename.
         if (case_only_rename_was_claimed ||
-            (entry.rename_claimed && source_exists && *resolved_source == entry.source)) {
+            ((entry.rename_claimed || entry.rename_completed) && source_exists && *resolved_source == entry.source)) {
             entry.rename_temporary = resolved_destination->parent_path() / entry.rename_temporary.filename();
             if (!entry.temporary.empty()) {
                 entry.temporary = entry.rename_temporary.parent_path() / entry.temporary.filename();

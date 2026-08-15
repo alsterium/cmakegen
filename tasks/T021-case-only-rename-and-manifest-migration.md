@@ -202,3 +202,13 @@ and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).
 - Verification: normal and bootstrap builds passed; the isolated SafeWriter
   suite passed 68 runnable cases with 4 platform-appropriate skips (659
   assertions), and `git diff --check` passed.
+
+### Stack rebase follow-up
+
+- Rebasing onto T020 `540dbe2` retained both the target-parent Unicode and
+  normalization-only alias regression cases. Rename temporary ownership now
+  clears after consumption while a separate journaled completion flag retains
+  the information needed for case-only rollback.
+- Verification: normal and bootstrap builds passed; the isolated SafeWriter
+  suite passed 70 runnable cases with 4 platform-appropriate skips (673
+  assertions), and `git diff --check` passed.
