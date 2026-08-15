@@ -94,5 +94,5 @@ and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).
   adopts a resolved rename temporary when the journal records the pre-move
   parent spelling.
 - Verification: the nested-parent case and full isolated SafeWriter suite
-  passed (26 runnable cases, 4 platform-appropriate skips, 269 assertions),
+  passed (27 runnable cases, 4 platform-appropriate skips, 277 assertions),
   and `git diff --check` passed. CI failures remain outside this task.
