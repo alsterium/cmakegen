@@ -2786,6 +2786,10 @@ void retarget_transaction_artifacts_after_directory_move(
     }
     const auto current_source_parent_components = relative_component_strings(
         transaction.root, source_path.parent_path());
+    // A previous rename entry may already have migrated an ancestor. Use the
+    // spelling of the currently resolved physical source tree for this entry;
+    // the logical source spelling remains stable for rollback and journaling.
+    source_parent_components = current_source_parent_components;
     const bool parent_already_migrated = current_source_parent_components.size() ==
                                              destination_parent_components.size() &&
                                          std::ranges::equal(current_source_parent_components,

@@ -1407,6 +1407,18 @@ TEST_CASE("safe writer migrates a case-only parent shared by multiple outputs") 
     CHECK(has_exact_directory_entry(fixture.path(), "foo"));
 }
 
+TEST_CASE("safe writer bases later parent migrations on the resolved tree") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/A/x.txt", "x-old\n"}, {"Foo/B/y.txt", "y-old\n"}})));
+
+    REQUIRE(writer.write(file_set({{"foo/a/x.txt", "x-new\n"}, {"foo/b/y.txt", "y-new\n"}})));
+    CHECK(read_file(fixture.path() / "foo/a/x.txt") == "x-new\n");
+    CHECK(read_file(fixture.path() / "foo/b/y.txt") == "y-new\n");
+    CHECK(has_exact_directory_entry(fixture.path(), "foo"));
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "Foo"));
+}
+
 TEST_CASE("safe writer rolls back filename and shared-parent spelling migrations together") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};

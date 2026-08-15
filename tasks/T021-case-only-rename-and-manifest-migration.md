@@ -112,9 +112,13 @@ and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).
 - Parent subtree conflicts are validated while preparing the plan, so check
   and dry-run report the same unowned-descendant error without creating a
   transaction; the execution-time validation remains in place for races.
+- Later entries in a multi-output nested parent migration derive their source
+  components from the currently resolved physical tree, so an earlier
+  ancestor move cannot leave a later `Foo/...` lookup stale.
 - Verification: the forced-replacement, shared-parent rollback, and
   parent-migrated source-spelling, rename-temporary collision, and physical
-  spelling and preflight-conflict cases passed; the full isolated SafeWriter
-  suite passed (38 runnable cases, 4 platform-appropriate skips, 371
+  spelling, preflight-conflict, and resolved-tree migration cases passed; the
+  full isolated SafeWriter suite passed (39 runnable cases, 4
+  platform-appropriate skips, 381
   assertions), and `git diff --check` passed. CI failures remain outside this
   task.
