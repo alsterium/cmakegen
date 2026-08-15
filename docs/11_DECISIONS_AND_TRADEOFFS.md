@@ -206,6 +206,11 @@ resolution. This applies equally to writes, stale cleanup, and `clean`, so a
 non-UTF-8 Windows active code page cannot create a destination spelling that
 differs from manifest ownership.
 
+Temporary output names are derived through native `std::filesystem::path`
+operations from their destination filename. They must not convert the basename
+through a narrow string, so paths that the active Windows code page cannot
+represent remain writable atomically.
+
 Why:
 
 - generated trees may be moved between case-sensitive and case-insensitive

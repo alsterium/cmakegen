@@ -123,3 +123,11 @@ Unicode-only extension are defined in
   normalization. This covers write destinations, stale cleanup, and `clean`.
 - The Windows Unicode path regression now verifies its requested spelling
   through write, stale removal, and clean.
+
+### Review follow-up (native temporary path names)
+
+- Transaction temporary basenames are now composed with native
+  `std::filesystem::path` operations rather than a narrow filename string.
+  This preserves non-ACP names such as emoji through atomic output staging.
+- The Windows Unicode regression covers an emoji filename through write and
+  clean in addition to UTF-8 manifest ownership paths.

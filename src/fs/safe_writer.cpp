@@ -937,7 +937,12 @@ Result<bool> FilesystemCapabilities::equivalent(std::string_view left, std::stri
 
 [[nodiscard]] std::filesystem::path temporary_path(const std::filesystem::path& destination) {
     const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
-    return destination.parent_path() / ("." + destination.filename().string() + ".cmakegen-" + std::to_string(nonce) + ".tmp");
+    std::filesystem::path name{"."};
+    name += destination.filename();
+    name += ".cmakegen-";
+    name += std::to_string(nonce);
+    name += ".tmp";
+    return destination.parent_path() / name;
 }
 
 [[nodiscard]] Result<std::filesystem::path> write_temporary(const std::filesystem::path& destination,
