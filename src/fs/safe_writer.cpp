@@ -2526,11 +2526,26 @@ private:
 }
 
 [[nodiscard]] Result<void> create_transaction_directories(Transaction& transaction) {
+    std::vector<std::filesystem::path> actually_created;
+    actually_created.reserve(transaction.created_directories.size());
+    bool reclassified_directory = false;
     for (const auto& directory : transaction.created_directories) {
         std::error_code ec;
-        std::filesystem::create_directory(directory, ec);
+        const bool created = std::filesystem::create_directory(directory, ec);
         if (ec) return std::unexpected{error("cannot create output directory: " + ec.message(),
                                              directory.generic_string())};
+        if (created) {
+            actually_created.push_back(directory);
+        } else {
+            // The directory appeared after preflight.  It is not owned by
+            // this transaction and must not be removed during rollback.
+            reclassified_directory = true;
+        }
+    }
+    transaction.created_directories = std::move(actually_created);
+    if (reclassified_directory) {
+        auto journal = write_journal(transaction);
+        if (!journal) return std::unexpected{journal.error()};
     }
     return {};
 }

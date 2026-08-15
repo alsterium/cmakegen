@@ -140,6 +140,9 @@ intended post-state.
   is disabled.
 - Pre-state verification revalidates every output parent before accepting a
   partially restored transaction, including entries already marked restored.
+- Directory creation records only paths whose `create_directory` call actually
+  created them; a directory that appears during the race window is removed
+  from the rollback set and the journal is updated before staging continues.
 - Tests: added partial-staging, stale-journal-temporary, and journal-less
   recovery coverage, including preservation of unclaimed staging paths and
   journal-less backup validation. Added lifetime-lock contention and retained
