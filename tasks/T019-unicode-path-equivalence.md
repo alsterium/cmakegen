@@ -160,3 +160,16 @@ Unicode-only extension are defined in
   suite passed 14 cases with 2 platform-appropriate skips (89 assertions),
   bootstrap CTest completed with no registered tests, and `git diff --check`
   passed.
+
+### Review follow-up (mounted target capability)
+
+- Target capability validation now separates UTF-8 decoding from the
+  filesystem decision. A non-ASCII destination below an ASCII-named supported
+  mount is accepted even when the project root itself has no supported Unicode
+  capability; the mount's last existing parent remains authoritative.
+- The macOS regression covers write and clean for a Unicode filename beneath
+  an existing ASCII target directory.
+- Verification: normal and bootstrap builds passed; the isolated SafeWriter
+  suite passed 15 cases with 2 platform-appropriate skips (94 assertions),
+  bootstrap CTest completed with no registered tests, and `git diff --check`
+  passed.

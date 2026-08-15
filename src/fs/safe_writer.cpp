@@ -536,10 +536,13 @@ struct MacOSPathCursor {
 // boundary for a single output beneath a nested mount.
 [[nodiscard]] Result<void> validate_target_unicode_capability(
     const FilesystemCapabilities& capabilities, std::string_view relative) {
-    auto valid = capabilities.validate_path(relative);
-    if (!valid) return std::unexpected{valid.error()};
-#ifdef __APPLE__
     if (!has_non_ascii(relative)) return {};
+#ifdef __APPLE__
+    // Validate the UTF-8 spelling without deciding its filesystem capability
+    // from the project root: an ASCII-named nested mount can provide the
+    // supported target parent for this output.
+    auto encoding = macos_unicode_key(relative, false);
+    if (!encoding) return std::unexpected{encoding.error()};
     const auto parent = generic_utf8_string(path_from_utf8(relative).parent_path());
     auto cursor = macos_parent_for_relative(capabilities, parent);
     if (!cursor) return std::unexpected{cursor.error()};
@@ -554,10 +557,15 @@ struct MacOSPathCursor {
     if (!key) return std::unexpected{key.error()};
 #endif
 #ifdef _WIN32
-    if (!has_non_ascii(relative)) return {};
+    auto wide = utf8_to_wide(trim_win32_components(relative));
+    if (!wide) return std::unexpected{wide.error()};
     const auto parent = generic_utf8_string(path_from_utf8(relative).parent_path());
     auto cursor = windows_parent_for_relative(capabilities, parent);
     if (!cursor) return std::unexpected{cursor.error()};
+#endif
+#if !defined(__APPLE__) && !defined(_WIN32)
+    auto valid = capabilities.validate_path(relative);
+    if (!valid) return std::unexpected{valid.error()};
 #endif
     return {};
 }

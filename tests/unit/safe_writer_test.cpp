@@ -329,6 +329,17 @@ TEST_CASE("safe writer follows macOS Unicode normalization equivalence") {
     }
 }
 
+TEST_CASE("safe writer validates macOS Unicode paths at existing target parents") {
+    TemporaryDirectory fixture;
+    std::filesystem::create_directory(fixture.path() / "output");
+    cmakegen::SafeWriter writer{fixture.path()};
+    const std::string filename = "caf\xc3\xa9.txt";
+    REQUIRE(writer.write(file_set({{utf8_path("output/" + filename), "contents\n"}})));
+    CHECK(std::filesystem::exists(fixture.path() / "output" / utf8_path(filename)));
+    REQUIRE(writer.clean());
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / "output" / utf8_path(filename)));
+}
+
 TEST_CASE("safe writer uses macOS Unicode case aliases for ownership and cleanup") {
     TemporaryDirectory fixture;
     const std::string upper = "\xc3\x85.txt";
