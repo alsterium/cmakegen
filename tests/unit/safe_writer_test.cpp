@@ -1588,6 +1588,23 @@ TEST_CASE("safe writer validates parent conflicts before check and dry-run") {
     CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
 }
 
+TEST_CASE("safe writer rejects conflicting spellings for a shared parent migration") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/A/x.txt", "x-old\n"}, {"Foo/B/y.txt", "y-old\n"}})));
+
+    const auto result = writer.write(file_set({{"foo/A/x.txt", "x-new\n"},
+                                               {"FOO/B/y.txt", "y-new\n"}}));
+    REQUIRE_FALSE(result);
+    CHECK(result.error().diagnostics().front().message.find("conflicting parent migration") != std::string::npos);
+    CHECK(read_file(fixture.path() / "Foo/A/x.txt") == "x-old\n");
+    CHECK(read_file(fixture.path() / "Foo/B/y.txt") == "y-old\n");
+    CHECK(has_exact_directory_entry(fixture.path(), "Foo"));
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "foo"));
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "FOO"));
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+}
+
 TEST_CASE("safe writer protects an unowned case-only conflicting path") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};

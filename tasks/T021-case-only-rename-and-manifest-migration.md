@@ -130,12 +130,15 @@ and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).
 - Rename temporary collision checks now run only for planned case-only renames
   and compare against the complete post-write manifest, including retained
   outputs.
+- Parent migration planning rejects incompatible requested spellings for the
+  same portable-equivalent ancestor before any transaction is created.
 - Verification: the forced-replacement, shared-parent rollback, and
   parent-migrated source-spelling, rename-temporary collision, and physical
   spelling, preflight-conflict, resolved-tree migration, retained-sibling,
   nested-retained-migration, forced-retained-migration,
-  planned-rename-collision, and deep-intermediate-directory cases passed; the
+  planned-rename-collision, shared-parent-conflict, and
+  deep-intermediate-directory cases passed; the
   full isolated SafeWriter suite passed (44 runnable cases, 4
-  platform-appropriate skips, 433
+  platform-appropriate skips, 446
   assertions), and `git diff --check` passed. CI failures remain outside this
   task.

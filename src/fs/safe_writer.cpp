@@ -2719,6 +2719,11 @@ void retarget_transaction_artifacts_after_directory_move(
     auto entries = populate_transaction_entries(transaction, plan);
     if (!entries) return std::unexpected{entries.error()};
 
+    struct ParentMigration {
+        std::vector<std::string> source;
+        std::vector<std::string> destination;
+    };
+    std::vector<ParentMigration> parent_migrations;
     for (auto& entry : transaction.entries) {
         if (entry.kind != TransactionEntryKind::rename) continue;
 
@@ -2729,6 +2734,40 @@ void retarget_transaction_artifacts_after_directory_move(
                                                           destination_components);
         if (!parent_changed) return std::unexpected{parent_changed.error()};
         if (!*parent_changed) continue;
+
+        for (std::size_t count = 1; count <= source_components.size(); ++count) {
+            if (std::ranges::equal(source_components.begin(),
+                                   source_components.begin() + static_cast<std::ptrdiff_t>(count),
+                                   destination_components.begin(),
+                                   destination_components.begin() + static_cast<std::ptrdiff_t>(count))) {
+                continue;
+            }
+            ParentMigration migration{
+                {source_components.begin(),
+                 source_components.begin() + static_cast<std::ptrdiff_t>(count)},
+                {destination_components.begin(),
+                 destination_components.begin() + static_cast<std::ptrdiff_t>(count)},
+            };
+            for (const auto& previous : parent_migrations) {
+                if (previous.source.size() != migration.source.size()) continue;
+                auto previous_source = component_prefix(transaction.root, previous.source,
+                                                        previous.source.size());
+                auto current_source = component_prefix(transaction.root, migration.source,
+                                                       migration.source.size());
+                auto equivalent = transaction.capabilities.equivalent(
+                    relative_path(transaction.root, previous_source),
+                    relative_path(transaction.root, current_source));
+                if (!equivalent) return std::unexpected{equivalent.error()};
+                if (*equivalent && !std::ranges::equal(previous.destination, migration.destination)) {
+                    return std::unexpected{error("conflicting parent migration spellings",
+                                                 component_prefix(transaction.root,
+                                                                  migration.destination,
+                                                                  migration.destination.size())
+                                                     .generic_string())};
+                }
+            }
+            parent_migrations.push_back(std::move(migration));
+        }
 
         for (std::size_t index = source_components.size(); index > 0; --index) {
             const auto component_index = index - 1;
