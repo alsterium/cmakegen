@@ -95,6 +95,13 @@ struct Manifest {
     return {reinterpret_cast<const char*>(value.data()), value.size()};
 }
 
+[[nodiscard]] std::filesystem::path path_from_utf8(std::string_view value) {
+    std::u8string utf8;
+    utf8.reserve(value.size());
+    for (const auto byte : value) utf8.push_back(static_cast<char8_t>(static_cast<unsigned char>(byte)));
+    return std::filesystem::path{utf8};
+}
+
 [[nodiscard]] std::string trim_win32_components(std::string_view path) {
     std::string result;
     std::size_t start = 0;
@@ -218,6 +225,27 @@ struct FilesystemCapabilities {
         start = end + 1;
     }
     return result;
+}
+
+[[nodiscard]] Result<bool> macos_unicode_equivalent_in_directories(
+    const std::filesystem::path& left_parent, const std::filesystem::path& right_parent,
+    std::string_view left, std::string_view right) {
+    auto left_mode = detect_macos_unicode_mode(left_parent);
+    if (!left_mode) return std::unexpected{left_mode.error()};
+    auto right_mode = detect_macos_unicode_mode(right_parent);
+    if (!right_mode) return std::unexpected{right_mode.error()};
+    if (*left_mode == UnicodeFilesystemMode::unsupported || *right_mode == UnicodeFilesystemMode::unsupported) {
+        return std::unexpected{error("cannot determine Unicode filesystem equivalence safely; target filesystem capability is unsupported",
+                                     std::string{left})};
+    }
+
+    const bool case_insensitive = *left_mode == UnicodeFilesystemMode::macos_case_insensitive ||
+                                  *right_mode == UnicodeFilesystemMode::macos_case_insensitive;
+    auto left_key = macos_unicode_key(left, case_insensitive);
+    if (!left_key) return std::unexpected{left_key.error()};
+    auto right_key = macos_unicode_key(right, case_insensitive);
+    if (!right_key) return std::unexpected{right_key.error()};
+    return *left_key == *right_key;
 }
 #endif
 
@@ -457,12 +485,12 @@ struct MacOSPathCursor {
 [[nodiscard]] Result<MacOSPathCursor> advance_macos_path_cursor(
     const FilesystemCapabilities& capabilities, MacOSPathCursor cursor, std::string_view component) {
     if (!cursor.exists) {
-        return MacOSPathCursor{cursor.directory / std::filesystem::path{std::string{component}},
+        return MacOSPathCursor{cursor.directory / path_from_utf8(component),
                                cursor.capability_directory, false};
     }
 
     std::error_code ec;
-    const auto exact = cursor.directory / std::filesystem::path{std::string{component}};
+    const auto exact = cursor.directory / path_from_utf8(component);
     const auto exact_status = std::filesystem::symlink_status(exact, ec);
     if (!ec && std::filesystem::is_directory(exact_status)) return MacOSPathCursor{exact, exact, true};
     if (ec && ec != std::errc::no_such_file_or_directory) {
@@ -561,24 +589,7 @@ Result<bool> FilesystemCapabilities::equivalent_in_directory(const std::filesyst
     if (!has_non_ascii(left) && !has_non_ascii(right)) return false;
 
 #ifdef __APPLE__
-    auto mode = detect_macos_unicode_mode(parent);
-    if (!mode) return std::unexpected{mode.error()};
-    FilesystemCapabilities parent_capabilities = *this;
-    parent_capabilities.unicode_mode = *mode;
-    auto left_valid = parent_capabilities.validate_path(left);
-    if (!left_valid) return std::unexpected{left_valid.error()};
-    auto right_valid = parent_capabilities.validate_path(right);
-    if (!right_valid) return std::unexpected{right_valid.error()};
-    if (*mode == UnicodeFilesystemMode::macos_case_sensitive ||
-        *mode == UnicodeFilesystemMode::macos_case_insensitive) {
-        auto left_key = macos_unicode_key(left, *mode == UnicodeFilesystemMode::macos_case_insensitive);
-        if (!left_key) return std::unexpected{left_key.error()};
-        auto right_key = macos_unicode_key(right, *mode == UnicodeFilesystemMode::macos_case_insensitive);
-        if (!right_key) return std::unexpected{right_key.error()};
-        return *left_key == *right_key;
-    }
-    return std::unexpected{error("cannot determine Unicode filesystem equivalence safely; target filesystem capability is unsupported",
-                                 std::string{left})};
+    return macos_unicode_equivalent_in_directories(parent, parent, left, right);
 #else
     auto left_valid = validate_path(left);
     if (!left_valid) return std::unexpected{left_valid.error()};
@@ -639,9 +650,12 @@ Result<bool> FilesystemCapabilities::equivalent_path(std::string_view left, std:
         if (!left_cursor) return std::unexpected{left_cursor.error()};
         auto right_cursor = macos_parent_for_relative(*this, right_parent);
         if (!right_cursor) return std::unexpected{right_cursor.error()};
-        auto component_equivalent = equivalent_in_directory(
-            left_cursor->exists ? left_cursor->directory : left_cursor->capability_directory,
-            left_components[index], right_components[index]);
+        const auto left_capability_directory = left_cursor->exists ? left_cursor->directory
+                                                                    : left_cursor->capability_directory;
+        const auto right_capability_directory = right_cursor->exists ? right_cursor->directory
+                                                                      : right_cursor->capability_directory;
+        auto component_equivalent = macos_unicode_equivalent_in_directories(
+            left_capability_directory, right_capability_directory, left_components[index], right_components[index]);
         if (!component_equivalent) return std::unexpected{component_equivalent.error()};
         if (!*component_equivalent) return false;
         if (!left_parent.empty()) left_parent += '/';
@@ -1041,7 +1055,7 @@ Result<void> GeneratedFileSet::add(GeneratedFile file) {
             return std::unexpected{error("generated file set contains file/ancestor path collisions", *normalized)};
         }
     }
-    file.path = std::filesystem::path{*normalized};
+    file.path = path_from_utf8(*normalized);
     files_.push_back(std::move(file));
     return {};
 }

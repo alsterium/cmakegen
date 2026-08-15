@@ -103,3 +103,15 @@ Unicode-only extension are defined in
 - Verification: normal and bootstrap builds passed; the isolated SafeWriter
   suite passed 13 cases with 2 platform-appropriate skips; `git diff --check`
   passed.
+
+### Review follow-up (UTF-8 storage and symmetric macOS comparison)
+
+- SafeWriter now reconstructs normalized path strings through an explicit
+  UTF-8 (`char8_t`) representation before storing them in `GeneratedFileSet`.
+  This preserves the requested native Windows spelling independently of the
+  active narrow code page; the Windows regression test asserts both stored path
+  identity and manifest spelling.
+- macOS comparisons now detect both physical parent capabilities and use a
+  case-insensitive comparison when either side requires it. The result is
+  symmetric even when equivalent parent spellings lead to mounted volumes with
+  different case modes.

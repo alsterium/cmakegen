@@ -372,6 +372,8 @@ TEST_CASE("safe writer preserves native Windows paths as UTF-8 during preflight"
     const std::string filename = "\xc3\x85.txt";
     cmakegen::GeneratedFileSet files;
     REQUIRE(files.add({utf8_path(filename), "contents\n"}));
+    REQUIRE(files.files().size() == 1);
+    CHECK(files.files().front().path == utf8_path(filename));
 
     cmakegen::SafeWriter writer{fixture.path()};
     REQUIRE(writer.write(files));

@@ -190,7 +190,9 @@ The Unicode extension is filesystem-capability-aware and must not replace or
 relax the portable ASCII/Win32 invariant. On supported macOS APFS/HFS volumes,
 SafeWriter compares Unicode names using Core Foundation normalization and
 case-folding rules, re-detecting the capability at each existing parent so a
-nested mount is not compared using the project-root volume's mode. On Windows,
+nested mount is not compared using the project-root volume's mode. A comparison
+uses both physical parent modes and applies case-insensitive comparison if
+either destination is case-insensitive, keeping the result symmetric. On Windows,
 native paths are converted to UTF-8 before validation, then validated through
 UTF-16 and compared ordinally; the case-sensitivity flag is queried for each
 existing parent directory while a path is resolved, so per-directory
