@@ -368,7 +368,7 @@ Result<void> FilesystemCapabilities::validate_path(std::string_view path) const 
     if (handle == INVALID_HANDLE_VALUE) {
         if (!capabilities.windows_volume_case_sensitive) return false;
         return std::unexpected{error("cannot determine Windows directory case sensitivity",
-                                     directory.generic_string())};
+                                     generic_utf8_string(directory))};
     }
 
     constexpr auto file_case_sensitive_info = static_cast<FILE_INFO_BY_HANDLE_CLASS>(23);
@@ -381,7 +381,7 @@ Result<void> FilesystemCapabilities::validate_path(std::string_view path) const 
     if (!queried) {
         if (!capabilities.windows_volume_case_sensitive) return false;
         return std::unexpected{error("cannot determine Windows directory case sensitivity",
-                                     directory.generic_string())};
+                                     generic_utf8_string(directory))};
     }
     return (information.flags & 0x1U) != 0;
 }

@@ -187,3 +187,16 @@ Unicode-only extension are defined in
   suite passed 16 cases with 2 platform-appropriate skips (99 assertions),
   bootstrap CTest completed with no registered tests, and `git diff --check`
   passed.
+
+### Review follow-up (Windows Unicode diagnostics)
+
+- Failed Windows per-directory case-capability probes now retain the native
+  directory spelling through the lossless UTF-8 diagnostic conversion, rather
+  than routing it through the active narrow code page.
+- The Windows Unicode regression exercises a non-ASCII filename below an
+  existing emoji-named directory through write and clean, covering the native
+  parent traversal used by capability probing.
+- Verification: normal and bootstrap builds passed; the isolated SafeWriter
+  suite passed 16 cases with 2 platform-appropriate skips (99 assertions),
+  bootstrap CTest completed with no registered tests, and `git diff --check`
+  passed.

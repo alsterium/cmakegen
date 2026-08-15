@@ -430,6 +430,15 @@ TEST_CASE("safe writer preserves native Windows paths as UTF-8 during preflight"
     REQUIRE(writer.clean());
     CHECK_FALSE(std::filesystem::exists(fixture.path() / "nested" / utf8_path(filename)));
 
+    const std::string emoji_directory = "\xf0\x9f\x98\x80";
+    std::filesystem::create_directory(fixture.path() / utf8_path(emoji_directory));
+    const auto nested_unicode_files = file_set(
+        {{utf8_path(emoji_directory + "/" + filename), "nested unicode\n"}});
+    REQUIRE(writer.write(nested_unicode_files));
+    CHECK(std::filesystem::exists(fixture.path() / utf8_path(emoji_directory) / utf8_path(filename)));
+    REQUIRE(writer.clean());
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / utf8_path(emoji_directory) / utf8_path(filename)));
+
     const std::string emoji_filename = "\xf0\x9f\x98\x80.txt";
     const auto emoji_files = file_set({{utf8_path(emoji_filename), "emoji\n"}});
     REQUIRE(writer.write(emoji_files));
