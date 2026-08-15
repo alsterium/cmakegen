@@ -518,6 +518,34 @@ TEST_CASE("safe writer preserves backups recreated after rollback") {
     CHECK(std::filesystem::exists(transaction / "journal.json"));
 }
 
+TEST_CASE("safe writer preserves backups changed after commit") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"generated.txt", "old\n"}})));
+
+    {
+        FailureInjectionScope injection{{FailurePoint::after_replacement, 0}};
+        cmakegen::detail::safe_writer_testing::queue_failure_injection({FailurePoint::rollback, 0});
+        REQUIRE_FALSE(writer.write(file_set({{"generated.txt", "new\n"}})));
+    }
+
+    const auto transaction = fixture.path() / ".cmakegen/transaction";
+    const auto post_metadata = nlohmann::json::parse(read_file(transaction / "post-manifest.json"));
+    write_file(fixture.path() / ".cmakegen/manifest.json", post_metadata["content"].get<std::string>());
+    auto journal = nlohmann::json::parse(read_file(transaction / "journal.json"));
+    journal["state"] = "committed";
+    journal["phase"] = "commit";
+    write_file(transaction / "journal.json", journal.dump(2) + "\n");
+    const auto backup = transaction / journal["entries"][0]["backup"].get<std::string>();
+    write_file(backup, "external backup\n");
+
+    const auto recovery = writer.write(file_set({{"generated.txt", "new\n"}}));
+    CHECK_FALSE(recovery);
+    CHECK(recovery.error().diagnostics().front().message.find("backup changed after commit") != std::string::npos);
+    CHECK(read_file(backup) == "external backup\n");
+    CHECK(std::filesystem::exists(transaction / "journal.json"));
+}
+
 TEST_CASE("safe writer preserves unclaimed directories at removed destinations during recovery") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};

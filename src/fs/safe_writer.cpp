@@ -1984,6 +1984,21 @@ private:
             }
             continue;
         }
+        std::error_code backup_error;
+        const auto backup_status = std::filesystem::symlink_status(entry.backup, backup_error);
+        if (backup_error && !is_not_found(backup_error)) {
+            return std::unexpected{error("cannot inspect transaction backup: " + backup_error.message(),
+                                         entry.backup.generic_string())};
+        }
+        if (!backup_error && std::filesystem::exists(backup_status)) {
+            if (std::filesystem::is_symlink(backup_status) || !std::filesystem::is_regular_file(backup_status)) {
+                return std::unexpected{error("transaction backup changed after commit", entry.backup.generic_string())};
+            }
+            auto content = read_file(entry.backup);
+            if (!content || SafeWriter::sha256(*content) != entry.pre_hash) {
+                return std::unexpected{error("transaction backup changed after commit", entry.backup.generic_string())};
+            }
+        }
         auto backup = remove_if_present(entry.backup, "transaction backup");
         if (!backup) return std::unexpected{backup.error()};
     }

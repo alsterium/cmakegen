@@ -185,3 +185,6 @@ intended post-state.
   staging file recreated after an interrupted publish whose journal still
   claims it. Both cases retain the transaction with recovery-required
   diagnostics instead of deleting an indistinguishable external artifact.
+- Terminal cleanup also verifies every remaining transaction backup against
+  its recorded pre-hash, preserving a backup changed after `committed` rather
+  than deleting an external replacement.
