@@ -11,6 +11,10 @@ jobs:
   self-host:
     name: ${{ matrix.os }} / ${{ matrix.compiler }}
     runs-on: ${{ matrix.os }}
+    # Cold FetchContent builds can otherwise let Make spawn an unbounded
+    # number of compiler processes on Linux and macOS hosted runners.
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
     strategy:
       fail-fast: false
       matrix:
