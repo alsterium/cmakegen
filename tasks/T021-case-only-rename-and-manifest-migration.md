@@ -89,6 +89,10 @@ and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).
 - Parent migration refuses to move directories containing entries outside the
   active transaction, preserving unowned files. Nested-parent coverage now
   verifies exact directory spelling and rollback after the physical rename.
+- A shared case-only parent is migrated for multiple rename entries, while
+  transaction-owned sibling outputs and staging files are retained. Recovery
+  adopts a resolved rename temporary when the journal records the pre-move
+  parent spelling.
 - Verification: the nested-parent case and full isolated SafeWriter suite
-  passed (25 runnable cases, 4 platform-appropriate skips, 252 assertions),
+  passed (26 runnable cases, 4 platform-appropriate skips, 269 assertions),
   and `git diff --check` passed. CI failures remain outside this task.

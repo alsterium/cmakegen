@@ -1352,6 +1352,33 @@ TEST_CASE("safe writer migrates a nested case-only parent directory spelling") {
     CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
 }
 
+TEST_CASE("safe writer migrates a case-only parent shared by multiple outputs") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/a.txt", "a-old\n"}, {"Foo/b.txt", "b-old\n"}})));
+    const auto previous_manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+    const auto next = file_set({{"foo/a.txt", "a-new\n"}, {"foo/b.txt", "b-new\n"}});
+
+    {
+        FailureInjectionScope injection{{FailurePoint::after_replacement, 1}};
+        const auto result = writer.write(next);
+        REQUIRE_FALSE(result);
+        CHECK(result.error().diagnostics().front().message.find("rollback completed") != std::string::npos);
+    }
+
+    CHECK(read_file(fixture.path() / "Foo/a.txt") == "a-old\n");
+    CHECK(read_file(fixture.path() / "Foo/b.txt") == "b-old\n");
+    CHECK(has_exact_directory_entry(fixture.path(), "Foo"));
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "foo"));
+    CHECK(read_file(fixture.path() / ".cmakegen/manifest.json") == previous_manifest);
+
+    REQUIRE(writer.write(next));
+    CHECK(read_file(fixture.path() / "foo/a.txt") == "a-new\n");
+    CHECK(read_file(fixture.path() / "foo/b.txt") == "b-new\n");
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "Foo"));
+    CHECK(has_exact_directory_entry(fixture.path(), "foo"));
+}
+
 TEST_CASE("safe writer protects an unowned case-only conflicting path") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};

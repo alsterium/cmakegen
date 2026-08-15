@@ -293,7 +293,11 @@ case-insensitive directory entry. The manifest removes the old logical
 spelling and publishes the requested spelling only after that physical rename
 and any content replacement succeed; rollback restores both spelling and
 content. Nested parent directory spellings migrate from the deepest component
-outward, and a parent containing unowned entries is not moved.
+outward, and a parent containing unowned entries is not moved. Multiple rename
+entries may share that migrated parent; transaction-owned sibling outputs and
+their temporaries remain part of the directory migration. Recovery adopts a
+resolved transaction temporary when a crash leaves the journal one spelling
+behind.
 
 Why:
 
