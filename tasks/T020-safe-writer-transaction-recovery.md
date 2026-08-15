@@ -145,6 +145,11 @@ intended post-state.
   succeeds, so recovery cannot remove a directory another process creates in
   the pre-creation window. Existing outputs are revalidated as regular files
   with their recorded pre-hash immediately before they are moved to backups.
+- Rollback now verifies every file recorded by the pre-manifest before it
+  removes recovery artifacts. A successful replacement clears its staging
+  ownership before terminal cleanup, and rollback rejects an empty directory
+  recreated at a removed destination unless that directory is journaled as a
+  transaction-created file-to-directory transition.
 - Tests: added partial-staging, stale-journal-temporary, and journal-less
   recovery coverage, including preservation of unclaimed staging paths and
   journal-less backup validation. Added lifetime-lock contention and retained
@@ -153,9 +158,11 @@ intended post-state.
   ancestor collision coverage. Backup parents are also revalidated before
   restoration. The existing Windows locked-file test now exercises the
   pre-hash-preservation path. Added coverage that an interrupted
-  file-to-directory transition journals the directory only after creation.
+  file-to-directory transition journals the directory only after creation,
+  retained pre-manifest output validation, recreated post-publication staging
+  paths, and unclaimed directories at removed destinations.
 - Verification: `cmake --build build/t020-normal --parallel 2` and
   `cmake --build build/t020-bootstrap --parallel 2` passed;
-  `build/t020-normal/cmakegen_tests "safe writer*"` passed with 32 runnable
-  cases, 3 platform-appropriate skips, and 275 assertions; `git diff --check`
+  `build/t020-normal/cmakegen_tests "safe writer*"` passed with 35 runnable
+  cases, 3 platform-appropriate skips, and 304 assertions; `git diff --check`
   passed. CI failures remain outside this task.

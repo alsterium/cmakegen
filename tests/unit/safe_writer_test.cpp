@@ -394,6 +394,74 @@ TEST_CASE("safe writer validates a retained backup before removing its destinati
     CHECK(std::filesystem::exists(transaction / "journal.json"));
 }
 
+TEST_CASE("safe writer verifies retained pre-manifest outputs before finalizing rollback") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"changed.txt", "old\n"}, {"retained.txt", "retained\n"}})));
+
+    {
+        FailureInjectionScope injection{{FailurePoint::during_replacement, 0}};
+        cmakegen::detail::safe_writer_testing::queue_failure_injection({FailurePoint::rollback, 0});
+        REQUIRE_FALSE(writer.write(file_set({{"changed.txt", "new\n"}, {"retained.txt", "retained\n"}})));
+    }
+
+    const auto transaction = fixture.path() / ".cmakegen/transaction";
+    write_file(fixture.path() / "retained.txt", "external edit\n");
+    const auto recovery = writer.write(file_set({{"changed.txt", "new\n"}, {"retained.txt", "retained\n"}}));
+
+    REQUIRE_FALSE(recovery);
+    CHECK(recovery.error().diagnostics().front().message.find("manifest-owned output") != std::string::npos);
+    CHECK(read_file(fixture.path() / "retained.txt") == "external edit\n");
+    CHECK(std::filesystem::exists(transaction / "journal.json"));
+}
+
+TEST_CASE("safe writer preserves staging paths recreated after publication") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"generated.txt", "old\n"}})));
+
+    {
+        FailureInjectionScope injection{{FailurePoint::after_replacement, 0}};
+        cmakegen::detail::safe_writer_testing::queue_failure_injection({FailurePoint::rollback, 0});
+        REQUIRE_FALSE(writer.write(file_set({{"generated.txt", "new\n"}})));
+    }
+
+    const auto transaction = fixture.path() / ".cmakegen/transaction";
+    const auto staging = fixture.path() / ".generated.txt.cmakegen-transaction.tmp";
+    write_file(staging, "new\n");
+    const auto post_metadata = nlohmann::json::parse(read_file(transaction / "post-manifest.json"));
+    write_file(fixture.path() / ".cmakegen/manifest.json", post_metadata["content"].get<std::string>());
+    auto journal = nlohmann::json::parse(read_file(transaction / "journal.json"));
+    journal["state"] = "committed";
+    journal["phase"] = "commit";
+    write_file(transaction / "journal.json", journal.dump(2) + "\n");
+
+    REQUIRE(writer.write(file_set({{"generated.txt", "new\n"}})));
+    CHECK(read_file(staging) == "new\n");
+    CHECK_FALSE(std::filesystem::exists(transaction));
+}
+
+TEST_CASE("safe writer preserves unclaimed directories at removed destinations during recovery") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"obsolete", "old\n"}})));
+
+    {
+        FailureInjectionScope injection{{FailurePoint::during_replacement, 0}};
+        cmakegen::detail::safe_writer_testing::queue_failure_injection({FailurePoint::rollback, 0});
+        REQUIRE_FALSE(writer.write(file_set({{"replacement.txt", "new\n"}})));
+    }
+
+    const auto transaction = fixture.path() / ".cmakegen/transaction";
+    std::filesystem::create_directory(fixture.path() / "obsolete");
+    const auto recovery = writer.write(file_set({{"replacement.txt", "new\n"}}));
+
+    REQUIRE_FALSE(recovery);
+    CHECK(recovery.error().diagnostics().front().message.find("stale destination changed") != std::string::npos);
+    CHECK(std::filesystem::is_directory(fixture.path() / "obsolete"));
+    CHECK(std::filesystem::exists(transaction / "journal.json"));
+}
+
 TEST_CASE("safe writer refuses symlinked backup parents during cleanup") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};

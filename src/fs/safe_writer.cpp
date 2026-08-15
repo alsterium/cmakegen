@@ -2254,6 +2254,38 @@ private:
             return std::unexpected{error("rollback restored unexpected manifest content", manifest.generic_string())};
         }
     }
+
+    if (transaction.pre_manifest_exists) {
+        auto pre_manifest = parse_manifest(transaction.pre_manifest_content, manifest);
+        if (!pre_manifest) return std::unexpected{pre_manifest.error()};
+        auto manifest_valid = validate_manifest_equivalence(*pre_manifest, transaction.capabilities);
+        if (!manifest_valid) return std::unexpected{manifest_valid.error()};
+        for (const auto& [relative, hash] : pre_manifest->files) {
+            const auto destination = transaction.root / relative;
+            auto parents = validate_recovery_path_parents(transaction, destination);
+            if (!parents) return std::unexpected{parents.error()};
+            auto resolved = resolve_existing_alias(transaction.root, relative,
+                                                   transaction.capabilities);
+            if (!resolved) return std::unexpected{resolved.error()};
+            if (*resolved != destination) {
+                return std::unexpected{error("rollback restored a portable output alias",
+                                             destination.generic_string())};
+            }
+            std::filesystem::file_status output_status;
+            auto inspected_output = safe_status(destination, output_status);
+            if (!inspected_output) return std::unexpected{inspected_output.error()};
+            if (!std::filesystem::exists(output_status) || std::filesystem::is_symlink(output_status) ||
+                !std::filesystem::is_regular_file(output_status)) {
+                return std::unexpected{error("rollback did not restore a manifest-owned output",
+                                             destination.generic_string())};
+            }
+            auto output = read_file(destination);
+            if (!output || SafeWriter::sha256(*output) != hash) {
+                return std::unexpected{error("rollback restored unexpected manifest-owned output content",
+                                             destination.generic_string())};
+            }
+        }
+    }
     return {};
 }
 
@@ -2338,8 +2370,7 @@ private:
                     auto content = read_file(entry.destination);
                     untouched_original = content && SafeWriter::sha256(*content) == entry.pre_hash;
                 }
-                if ((!untouched_original && !recreated_for_transition &&
-                     entry.status != TransactionEntryStatus::applied) ||
+                if ((!untouched_original && !recreated_for_transition) ||
                     (!untouched_original && (std::filesystem::is_symlink(status) ||
                                              !std::filesystem::is_directory(status)))) {
                     return std::unexpected{error("stale destination changed while transaction recovery was pending",
@@ -2854,6 +2885,10 @@ private:
         auto replaced = replace_file(entry.temporary, entry.destination);
         if (!replaced) return fail(replaced.error());
         entry.status = TransactionEntryStatus::applied;
+        // A successful replacement consumes the staging file.  A later file
+        // at this deterministic path is not transaction-owned, even if it
+        // happens to have the same bytes as the published output.
+        entry.staging_claimed = false;
         auto after_apply = write_journal(transaction);
         if (!after_apply) return fail(after_apply.error());
         if (entry.kind == TransactionEntryKind::replace &&
