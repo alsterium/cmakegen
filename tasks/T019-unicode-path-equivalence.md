@@ -200,3 +200,16 @@ Unicode-only extension are defined in
   suite passed 16 cases with 2 platform-appropriate skips (99 assertions),
   bootstrap CTest completed with no registered tests, and `git diff --check`
   passed.
+
+### Review follow-up (ASCII operations beside Unicode entries)
+
+- Directory-entry comparison now rejects a portable-key mismatch immediately
+  when either component is ASCII. This prevents an unrelated non-ASCII entry
+  from triggering unsupported Unicode capability probing during an ASCII-only
+  write on hosts without Unicode filesystem support.
+- Regression coverage creates an unrelated Unicode file, then writes an ASCII
+  output and verifies both files remain intact.
+- Verification: normal and bootstrap builds passed; the isolated SafeWriter
+  suite passed 17 cases with 2 platform-appropriate skips (103 assertions),
+  bootstrap CTest completed with no registered tests, and `git diff --check`
+  passed.

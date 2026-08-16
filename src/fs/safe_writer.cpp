@@ -626,7 +626,11 @@ Result<bool> FilesystemCapabilities::equivalent_in_directory(const std::filesyst
                                                               std::string_view left,
                                                               std::string_view right) const {
     if (portable_equivalence_key(left) == portable_equivalence_key(right)) return true;
-    if (!has_non_ascii(left) && !has_non_ascii(right)) return false;
+    // Canonical normalization and case folding cannot make a non-ASCII name
+    // equivalent to a distinct ASCII name.  Avoid probing an unrelated
+    // Unicode entry when an ASCII request is being resolved on a host that
+    // has no Unicode filesystem capability.
+    if (!has_non_ascii(left) || !has_non_ascii(right)) return false;
 
 #ifdef __APPLE__
     return macos_unicode_equivalent_in_directories(parent, parent, left, right);

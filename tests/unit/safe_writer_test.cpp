@@ -474,7 +474,17 @@ TEST_CASE("safe writer fails safely when Unicode filesystem capability is unsupp
     CHECK_FALSE(result);
     CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/manifest.json"));
 }
+
 #endif
+
+TEST_CASE("safe writer keeps ASCII outputs independent of unrelated Unicode entries") {
+    TemporaryDirectory fixture;
+    write_file(fixture.path() / utf8_path("caf\xc3\xa9.txt"), "user\n");
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"generated.txt", "generated\n"}})));
+    CHECK(read_file(fixture.path() / "generated.txt") == "generated\n");
+    CHECK(read_file(fixture.path() / utf8_path("caf\xc3\xa9.txt")) == "user\n");
+}
 
 TEST_CASE("safe writer recognizes manifest ownership through portable path aliases") {
     TemporaryDirectory fixture;
