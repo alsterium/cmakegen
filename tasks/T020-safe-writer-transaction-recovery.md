@@ -196,3 +196,6 @@ intended post-state.
   state, so forced replacement of a modified owned file restores correctly.
   A journal-less transaction directory never deletes numbered backups: without
   a journal they cannot be authenticated as transaction-owned.
+- Rollback persists the release of each staging-file ownership claim before it
+  can publish a terminal journal state, preserving a staging file recreated
+  during delayed terminal cleanup.

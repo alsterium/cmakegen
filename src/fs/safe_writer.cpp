@@ -1959,9 +1959,17 @@ private:
 }
 
 [[nodiscard]] Result<void> cleanup_transaction(Transaction& transaction) {
-    for (const auto& entry : transaction.entries) {
+    for (auto& entry : transaction.entries) {
         auto staged = remove_staged_file(transaction, entry);
         if (!staged) return std::unexpected{staged.error()};
+        // Rollback has consumed or removed this transaction staging path.
+        // Persist the relinquished claim before terminal recovery can run, so
+        // a file recreated later at the deterministic name remains external.
+        if (entry.staging_claimed) {
+            entry.staging_claimed = false;
+            auto journal = write_journal(transaction);
+            if (!journal) return std::unexpected{journal.error()};
+        }
     }
     auto backup_parents = validate_recovery_path_parents(
         transaction, transaction.backups_directory / ".cmakegen-backup-check");

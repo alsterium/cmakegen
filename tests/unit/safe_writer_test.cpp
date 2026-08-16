@@ -465,6 +465,34 @@ TEST_CASE("safe writer preserves staging paths recreated after publication") {
     CHECK_FALSE(std::filesystem::exists(transaction));
 }
 
+TEST_CASE("safe writer preserves staging paths recreated after rollback") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"generated.txt", "old\n"}})));
+
+    {
+        FailureInjectionScope injection{{FailurePoint::after_replacement, 0}};
+        cmakegen::detail::safe_writer_testing::queue_failure_injection({FailurePoint::rollback, 0});
+        REQUIRE_FALSE(writer.write(file_set({{"generated.txt", "new\n"}})));
+    }
+
+    const auto transaction = fixture.path() / ".cmakegen/transaction";
+    auto journal = nlohmann::json::parse(read_file(transaction / "journal.json"));
+    REQUIRE_FALSE(journal["entries"][0]["staging_claimed"].get<bool>());
+    journal["state"] = "rolled_back";
+    journal["phase"] = "rollback";
+    write_file(transaction / "journal.json", journal.dump(2) + "\n");
+    write_file(fixture.path() / "generated.txt", "old\n");
+    const auto pre_metadata = nlohmann::json::parse(read_file(transaction / "pre-manifest.json"));
+    write_file(fixture.path() / ".cmakegen/manifest.json", pre_metadata["content"].get<std::string>());
+    const auto staging = fixture.path() / ".generated.txt.cmakegen-transaction.tmp";
+    write_file(staging, "new\n");
+
+    REQUIRE(writer.write(file_set({{"generated.txt", "old\n"}})));
+    CHECK(read_file(staging) == "new\n");
+    CHECK_FALSE(std::filesystem::exists(transaction));
+}
+
 TEST_CASE("safe writer preserves staging recreated after an interrupted publication") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};
