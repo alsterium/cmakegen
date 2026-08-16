@@ -2676,13 +2676,10 @@ void retarget_transaction_artifacts_after_directory_move(
     for (auto& directory : transaction.created_directories) retarget(directory);
 }
 
-// Recovery persists physical paths, not the planning spellings.  Once the
-// journal proves that a parent move completed, retarget every path-bearing
-// entry field together so a later entry cannot observe a mixture of old and
-// new parent spellings.  The transform is applied only while the durable
-// migration intent is present, then the intent is cleared and journaled,
-// making repeated recovery idempotent.
-void retarget_transaction_entries_after_recovered_directory_move(
+// Logical source/destination spellings define the pre/post transaction
+// contract and must remain stable for rollback.  Recovery retargets only
+// physical artifacts moved with the directory.
+void retarget_transaction_artifacts_after_recovered_directory_move(
     Transaction& transaction,
     const std::filesystem::path& source_directory,
     const std::filesystem::path& destination_directory) {
@@ -2694,9 +2691,6 @@ void retarget_transaction_entries_after_recovered_directory_move(
         path = value == "." ? destination_directory : destination_directory / relative;
     };
     for (auto& entry : transaction.entries) {
-        retarget(entry.source);
-        retarget(entry.destination);
-        retarget(entry.backup);
         retarget(entry.temporary);
         retarget(entry.rename_temporary);
     }
@@ -2704,24 +2698,28 @@ void retarget_transaction_entries_after_recovered_directory_move(
     if (transaction.creating_directory) retarget(*transaction.creating_directory);
 }
 
+[[nodiscard]] Result<bool> has_exact_directory_entry(const std::filesystem::path& path) {
+    std::error_code ec;
+    std::filesystem::directory_iterator entries(path.parent_path(), ec);
+    if (ec) return std::unexpected{error("cannot inspect pending parent migration", path.parent_path().generic_string())};
+    for (const auto& entry : entries) {
+        if (entry.path().filename() == path.filename()) return true;
+    }
+    return false;
+}
+
 [[nodiscard]] Result<void> reconcile_parent_migration(Transaction& transaction) {
     if (!transaction.parent_migration) return {};
     const auto [source, destination] = *transaction.parent_migration;
-    std::error_code ec;
-    const auto source_status = std::filesystem::symlink_status(source, ec);
-    if (ec && !is_not_found(ec)) return std::unexpected{error("cannot inspect pending parent migration", source.generic_string())};
-    ec.clear();
-    const auto destination_status = std::filesystem::symlink_status(destination, ec);
-    if (ec && !is_not_found(ec)) return std::unexpected{error("cannot inspect pending parent migration", destination.generic_string())};
-    const bool source_exists = source_status.type() != std::filesystem::file_type::not_found;
-    const bool destination_exists = destination_status.type() != std::filesystem::file_type::not_found;
-    if (source_exists == destination_exists ||
-        (source_exists && !std::filesystem::is_directory(source_status)) ||
-        (destination_exists && !std::filesystem::is_directory(destination_status))) {
+    auto source_exact = has_exact_directory_entry(source);
+    if (!source_exact) return std::unexpected{source_exact.error()};
+    auto destination_exact = has_exact_directory_entry(destination);
+    if (!destination_exact) return std::unexpected{destination_exact.error()};
+    if (*source_exact == *destination_exact) {
         return std::unexpected{error("pending parent migration has an ambiguous physical state", source.generic_string())};
     }
-    if (destination_exists) {
-        retarget_transaction_entries_after_recovered_directory_move(transaction, source, destination);
+    if (*destination_exact) {
+        retarget_transaction_artifacts_after_recovered_directory_move(transaction, source, destination);
     }
     transaction.parent_migration.reset();
     return write_journal(transaction);

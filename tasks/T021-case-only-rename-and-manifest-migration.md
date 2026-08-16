@@ -235,3 +235,12 @@ and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).
 - Verification: normal and bootstrap builds passed; the isolated SafeWriter
   suite passed 72 runnable cases with 4 platform-appropriate skips (691
   assertions), and `git diff --check` passed.
+
+### Review follow-up (parent-migration reconciliation)
+
+- Recovery keeps logical rename source and destination spellings unchanged for
+  rollback and manifest restoration; only physical transaction artifacts move
+  with a proven completed parent migration.
+- Pending parent migrations now inspect the exact directory-entry spelling,
+  rather than mutually exclusive path existence, so case-insensitive volumes
+  distinguish pre-move from post-move state safely.
