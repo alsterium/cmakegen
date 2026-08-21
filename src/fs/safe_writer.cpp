@@ -1129,7 +1129,8 @@ Result<bool> FilesystemCapabilities::equivalent(std::string_view left, std::stri
 
 [[nodiscard]] Result<void> atomic_write_text(const std::filesystem::path& destination,
                                               std::string_view content) {
-    const auto temporary = destination.string() + ".tmp";
+    auto temporary = destination;
+    temporary += ".tmp";
     auto discarded = discard_atomic_temporary(temporary);
     if (!discarded) return std::unexpected{discarded.error()};
     auto written = write_file_without_replacement(temporary, content);
@@ -1386,17 +1387,17 @@ struct PreparedPlan {
 
 [[nodiscard]] std::string relative_path(const std::filesystem::path& root,
                                         const std::filesystem::path& path) {
-    return path.lexically_relative(root).generic_string();
+    return generic_utf8_string(path.lexically_relative(root));
 }
 
 [[nodiscard]] std::string backup_relative_path(const Transaction& transaction,
                                                const std::filesystem::path& path) {
-    return path.lexically_relative(transaction.directory).generic_string();
+    return generic_utf8_string(path.lexically_relative(transaction.directory));
 }
 
 [[nodiscard]] std::string temporary_relative_path(const Transaction& transaction,
                                                   const std::filesystem::path& path) {
-    return path.lexically_relative(transaction.root).generic_string();
+    return generic_utf8_string(path.lexically_relative(transaction.root));
 }
 
 [[nodiscard]] nlohmann::ordered_json render_journal_json(const Transaction& transaction) {
@@ -1673,7 +1674,7 @@ private:
                                                              const std::filesystem::path& journal,
                                                              const FilesystemCapabilities& capabilities) {
     if (allow_manifest && value == manifest_relative_path) return {};
-    auto normalized = normalize_relative_path(std::filesystem::path{value});
+    auto normalized = normalize_relative_path(path_from_utf8(value));
     if (!normalized || *normalized != value) {
         return std::unexpected{error("transaction journal contains an unsafe destination", journal.generic_string())};
     }
@@ -1729,7 +1730,7 @@ private:
                 return std::unexpected{error("transaction journal contains an invalid created directory",
                                              journal.generic_string())};
             }
-            auto normalized = normalize_relative_path(std::filesystem::path{value.get<std::string>()});
+            auto normalized = normalize_relative_path(path_from_utf8(value.get<std::string>()));
             if (!normalized || *normalized != value.get<std::string>() ||
                 is_reserved_metadata_path(*normalized)) {
                 return std::unexpected{error("transaction journal contains an unsafe created directory",
@@ -1737,11 +1738,11 @@ private:
             }
             auto unicode_valid = capabilities.validate_path(*normalized);
             if (!unicode_valid) return std::unexpected{unicode_valid.error()};
-            transaction.created_directories.push_back(root / *normalized);
+            transaction.created_directories.push_back(root / path_from_utf8(*normalized));
         }
         if (json.contains("creating_directory") && !json["creating_directory"].is_null()) {
             auto normalized = normalize_relative_path(
-                std::filesystem::path{json["creating_directory"].get<std::string>()});
+                path_from_utf8(json["creating_directory"].get<std::string>()));
             if (!normalized || *normalized != json["creating_directory"].get<std::string>() ||
                 is_reserved_metadata_path(*normalized)) {
                 return std::unexpected{error("transaction journal contains an unsafe creating directory",
@@ -1749,7 +1750,7 @@ private:
             }
             auto unicode_valid = capabilities.validate_path(*normalized);
             if (!unicode_valid) return std::unexpected{unicode_valid.error()};
-            transaction.creating_directory = root / *normalized;
+            transaction.creating_directory = root / path_from_utf8(*normalized);
         }
 
         std::size_t index = 0;
@@ -1794,7 +1795,7 @@ private:
                                              journal.generic_string())};
             }
             if (!is_manifest) {
-                auto safe_logical = normalize_relative_path(std::filesystem::path{logical_path});
+                auto safe_logical = normalize_relative_path(path_from_utf8(logical_path));
                 if (!safe_logical || *safe_logical != logical_path) {
                     return std::unexpected{error("transaction journal contains an unsafe logical path",
                                                  journal.generic_string())};
@@ -1820,8 +1821,10 @@ private:
             std::filesystem::path temporary;
             if (*kind == TransactionEntryKind::replace ||
                 (is_manifest && value["post_exists"].get<bool>())) {
-                temporary = root / temporary_value;
-                if (temporary_value != transaction_temp_path(root / destination).lexically_relative(root).generic_string()) {
+                temporary = root / path_from_utf8(temporary_value);
+                if (temporary_value != generic_utf8_string(
+                                           transaction_temp_path(root / path_from_utf8(destination))
+                                               .lexically_relative(root))) {
                     return std::unexpected{error("transaction journal contains an invalid temporary path",
                                                  journal.generic_string())};
                 }
@@ -1841,7 +1844,7 @@ private:
                 *kind,
                 *status,
                 logical_path,
-                root / destination,
+                root / path_from_utf8(destination),
                 temporary,
                 directory / expected_backup,
                 value["had_original"].get<bool>(),
@@ -2010,13 +2013,17 @@ private:
         auto backup = remove_if_present(entry.backup, "transaction backup");
         if (!backup) return std::unexpected{backup.error()};
     }
-    auto journal_tmp = remove_if_present(transaction.journal.string() + ".tmp", "transaction journal temporary");
+    auto journal_tmp_path = transaction.journal;
+    journal_tmp_path += ".tmp";
+    auto journal_tmp = remove_if_present(journal_tmp_path, "transaction journal temporary");
     if (!journal_tmp) return std::unexpected{journal_tmp.error()};
-    auto pre_tmp = remove_if_present(transaction.pre_metadata_path.string() + ".tmp",
-                                     "pre-manifest metadata temporary");
+    auto pre_tmp_path = transaction.pre_metadata_path;
+    pre_tmp_path += ".tmp";
+    auto pre_tmp = remove_if_present(pre_tmp_path, "pre-manifest metadata temporary");
     if (!pre_tmp) return std::unexpected{pre_tmp.error()};
-    auto post_tmp = remove_if_present(transaction.post_metadata_path.string() + ".tmp",
-                                      "post-manifest metadata temporary");
+    auto post_tmp_path = transaction.post_metadata_path;
+    post_tmp_path += ".tmp";
+    auto post_tmp = remove_if_present(post_tmp_path, "post-manifest metadata temporary");
     if (!post_tmp) return std::unexpected{post_tmp.error()};
     // Remove the journal before its metadata.  If cleanup is interrupted
     // after this point, the journal-less recovery path validates and removes
@@ -2617,7 +2624,7 @@ private:
             if (!inspected) return std::unexpected{inspected.error()};
             if (std::filesystem::exists(status)) {
                 if (is_scheduled_removal(current)) {
-                    const auto relative = current.lexically_relative(transaction.root).generic_string();
+                    const auto relative = generic_utf8_string(current.lexically_relative(transaction.root));
                     if (seen.emplace(portable_equivalence_key(relative)).second) {
                         transaction.planned_directories.push_back(current);
                     }
@@ -2630,7 +2637,7 @@ private:
                 }
                 break;
             }
-            const auto relative = current.lexically_relative(transaction.root).generic_string();
+            const auto relative = generic_utf8_string(current.lexically_relative(transaction.root));
             if (relative.empty() || is_reserved_metadata_path(relative)) {
                 return std::unexpected{error("output parent is unsafe", current.generic_string())};
             }
@@ -2777,7 +2784,15 @@ private:
         auto inspected = safe_status(entry.destination, status);
         if (!inspected) return std::unexpected{inspected.error()};
         const bool exists = std::filesystem::exists(status);
-        if (entry.post_exists != exists) return false;
+        if (entry.post_exists != exists) {
+            const bool transaction_created_directory =
+                !entry.post_exists && entry.kind == TransactionEntryKind::remove && exists &&
+                !std::filesystem::is_symlink(status) && std::filesystem::is_directory(status) &&
+                std::ranges::find(transaction.created_directories, entry.destination) !=
+                    transaction.created_directories.end();
+            if (!transaction_created_directory) return false;
+            continue;
+        }
         if (entry.post_exists) {
             if (std::filesystem::is_symlink(status) || !std::filesystem::is_regular_file(status)) return false;
             auto content = read_file(entry.destination);

@@ -199,3 +199,12 @@ intended post-state.
 - Rollback persists the release of each staging-file ownership claim before it
   can publish a terminal journal state, preserving a staging file recreated
   during delayed terminal cleanup.
+- Transaction journal filesystem paths now serialize through explicit UTF-8
+  conversion and deserialize back to native paths, including destinations,
+  sibling temporaries, and directory-creation records. Atomic journal and
+  metadata temporary suffixes are appended directly to native paths. Added a
+  recovery round-trip test with a non-ASCII destination. Post-state validation
+  also recognizes a removed file path reused as a transaction-created output
+  directory. Verification: normal SafeWriter tests passed with 46 runnable
+  cases, 3 platform skips, and 394 assertions; normal and bootstrap builds
+  passed; full CTest and `git diff --check` passed.

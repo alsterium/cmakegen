@@ -379,6 +379,30 @@ TEST_CASE("safe writer retains deterministic recovery artifacts when rollback fa
     CHECK_FALSE(std::filesystem::exists(transaction));
 }
 
+TEST_CASE("safe writer transaction journal round-trips UTF-8 filesystem paths") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    const auto relative = utf8_path("generated/\xE6\x96\x87\xE4\xBB\xB6.txt");
+    REQUIRE(writer.write(file_set({{relative, "old\n"}})));
+
+    {
+        FailureInjectionScope injection{{FailurePoint::during_replacement, 0}};
+        cmakegen::detail::safe_writer_testing::queue_failure_injection({FailurePoint::rollback, 0});
+        REQUIRE_FALSE(writer.write(file_set({{relative, "new\n"}})));
+    }
+
+    const auto transaction = fixture.path() / ".cmakegen/transaction";
+    const auto journal = nlohmann::json::parse(read_file(transaction / "journal.json"));
+    REQUIRE(journal["entries"].size() == 2);
+    CHECK(journal["entries"][0]["destination"] == "generated/\xE6\x96\x87\xE4\xBB\xB6.txt");
+    CHECK(journal["entries"][0]["temporary"] ==
+          "generated/.\xE6\x96\x87\xE4\xBB\xB6.txt.cmakegen-transaction.tmp");
+
+    REQUIRE(writer.write(file_set({{relative, "new\n"}})));
+    CHECK(read_file(fixture.path() / relative) == "new\n");
+    CHECK_FALSE(std::filesystem::exists(transaction));
+}
+
 TEST_CASE("safe writer refuses to recover or write while another writer holds the transaction lock") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};
