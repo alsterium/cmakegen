@@ -1654,6 +1654,8 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
         return "rollback";
     case Point::recovery:
         return "recovery";
+    case Point::after_reverse_parent_migration:
+        return "after reverse parent migration";
     }
     return "transaction";
 }
@@ -2079,11 +2081,27 @@ private:
                         return std::unexpected{error("transaction journal contains an unsafe temporary path",
                                                      journal.generic_string())};
                     }
-                } else if (temporary_value != generic_utf8_string(
-                                                      transaction_temp_path(root / path_from_utf8(destination))
-                                                          .lexically_relative(root))) {
-                    return std::unexpected{error("transaction journal contains an invalid temporary path",
-                                                 journal.generic_string())};
+                } else {
+                    const auto expected_temporary = transaction_temp_path(root / path_from_utf8(destination));
+                    bool valid_temporary = root / path_from_utf8(temporary_value) == expected_temporary;
+                    if (!valid_temporary && transaction.parent_migration) {
+                        const auto& [migration_source, migration_destination] =
+                            *transaction.parent_migration;
+                        const auto relative_to_source =
+                            (root / path_from_utf8(temporary_value)).lexically_relative(migration_source);
+                        const auto relative_value = generic_utf8_string(relative_to_source);
+                        if (!relative_to_source.empty() && !relative_to_source.is_absolute() &&
+                            relative_value != ".." && !relative_value.starts_with("../")) {
+                            const auto migrated_temporary = relative_value == "."
+                                                                ? migration_destination
+                                                                : migration_destination / relative_to_source;
+                            valid_temporary = migrated_temporary == expected_temporary;
+                        }
+                    }
+                    if (!valid_temporary) {
+                        return std::unexpected{error("transaction journal contains an invalid temporary path",
+                                                     journal.generic_string())};
+                    }
                 }
             } else if (!temporary_value.empty()) {
                 return std::unexpected{error("transaction journal contains an unexpected temporary path",
@@ -2927,11 +2945,20 @@ pending_parent_migration_source(const Transaction& transaction,
             additional_file_name);
         if (!contents) return std::unexpected{contents.error()};
 
+        transaction.parent_migration = std::pair{current_directory, source_directory};
+        auto intent = write_journal(transaction);
+        if (!intent) return std::unexpected{intent.error()};
         auto moved = move_path(current_directory, source_directory,
                                "restore rename parent spelling");
         if (!moved) return std::unexpected{moved.error()};
+        using Point = detail::safe_writer_testing::FailurePoint;
+        if (consume_failure(Point::after_reverse_parent_migration, 0)) {
+            return std::unexpected{injected_failure(
+                failure_point_name(Point::after_reverse_parent_migration), source_directory)};
+        }
         retarget_transaction_artifacts_after_directory_move(transaction, current_directory,
                                                              source_directory);
+        transaction.parent_migration.reset();
         current_components[index] = source_components[index];
         entry.rename_temporary = component_prefix(transaction.root, current_components,
                                                    current_components.size());
@@ -3490,7 +3517,12 @@ pending_parent_migration_source(const Transaction& transaction,
                 entry.temporary = entry.rename_temporary.parent_path() / entry.temporary.filename();
             }
             auto content = read_file(*resolved_temporary);
-            if (!content || SafeWriter::sha256(*content) != entry.pre_hash) {
+            if (!content) {
+                return std::unexpected{error("rename temporary changed while transaction recovery was pending",
+                                             entry.rename_temporary.generic_string())};
+            }
+            const auto temporary_hash = SafeWriter::sha256(*content);
+            if (temporary_hash != entry.pre_hash && temporary_hash != entry.post_hash) {
                 return std::unexpected{error("rename temporary changed while transaction recovery was pending",
                                              entry.rename_temporary.generic_string())};
             }

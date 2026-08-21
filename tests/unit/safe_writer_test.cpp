@@ -1598,6 +1598,48 @@ TEST_CASE("safe writer rolls back filename and shared-parent spelling migrations
     CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
 }
 
+TEST_CASE("safe writer recovers an interrupted reverse parent migration") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    const auto previous = file_set({{"Foo/a.txt", "a-old\n"}});
+    REQUIRE(writer.write(previous));
+    const auto previous_manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+
+    const auto next = file_set({{"foo/a.txt", "a-new\n"},
+                                {"foo/generated/child.txt", "child\n"}});
+    {
+        FailureInjectionScope injection{{FailurePoint::after_replacement, 1}};
+        cmakegen::detail::safe_writer_testing::queue_failure_injection(
+            {FailurePoint::after_reverse_parent_migration, 0});
+        const auto result = writer.write(next);
+        REQUIRE_FALSE(result);
+        CHECK(result.error().diagnostics().front().message.find("requires operator recovery") !=
+              std::string::npos);
+    }
+
+    const auto transaction = fixture.path() / ".cmakegen/transaction";
+    REQUIRE(std::filesystem::exists(transaction / "journal.json"));
+    const auto interrupted_journal = nlohmann::json::parse(
+        read_file(transaction / "journal.json"));
+    REQUIRE(interrupted_journal["parent_migration"].is_object());
+    CHECK(interrupted_journal["parent_migration"]["source"] == "foo");
+    CHECK(interrupted_journal["parent_migration"]["destination"] == "Foo");
+    CHECK(std::ranges::find(interrupted_journal["created_directories"],
+                            "foo/generated") !=
+          interrupted_journal["created_directories"].end());
+    CHECK(has_exact_directory_entry(fixture.path(), "Foo"));
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "foo"));
+
+    const auto recovered = writer.write(previous);
+    if (!recovered) {
+        FAIL(recovered.error().diagnostics().front().message);
+    }
+    CHECK(read_file(fixture.path() / "Foo/a.txt") == "a-old\n");
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / "Foo/generated"));
+    CHECK(read_file(fixture.path() / ".cmakegen/manifest.json") == previous_manifest);
+    CHECK_FALSE(std::filesystem::exists(transaction));
+}
+
 TEST_CASE("safe writer migrates a shared parent before creating a sibling output") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};

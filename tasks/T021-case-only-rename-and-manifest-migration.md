@@ -244,3 +244,17 @@ and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).
 - Pending parent migrations now inspect the exact directory-entry spelling,
   rather than mutually exclusive path existence, so case-insensitive volumes
   distinguish pre-move from post-move state safely.
+
+### Review follow-up (interrupted reverse parent migration)
+
+- Rollback now persists a reverse parent-migration intent before restoring a
+  directory's original spelling. Recovery accepts only staging paths that the
+  pending source-to-destination transform maps to their canonical location,
+  then retargets all physical transaction artifacts before rollback resumes.
+- Recovery accepts a claimed reverse-rename temporary only when its content
+  matches the journaled pre- or post-transaction hash, covering interruption
+  after the directory move without weakening unowned-file protection.
+- Verification: the interrupted reverse-parent recovery test passed (17
+  assertions); the isolated SafeWriter suite passed 73 runnable cases with 4
+  platform-appropriate skips (712 assertions); the normal test target and
+  bootstrap generator build passed; `git diff --check` passed.

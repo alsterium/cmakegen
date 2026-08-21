@@ -297,7 +297,12 @@ outward, and a parent containing unowned entries is not moved. Multiple rename
 entries may share that migrated parent; transaction-owned sibling outputs and
 their temporaries remain part of the directory migration. Recovery adopts a
 resolved transaction temporary when a crash leaves the journal one spelling
-behind. Descendants are checked recursively before an owned ancestor is moved,
+behind. Both forward migration and rollback's reverse migration persist a
+source-to-destination parent intent before moving the directory. Recovery
+reconciles the exact physical spelling and retargets transaction artifacts
+before resuming, so an interruption cannot leave created-directory or staging
+paths bound to the pre-move spelling. Descendants are checked recursively
+before an owned ancestor is moved,
 and replacement staging uses the existing physical parent until that migration
 has occurred. Rename temporaries carry an explicit ownership flag, so a
 pre-existing sibling is preserved even when its content happens to match the
