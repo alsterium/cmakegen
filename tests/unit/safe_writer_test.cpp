@@ -111,7 +111,6 @@ private:
 #endif
 }
 
-#if defined(__APPLE__) || defined(_WIN32)
 [[nodiscard]] bool filesystem_has_alias(const std::filesystem::path& root, std::string_view first,
                                         std::string_view second) {
     const auto first_path = root / utf8_path(first);
@@ -124,7 +123,14 @@ private:
     std::filesystem::remove(second_path, error);
     return aliases;
 }
-#endif
+
+[[nodiscard]] bool has_exact_directory_entry(const std::filesystem::path& root, std::string_view name) {
+    std::error_code error;
+    for (const auto& entry : std::filesystem::directory_iterator(root, error)) {
+        if (entry.path().filename().generic_string() == name) return true;
+    }
+    return false;
+}
 
 [[nodiscard]] cmakegen::GeneratedFileSet file_set(std::initializer_list<cmakegen::GeneratedFile> files) {
     cmakegen::GeneratedFileSet result;
@@ -814,6 +820,18 @@ TEST_CASE("safe writer protects unowned files unless force is requested") {
     CHECK(read_file(fixture.path() / "CMakeLists.txt") == "generated\n");
 }
 
+TEST_CASE("safe writer force-renames an unowned portable alias to the requested spelling") {
+    TemporaryDirectory fixture;
+    write_file(fixture.path() / "Foo.txt", "user\n");
+    cmakegen::SafeWriter writer{fixture.path()};
+
+    REQUIRE(writer.write(file_set({{"foo.txt", "generated\n"}}), {.force = true}));
+    CHECK(read_file(fixture.path() / "foo.txt") == "generated\n");
+    CHECK(has_exact_directory_entry(fixture.path(), "foo.txt"));
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "Foo.txt"));
+    CHECK(read_file(fixture.path() / ".cmakegen/manifest.json").find("foo.txt") != std::string::npos);
+}
+
 TEST_CASE("safe writer rejects outputs that collide with deterministic staging paths") {
     TemporaryDirectory fixture;
     cmakegen::SafeWriter writer{fixture.path()};
@@ -870,6 +888,77 @@ TEST_CASE("safe writer rejects missing or modified retained outputs before openi
     CHECK(modified.error().diagnostics().front().message.find("retained manifest-owned output") != std::string::npos);
     CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
     CHECK(read_file(fixture.path() / "changed.txt") == "first\n");
+}
+
+TEST_CASE("safe writer rejects outputs that collide with case-only rename temporaries") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo.txt", "old\n"}})));
+    const auto result = writer.write(file_set({
+        {"foo.txt", "new\n"},
+        {".foo.txt.cmakegen-rename.tmp", "temporary\n"},
+    }));
+
+    REQUIRE_FALSE(result);
+    CHECK(result.error().diagnostics().front().message.find("rename temporary") != std::string::npos);
+    CHECK(read_file(fixture.path() / "Foo.txt") == "old\n");
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+}
+
+TEST_CASE("safe writer only checks rename temporary collisions for planned renames") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo.txt", "old\n"},
+                                   {".foo.txt.cmakegen-rename.tmp", "retained\n"}})));
+
+    const auto result = writer.write(file_set({{"foo.txt", "new\n"}}), {.cleanup_stale = false});
+    REQUIRE_FALSE(result);
+    CHECK(result.error().diagnostics().front().message.find("rename temporary") != std::string::npos);
+    CHECK(read_file(fixture.path() / "Foo.txt") == "old\n");
+    CHECK(read_file(fixture.path() / ".foo.txt.cmakegen-rename.tmp") == "retained\n");
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+}
+
+TEST_CASE("safe writer checks rename staging paths against retained outputs") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo.txt", "old\n"}})));
+    REQUIRE(writer.write(file_set({{".foo.txt.cmakegen-transaction.tmp", "retained\n"}}),
+                         {.cleanup_stale = false}));
+
+    const auto next = file_set({{"foo.txt", "new\n"}});
+    const auto checked = writer.write(next, {.check = true, .cleanup_stale = false});
+    REQUIRE_FALSE(checked);
+    CHECK(checked.error().diagnostics().front().message.find("staging path") != std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+
+    const auto dry_run = writer.write(next, {.dry_run = true, .cleanup_stale = false});
+    REQUIRE_FALSE(dry_run);
+    CHECK(dry_run.error().diagnostics().front().message.find("staging path") != std::string::npos);
+    CHECK(read_file(fixture.path() / "Foo.txt") == "old\n");
+    CHECK(read_file(fixture.path() / ".foo.txt.cmakegen-transaction.tmp") == "retained\n");
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+}
+
+TEST_CASE("safe writer validates occupied rename staging paths before journaling") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo.txt", "old\n"}})));
+    write_file(fixture.path() / ".foo.txt.cmakegen-transaction.tmp", "unowned\n");
+    const auto next = file_set({{"foo.txt", "new\n"}});
+
+    const auto checked = writer.write(next, {.check = true});
+    REQUIRE_FALSE(checked);
+    CHECK(checked.error().diagnostics().front().message.find("staging path is occupied") != std::string::npos);
+    const auto dry_run = writer.write(next, {.dry_run = true});
+    REQUIRE_FALSE(dry_run);
+    CHECK(dry_run.error().diagnostics().front().message.find("staging path is occupied") != std::string::npos);
+    const auto result = writer.write(next);
+    REQUIRE_FALSE(result);
+    CHECK(result.error().diagnostics().front().message.find("staging path is occupied") != std::string::npos);
+    CHECK(read_file(fixture.path() / "Foo.txt") == "old\n");
+    CHECK(read_file(fixture.path() / ".foo.txt.cmakegen-transaction.tmp") == "unowned\n");
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
 }
 
 TEST_CASE("safe writer verifies a manifest-owned file before replacing it") {
@@ -1139,6 +1228,25 @@ TEST_CASE("safe writer accepts distinct ASCII parents beside macOS Unicode outpu
     CHECK(std::filesystem::exists(fixture.path() / "other/plain.txt"));
 }
 
+TEST_CASE("safe writer treats normalization-only aliases as an unchanged physical spelling") {
+    TemporaryDirectory fixture;
+    const std::string composed = "caf\xc3\xa9.txt";
+    const std::string decomposed = "cafe\xcc\x81.txt";
+    if (!filesystem_has_alias(fixture.path(), composed, decomposed)) {
+        SKIP("filesystem does not normalize these Unicode aliases");
+    }
+
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{utf8_path(composed), "content\n"}})));
+    const auto manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+
+    const auto rerun = writer.write(file_set({{utf8_path(decomposed), "content\n"}}));
+    REQUIRE(rerun);
+    CHECK_FALSE(rerun->would_change);
+    CHECK(rerun->files_written == 0);
+    CHECK(read_file(fixture.path() / ".cmakegen/manifest.json") == manifest);
+}
+
 TEST_CASE("safe writer uses macOS Unicode case aliases for ownership and cleanup") {
     TemporaryDirectory fixture;
     const std::string upper = "\xc3\x85.txt";
@@ -1151,8 +1259,9 @@ TEST_CASE("safe writer uses macOS Unicode case aliases for ownership and cleanup
     const auto first = writer.write(file_set({{utf8_path(upper), "first\n"}}));
     REQUIRE(first);
     const auto updated = writer.write(file_set({{utf8_path(lower), "second\n"}}));
-    CHECK_FALSE(updated);
-    CHECK(read_file(fixture.path() / utf8_path(upper)) == "first\n");
+    REQUIRE(updated);
+    CHECK(updated->files_written == 1);
+    CHECK(read_file(fixture.path() / utf8_path(lower)) == "second\n");
     REQUIRE(writer.clean());
     CHECK_FALSE(std::filesystem::exists(fixture.path() / utf8_path(upper)));
 }
@@ -1279,10 +1388,494 @@ TEST_CASE("safe writer recognizes manifest ownership through portable path alias
     REQUIRE(writer.write(file_set({{"Foo.txt", "first\n"}})));
 
     const auto updated = writer.write(file_set({{"foo.txt", "second\n"}}));
-    CHECK_FALSE(updated);
-    CHECK(read_file(fixture.path() / "Foo.txt") == "first\n");
+    REQUIRE(updated);
+    CHECK(read_file(fixture.path() / "foo.txt") == "second\n");
     REQUIRE(writer.clean());
     CHECK_FALSE(std::filesystem::exists(fixture.path() / "Foo.txt"));
+}
+
+TEST_CASE("safe writer realizes case-only renames and migrates the manifest spelling") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo.txt", "first\n"}})));
+
+    const auto renamed = writer.write(file_set({{"foo.txt", "second\n"}}));
+    REQUIRE(renamed);
+    CHECK(renamed->would_change);
+    CHECK(renamed->files_written == 1);
+    CHECK(read_file(fixture.path() / "foo.txt") == "second\n");
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "Foo.txt"));
+    CHECK(has_exact_directory_entry(fixture.path(), "foo.txt"));
+
+    const auto migrated_manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+    CHECK(migrated_manifest.find("\"path\": \"Foo.txt\"") == std::string::npos);
+    CHECK(migrated_manifest.find("\"path\": \"foo.txt\"") != std::string::npos);
+    CHECK(migrated_manifest.find(cmakegen::SafeWriter::sha256("second\n")) != std::string::npos);
+
+    const auto reversed = writer.write(file_set({{"Foo.txt", "third\n"}}));
+    REQUIRE(reversed);
+    CHECK(read_file(fixture.path() / "Foo.txt") == "third\n");
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "foo.txt"));
+    CHECK(has_exact_directory_entry(fixture.path(), "Foo.txt"));
+    const auto reversed_manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+    CHECK(reversed_manifest.find("\"path\": \"foo.txt\"") == std::string::npos);
+    CHECK(reversed_manifest.find("\"path\": \"Foo.txt\"") != std::string::npos);
+
+    const auto unchanged = writer.write(file_set({{"Foo.txt", "third\n"}}));
+    REQUIRE(unchanged);
+    CHECK_FALSE(unchanged->would_change);
+    CHECK(unchanged->files_written == 0);
+}
+
+TEST_CASE("safe writer preserves an unclaimed rename temporary with matching content") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo.txt", "first\n"}})));
+
+    const auto rename_temporary = fixture.path() / ".foo.txt.cmakegen-rename.tmp";
+    write_file(rename_temporary, "first\n");
+    const auto result = writer.write(file_set({{"foo.txt", "second\n"}}));
+
+    REQUIRE_FALSE(result);
+    CHECK(read_file(fixture.path() / "Foo.txt") == "first\n");
+    CHECK(read_file(rename_temporary) == "first\n");
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+}
+
+TEST_CASE("safe writer migrates a nested case-only parent directory spelling") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/file.txt", "first\n"}})));
+
+    const auto renamed = writer.write(file_set({{"foo/file.txt", "second\n"}}));
+    REQUIRE(renamed);
+    CHECK(read_file(fixture.path() / "foo/file.txt") == "second\n");
+    CHECK(has_exact_directory_entry(fixture.path(), "foo"));
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "Foo"));
+    const auto migrated_manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+    CHECK(migrated_manifest.find("\"path\": \"foo/file.txt\"") != std::string::npos);
+    CHECK(migrated_manifest.find("\"path\": \"Foo/file.txt\"") == std::string::npos);
+
+    {
+        FailureInjectionScope injection{{FailurePoint::after_replacement, 0}};
+        const auto result = writer.write(file_set({{"Foo/file.txt", "third\n"}}));
+        REQUIRE_FALSE(result);
+        CHECK(result.error().diagnostics().front().message.find("rollback completed") != std::string::npos);
+    }
+
+    CHECK(read_file(fixture.path() / "foo/file.txt") == "second\n");
+    CHECK(has_exact_directory_entry(fixture.path(), "foo"));
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "Foo"));
+    CHECK(read_file(fixture.path() / ".cmakegen/manifest.json") == migrated_manifest);
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+}
+
+TEST_CASE("safe writer migrates a case-only parent shared by multiple outputs") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/a.txt", "a-old\n"}, {"Foo/b.txt", "b-old\n"}})));
+    const auto previous_manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+    const auto next = file_set({{"foo/a.txt", "a-new\n"}, {"foo/b.txt", "b-new\n"}});
+
+    {
+        FailureInjectionScope injection{{FailurePoint::after_replacement, 1}};
+        const auto result = writer.write(next);
+        REQUIRE_FALSE(result);
+        CHECK(result.error().diagnostics().front().message.find("rollback completed") != std::string::npos);
+    }
+
+    CHECK(read_file(fixture.path() / "Foo/a.txt") == "a-old\n");
+    CHECK(read_file(fixture.path() / "Foo/b.txt") == "b-old\n");
+    CHECK(has_exact_directory_entry(fixture.path(), "Foo"));
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "foo"));
+    CHECK(read_file(fixture.path() / ".cmakegen/manifest.json") == previous_manifest);
+
+    REQUIRE(writer.write(next));
+    CHECK(read_file(fixture.path() / "foo/a.txt") == "a-new\n");
+    CHECK(read_file(fixture.path() / "foo/b.txt") == "b-new\n");
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "Foo"));
+    CHECK(has_exact_directory_entry(fixture.path(), "foo"));
+}
+
+TEST_CASE("safe writer rejects requested siblings that conflict with parent migration spelling") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/a.txt", "a-old\n"}, {"Foo/b.txt", "b-old\n"}})));
+    const auto previous_manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+    const auto next = file_set({{"foo/a.txt", "a-new\n"}, {"Foo/b.txt", "b-new\n"}});
+
+    const auto checked = writer.write(next, {.check = true});
+    REQUIRE_FALSE(checked);
+    CHECK(checked.error().diagnostics().front().message.find("parent spelling migration") != std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+
+    const auto dry_run = writer.write(next, {.dry_run = true});
+    REQUIRE_FALSE(dry_run);
+    CHECK(dry_run.error().diagnostics().front().message.find("parent spelling migration") != std::string::npos);
+    CHECK(read_file(fixture.path() / "Foo/a.txt") == "a-old\n");
+    CHECK(read_file(fixture.path() / "Foo/b.txt") == "b-old\n");
+    CHECK(read_file(fixture.path() / ".cmakegen/manifest.json") == previous_manifest);
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+}
+
+TEST_CASE("safe writer migrates retained owned siblings with stale cleanup disabled") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/a.txt", "a-old\n"}, {"Foo/b.txt", "b-old\n"}})));
+
+    REQUIRE(writer.write(file_set({{"foo/a.txt", "a-new\n"}}), {.cleanup_stale = false}));
+    CHECK(read_file(fixture.path() / "foo/a.txt") == "a-new\n");
+    CHECK(read_file(fixture.path() / "foo/b.txt") == "b-old\n");
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "Foo"));
+    CHECK(has_exact_directory_entry(fixture.path(), "foo"));
+    const auto manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+    CHECK(manifest.find("\"path\": \"foo/a.txt\"") != std::string::npos);
+    CHECK(manifest.find("\"path\": \"foo/b.txt\"") != std::string::npos);
+    CHECK(manifest.find("\"path\": \"Foo/b.txt\"") == std::string::npos);
+}
+
+TEST_CASE("safe writer migrates retained files across nested parent migrations") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/A/x.txt", "x-old\n"}, {"Foo/B/y.txt", "y-old\n"}})));
+
+    REQUIRE(writer.write(file_set({{"foo/a/x.txt", "x-new\n"}}), {.cleanup_stale = false}));
+    CHECK(read_file(fixture.path() / "foo/a/x.txt") == "x-new\n");
+    CHECK(read_file(fixture.path() / "foo/B/y.txt") == "y-old\n");
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "Foo"));
+    CHECK(has_exact_directory_entry(fixture.path(), "foo"));
+    const auto manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+    CHECK(manifest.find("\"path\": \"foo/a/x.txt\"") != std::string::npos);
+    CHECK(manifest.find("\"path\": \"foo/B/y.txt\"") != std::string::npos);
+    CHECK(manifest.find("\"path\": \"Foo/B/y.txt\"") == std::string::npos);
+}
+
+TEST_CASE("safe writer force migrates modified retained siblings") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/a.txt", "a-old\n"}, {"Foo/b.txt", "b-old\n"}})));
+    write_file(fixture.path() / "Foo/b.txt", "user edit\n");
+
+    REQUIRE(writer.write(file_set({{"foo/a.txt", "a-new\n"}}),
+                         {.force = true, .cleanup_stale = false}));
+    CHECK(read_file(fixture.path() / "foo/b.txt") == "user edit\n");
+    const auto manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+    CHECK(manifest.find("\"path\": \"foo/b.txt\"") != std::string::npos);
+    CHECK(manifest.find(cmakegen::SafeWriter::sha256("user edit\n")) != std::string::npos);
+    CHECK(manifest.find("\"path\": \"Foo/b.txt\"") == std::string::npos);
+}
+
+TEST_CASE("safe writer bases later parent migrations on the resolved tree") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/A/x.txt", "x-old\n"}, {"Foo/B/y.txt", "y-old\n"}})));
+
+    REQUIRE(writer.write(file_set({{"foo/a/x.txt", "x-new\n"}, {"foo/b/y.txt", "y-new\n"}})));
+    CHECK(read_file(fixture.path() / "foo/a/x.txt") == "x-new\n");
+    CHECK(read_file(fixture.path() / "foo/b/y.txt") == "y-new\n");
+    CHECK(has_exact_directory_entry(fixture.path(), "foo"));
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "Foo"));
+}
+
+TEST_CASE("safe writer rolls back filename and shared-parent spelling migrations together") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/A.txt", "a-old\n"}, {"Foo/B.txt", "b-old\n"}})));
+    const auto previous_manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+
+    {
+        FailureInjectionScope injection{{FailurePoint::after_replacement, 1}};
+        const auto result = writer.write(file_set({{"foo/a.txt", "a-new\n"}, {"foo/b.txt", "b-new\n"}}));
+        REQUIRE_FALSE(result);
+        CHECK(result.error().diagnostics().front().message.find("rollback completed") != std::string::npos);
+    }
+
+    CHECK(read_file(fixture.path() / "Foo/A.txt") == "a-old\n");
+    CHECK(read_file(fixture.path() / "Foo/B.txt") == "b-old\n");
+    CHECK(has_exact_directory_entry(fixture.path(), "Foo"));
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "foo"));
+    CHECK(read_file(fixture.path() / ".cmakegen/manifest.json") == previous_manifest);
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+}
+
+TEST_CASE("safe writer recovers an interrupted reverse parent migration") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    const auto previous = file_set({{"Foo/a.txt", "a-old\n"}});
+    REQUIRE(writer.write(previous));
+    const auto previous_manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+
+    const auto next = file_set({{"foo/a.txt", "a-new\n"},
+                                {"foo/generated/child.txt", "child\n"}});
+    {
+        FailureInjectionScope injection{{FailurePoint::after_replacement, 1}};
+        cmakegen::detail::safe_writer_testing::queue_failure_injection(
+            {FailurePoint::after_reverse_parent_migration, 0});
+        const auto result = writer.write(next);
+        REQUIRE_FALSE(result);
+        CHECK(result.error().diagnostics().front().message.find("requires operator recovery") !=
+              std::string::npos);
+    }
+
+    const auto transaction = fixture.path() / ".cmakegen/transaction";
+    REQUIRE(std::filesystem::exists(transaction / "journal.json"));
+    const auto interrupted_journal = nlohmann::json::parse(
+        read_file(transaction / "journal.json"));
+    REQUIRE(interrupted_journal["parent_migration"].is_object());
+    CHECK(interrupted_journal["parent_migration"]["source"] == "foo");
+    CHECK(interrupted_journal["parent_migration"]["destination"] == "Foo");
+    CHECK(std::ranges::find(interrupted_journal["created_directories"],
+                            "foo/generated") !=
+          interrupted_journal["created_directories"].end());
+    CHECK(has_exact_directory_entry(fixture.path(), "Foo"));
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "foo"));
+
+    const auto recovered = writer.write(previous);
+    if (!recovered) {
+        FAIL(recovered.error().diagnostics().front().message);
+    }
+    CHECK(read_file(fixture.path() / "Foo/a.txt") == "a-old\n");
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / "Foo/generated"));
+    CHECK(read_file(fixture.path() / ".cmakegen/manifest.json") == previous_manifest);
+    CHECK_FALSE(std::filesystem::exists(transaction));
+}
+
+TEST_CASE("safe writer migrates a shared parent before creating a sibling output") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/a.txt", "a-old\n"}})));
+
+    REQUIRE(writer.write(file_set({{"foo/a.txt", "a-new\n"}, {"foo/b.txt", "b-new\n"}})));
+    CHECK(read_file(fixture.path() / "foo/a.txt") == "a-new\n");
+    CHECK(read_file(fixture.path() / "foo/b.txt") == "b-new\n");
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "Foo"));
+    CHECK(has_exact_directory_entry(fixture.path(), "foo"));
+}
+
+TEST_CASE("safe writer creates nested sibling branches below a pending parent migration") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/A/x.txt", "x-old\n"}})));
+
+    REQUIRE(writer.write(file_set({{"foo/a/x.txt", "x-new\n"}, {"foo/b/y.txt", "y-new\n"}})));
+    CHECK(read_file(fixture.path() / "foo/a/x.txt") == "x-new\n");
+    CHECK(read_file(fixture.path() / "foo/b/y.txt") == "y-new\n");
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "Foo"));
+    CHECK(has_exact_directory_entry(fixture.path(), "foo"));
+}
+
+TEST_CASE("safe writer retargets forced replacements after parent migration") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/a.txt", "a-old\n"}})));
+    write_file(fixture.path() / "Foo/b.txt", "user\n");
+
+    REQUIRE(writer.write(file_set({{"foo/a.txt", "a-new\n"}, {"foo/b.txt", "b-new\n"}}),
+                         {.force = true}));
+    CHECK(read_file(fixture.path() / "foo/a.txt") == "a-new\n");
+    CHECK(read_file(fixture.path() / "foo/b.txt") == "b-new\n");
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "Foo"));
+    CHECK(has_exact_directory_entry(fixture.path(), "foo"));
+}
+
+TEST_CASE("safe writer refuses to migrate an ancestor containing an unowned descendant") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/Sub/generated.txt", "generated\n"}})));
+    write_file(fixture.path() / "Foo/Sub/user.txt", "user\n");
+    const auto previous_manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+
+    CHECK_FALSE(writer.write(file_set({{"foo/Sub/generated.txt", "updated\n"}})));
+    CHECK(read_file(fixture.path() / "Foo/Sub/generated.txt") == "generated\n");
+    CHECK(read_file(fixture.path() / "Foo/Sub/user.txt") == "user\n");
+    CHECK(has_exact_directory_entry(fixture.path(), "Foo"));
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "foo"));
+    CHECK(read_file(fixture.path() / ".cmakegen/manifest.json") == previous_manifest);
+}
+
+TEST_CASE("safe writer inspects unowned descendants below intermediate rename directories") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/A/B/generated.txt", "generated\n"}})));
+    write_file(fixture.path() / "Foo/A/B/user.txt", "user\n");
+    const auto previous_manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+
+    CHECK_FALSE(writer.write(file_set({{"foo/A/B/generated.txt", "updated\n"}})));
+    CHECK(read_file(fixture.path() / "Foo/A/B/generated.txt") == "generated\n");
+    CHECK(read_file(fixture.path() / "Foo/A/B/user.txt") == "user\n");
+    CHECK(has_exact_directory_entry(fixture.path(), "Foo"));
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "foo"));
+    CHECK(read_file(fixture.path() / ".cmakegen/manifest.json") == previous_manifest);
+}
+
+TEST_CASE("safe writer accepts deeper fully-owned intermediate rename directories") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/A/B/C/generated.txt", "generated\n"}})));
+
+    REQUIRE(writer.write(file_set({{"foo/A/B/C/generated.txt", "updated\n"}})));
+    CHECK(read_file(fixture.path() / "foo/A/B/C/generated.txt") == "updated\n");
+    CHECK(has_exact_directory_entry(fixture.path(), "foo"));
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "Foo"));
+}
+
+TEST_CASE("safe writer validates parent conflicts before check and dry-run") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/Sub/generated.txt", "generated\n"}})));
+    write_file(fixture.path() / "Foo/Sub/user.txt", "user\n");
+
+    const auto next = file_set({{"foo/Sub/generated.txt", "updated\n"}});
+    const auto checked = writer.write(next, {.check = true});
+    REQUIRE_FALSE(checked);
+    CHECK(checked.error().diagnostics().front().message.find("unowned descendant") != std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+
+    const auto dry_run = writer.write(next, {.dry_run = true});
+    REQUIRE_FALSE(dry_run);
+    CHECK(dry_run.error().diagnostics().front().message.find("unowned descendant") != std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+}
+
+TEST_CASE("safe writer rejects conflicting spellings for a shared parent migration") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo/A/x.txt", "x-old\n"}, {"Foo/B/y.txt", "y-old\n"}})));
+
+    const auto result = writer.write(file_set({{"foo/A/x.txt", "x-new\n"},
+                                               {"FOO/B/y.txt", "y-new\n"}}));
+    REQUIRE_FALSE(result);
+    CHECK(result.error().diagnostics().front().message.find("conflicting parent migration") != std::string::npos);
+    CHECK(read_file(fixture.path() / "Foo/A/x.txt") == "x-old\n");
+    CHECK(read_file(fixture.path() / "Foo/B/y.txt") == "y-old\n");
+    CHECK(has_exact_directory_entry(fixture.path(), "Foo"));
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "foo"));
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "FOO"));
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+}
+
+TEST_CASE("safe writer validates occupied rename temporaries before journaling") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo.txt", "old\n"}})));
+    write_file(fixture.path() / ".foo.txt.cmakegen-rename.tmp", "unowned\n");
+    const auto next = file_set({{"foo.txt", "new\n"}});
+
+    const auto checked = writer.write(next, {.check = true});
+    REQUIRE_FALSE(checked);
+    CHECK(checked.error().diagnostics().front().message.find("occupied") != std::string::npos);
+    const auto dry_run = writer.write(next, {.dry_run = true});
+    REQUIRE_FALSE(dry_run);
+    CHECK(dry_run.error().diagnostics().front().message.find("occupied") != std::string::npos);
+    const auto result = writer.write(next);
+    REQUIRE_FALSE(result);
+    CHECK(result.error().diagnostics().front().message.find("occupied") != std::string::npos);
+    CHECK(read_file(fixture.path() / "Foo.txt") == "old\n");
+    CHECK(read_file(fixture.path() / ".foo.txt.cmakegen-rename.tmp") == "unowned\n");
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+}
+
+TEST_CASE("safe writer removes stale owned rename temporaries before case-only migration") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo.txt", "old\n"},
+                                   {".foo.txt.cmakegen-rename.tmp", "stale\n"}})));
+    const auto next = file_set({{"foo.txt", "new\n"}});
+
+    const auto checked = writer.write(next, {.check = true});
+    REQUIRE(checked);
+    CHECK(checked->would_change);
+    CHECK(std::filesystem::exists(fixture.path() / ".foo.txt.cmakegen-rename.tmp"));
+    const auto dry_run = writer.write(next, {.dry_run = true});
+    REQUIRE(dry_run);
+    CHECK(dry_run->would_change);
+    CHECK(std::filesystem::exists(fixture.path() / ".foo.txt.cmakegen-rename.tmp"));
+
+    REQUIRE(writer.write(next));
+    CHECK(read_file(fixture.path() / "foo.txt") == "new\n");
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".foo.txt.cmakegen-rename.tmp"));
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+}
+
+TEST_CASE("safe writer removes equivalently spelled stale rename temporaries before migration") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo.txt", "old\n"},
+                                   {".FOO.txt.cmakegen-rename.tmp", "stale\n"}})));
+
+    REQUIRE(writer.write(file_set({{"foo.txt", "new\n"}})));
+    CHECK(read_file(fixture.path() / "foo.txt") == "new\n");
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".FOO.txt.cmakegen-rename.tmp"));
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+}
+
+TEST_CASE("safe writer protects an unowned case-only conflicting path") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo.txt", "generated\n"}})));
+    write_file(fixture.path() / "foo.txt", "user\n");
+    if (!has_exact_directory_entry(fixture.path(), "Foo.txt") ||
+        !has_exact_directory_entry(fixture.path(), "foo.txt")) {
+        SKIP("filesystem cannot represent distinct case-only paths");
+    }
+
+    CHECK_FALSE(writer.write(file_set({{"foo.txt", "replacement\n"}})));
+    CHECK(read_file(fixture.path() / "Foo.txt") == "generated\n");
+    CHECK(read_file(fixture.path() / "foo.txt") == "user\n");
+}
+
+TEST_CASE("safe writer rolls back a physical case-only rename after replacement") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo.txt", "old\n"}})));
+    const auto previous_manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+
+    {
+        FailureInjectionScope injection{{FailurePoint::after_replacement, 0}};
+        const auto result = writer.write(file_set({{"foo.txt", "new\n"}}));
+        REQUIRE_FALSE(result);
+        CHECK(result.error().diagnostics().front().message.find("rollback completed") != std::string::npos);
+    }
+
+    CHECK(read_file(fixture.path() / "Foo.txt") == "old\n");
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "foo.txt"));
+    CHECK(read_file(fixture.path() / ".cmakegen/manifest.json") == previous_manifest);
+    CHECK_FALSE(std::filesystem::exists(fixture.path() / ".cmakegen/transaction"));
+}
+
+TEST_CASE("safe writer retains and recovers a failed case-only rename transaction") {
+    TemporaryDirectory fixture;
+    cmakegen::SafeWriter writer{fixture.path()};
+    REQUIRE(writer.write(file_set({{"Foo.txt", "old\n"}})));
+    const auto previous_manifest = read_file(fixture.path() / ".cmakegen/manifest.json");
+    const auto next = file_set({{"foo.txt", "new\n"}});
+
+    {
+        FailureInjectionScope injection{{FailurePoint::after_replacement, 0}};
+        cmakegen::detail::safe_writer_testing::queue_failure_injection({FailurePoint::rollback, 1});
+        const auto result = writer.write(next);
+        REQUIRE_FALSE(result);
+        CHECK(result.error().diagnostics().front().message.find("requires operator recovery") != std::string::npos);
+    }
+
+    const auto transaction = fixture.path() / ".cmakegen/transaction";
+    REQUIRE(std::filesystem::exists(transaction / "journal.json"));
+    CHECK(read_file(transaction / "journal.json").find("\"kind\": \"rename\"") != std::string::npos);
+    CHECK(read_file(transaction / "journal.json").find("\"state\": \"recovery_required\"") != std::string::npos);
+    CHECK(read_file(fixture.path() / ".cmakegen/manifest.json") == previous_manifest);
+
+    {
+        FailureInjectionScope injection{{FailurePoint::recovery, 1}};
+        const auto recovery = writer.write(next);
+        REQUIRE_FALSE(recovery);
+        CHECK(recovery.error().diagnostics().front().message.find("requires operator recovery") != std::string::npos);
+        CHECK(std::filesystem::exists(transaction / "journal.json"));
+    }
+
+    REQUIRE(writer.write(next));
+    CHECK(read_file(fixture.path() / "foo.txt") == "new\n");
+    CHECK_FALSE(has_exact_directory_entry(fixture.path(), "Foo.txt"));
+    CHECK_FALSE(std::filesystem::exists(transaction));
 }
 
 TEST_CASE("safe writer rejects ambiguous portable aliases before ownership lookup") {

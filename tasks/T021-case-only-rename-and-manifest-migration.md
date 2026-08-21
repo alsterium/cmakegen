@@ -52,3 +52,209 @@ rename currently retains the existing physical spelling and needs an
 alias-aware atomic rename transaction with manifest migration. The operation
 must use the finalized equivalence semantics from [T019](T019-unicode-path-equivalence.md)
 and recovery semantics from [T020](T020-safe-writer-transaction-recovery.md).
+
+## Execution record
+
+- Date: 2026-08-12
+- Summary: Added an internal SafeWriter rename transaction entry carrying the
+  old physical source spelling and requested destination. Owned equivalent
+  paths now use a direct rename on case-sensitive filesystems and a sibling
+  temporary spelling when both aliases resolve to one case-insensitive entry.
+  Rename backups, manifest migration, stale cleanup exclusion, reverse rename
+  rollback, and retained recovery state are journaled with the existing T020
+  transaction lifecycle.
+- Tests: Added Foo.txt to foo.txt and reverse migration coverage with exact
+  directory-entry spelling checks, unchanged-spelling no-op coverage, unowned
+  alias conflict protection, rollback after physical rename, and injected
+  rollback/recovery failure retry coverage. Existing T019 Unicode and T020
+  transaction tests remain green.
+- Verification: Normal and bootstrap builds passed. Focused case-only tests
+  passed (3 cases, 1 platform-appropriate skip, 50 assertions); the isolated
+  SafeWriter suite passed (20 cases, 4 platform-appropriate skips, 205
+  assertions). Bootstrap CTest had no registered tests. Normal CTest passed
+  157/158 tests with the unrelated existing CMake renderer dynamic-values
+  test #14 failing; `git diff --check` passed.
+- Generated files: unchanged; normal CTest's bootstrap source-drift check
+  passed.
+- Follow-ups: The unrelated CMake renderer test #14 remains outside T021 and
+  was not modified.
+
+### Review follow-up
+
+- Case-only parent components are now migrated from deepest to outermost
+  (`Foo/file.txt` → `foo/file.txt`) while the transaction-owned rename and
+  content temporaries move with them. Destination-parent creation avoids
+  creating a second portable-equivalent directory, and rollback reverses the
+  parent spelling migration before restoring the old file and hash.
+- Parent migration refuses to move directories containing entries outside the
+  active transaction, preserving unowned files. Nested-parent coverage now
+  verifies exact directory spelling and rollback after the physical rename.
+- A shared case-only parent is migrated for multiple rename entries, while
+  transaction-owned sibling outputs and staging files are retained. Recovery
+  adopts a resolved rename temporary when the journal records the pre-move
+  parent spelling.
+- Descendants are inspected recursively before moving an owned ancestor, and
+  mixed rename/replace transactions suppress replacement-parent creation and
+  stage new siblings below the existing physical parent until migration.
+- Rename temporary ownership is journaled before the first temporary move;
+  cleanup and rollback leave an unclaimed pre-existing sibling untouched even
+  when its hash matches the rename source.
+- Forced replacements are retargeted when a case-only parent is migrated, so
+  the replacement staging path remains below the physical parent after the
+  rename and cannot be mistaken for an unowned destination.
+- Rollback keeps logical source and destination spellings stable while
+  retargeting transaction artifacts. If a shared parent was restored before a
+  later filename rollback, an equivalent physical source spelling such as
+  `Foo/a.txt` is accepted and moved back to the recorded `Foo/A.txt` source.
+- Generated output paths that equal deterministic case-only rename temporaries
+  are rejected during preflight, and the legacy manifest-alias test now checks
+  the requested physical spelling rather than the previous alias.
+- Parent subtree conflicts are validated while preparing the plan, so check
+  and dry-run report the same unowned-descendant error without creating a
+  transaction; the execution-time validation remains in place for races.
+- Later entries in a multi-output nested parent migration derive their source
+  components from the currently resolved physical tree, so an earlier
+  ancestor move cannot leave a later `Foo/...` lookup stale.
+- When stale cleanup is disabled, retained manifest-owned siblings are added
+  to the parent migration and their manifest paths are updated with the
+  directory spelling change, preserving ownership of omitted outputs.
+- Intermediate ancestors on the path to a transaction artifact are treated
+  as owned directory structure and are still recursively inspected for
+  unowned descendants.
+- Retained outputs are matched against every changed parent prefix, so a
+  retained file in a nested sibling branch follows an outer directory
+  spelling migration even when the requested output is deeper in another
+  branch.
+- Forced parent migrations permit modified retained outputs and record the
+  retained content's current hash while preserving its content.
+- Rename temporary collision checks now run only for planned case-only renames
+  and compare against the complete post-write manifest, including retained
+  outputs.
+- Parent migration planning rejects incompatible requested spellings for the
+  same portable-equivalent ancestor before any transaction is created.
+- Occupied case-only rename temporaries are rejected during plan preparation,
+  so check and dry-run use the same target validation as a real write.
+- New sibling branches below a parent spelling migration are created under the
+  currently existing source parent and retargeted with the directory move, so
+  nested paths such as `foo/b/y.txt` can accompany `Foo/A/x.txt` →
+  `foo/a/x.txt` without creating a second parent alias.
+- Unicode normalization-only aliases preserve the established manifest and
+  physical spelling.  They are no longer treated as case-only physical
+  renames, making an identical re-generation a no-op on APFS/HFS.
+- Every planned content staging artifact is now checked against the complete
+  post-write manifest.  This rejects retained outputs occupying a case-only
+  rename's `.cmakegen-transaction.tmp` path during check and dry-run, before
+  a transaction is created.
+- Explicitly requested siblings are no longer treated as retained files during
+  a parent spelling migration.  Requests with incompatible spellings for a
+  shared migrated parent are rejected during planning instead of creating
+  duplicate transaction entries or silently rewriting the manifest.
+- Verification: the forced-replacement, shared-parent rollback, and
+  parent-migrated source-spelling, rename-temporary collision, and physical
+  spelling, preflight-conflict, resolved-tree migration, retained-sibling,
+  nested-retained-migration, forced-retained-migration,
+  planned-rename-collision, shared-parent-conflict,
+  occupied-rename-temporary, and deep-intermediate-directory cases passed; the
+  full isolated SafeWriter suite passed (50 runnable cases, 4
+  platform-appropriate skips, 501 assertions), and `git diff --check`
+  passed. CI failures remain outside this
+  task.
+
+### Rebase review follow-up
+
+- Rebasing onto the finalized T020 recovery branch preserved its parent-path
+  and pre-hash validation around rename backups while retaining T021's
+  source-to-destination rename recovery.  Rename backups therefore revalidate
+  the physical source path before copying it, rather than weakening T020's
+  transaction boundary checks.
+- The macOS Unicode case-alias ownership regression now expects the requested
+  case-only rename to succeed and verifies the new content through the
+  requested spelling; the prior expectation contradicted T021's physical
+  migration contract.
+- Verification: normal and bootstrap builds passed; the isolated SafeWriter
+  suite passed 62 runnable cases with 4 platform-appropriate skips (601
+  assertions), and `git diff --check` passed.
+
+### Review follow-up (stale rename temporary)
+
+- Preflight now permits a deterministic case-only rename temporary when it is
+  a manifest-owned stale output scheduled for removal in the same transaction.
+  The remove entry is backed up before the rename claims its temporary path;
+  unowned occupancy remains rejected.
+- Verification: check, dry-run, and write coverage confirms the stale output
+  is retained during read-only modes and removed before a successful rename.
+
+### Review follow-up (staging occupancy)
+
+- Planning now probes the physical deterministic content-staging path used by
+  content-changing case-only renames. Check and dry-run reject an unowned
+  occupied path before transaction artifacts are created, while staging still
+  revalidates it to close the race window.
+
+### Review follow-up (forced and equivalent aliases)
+
+- Forced takeover of an unowned portable alias now uses the rename transaction
+  when its spelling differs only by case, so the first successful generation
+  realizes the requested physical spelling and manifest entry together.
+- Scheduled stale removal of a rename temporary now compares paths with the
+  filesystem equivalence policy, allowing a manifest-owned differently cased
+  temporary to be backed up before the rename claims its canonical temporary.
+- Verification: normal and bootstrap builds passed; the isolated SafeWriter
+  suite passed 68 runnable cases with 4 platform-appropriate skips (659
+  assertions), and `git diff --check` passed.
+
+### Stack rebase follow-up
+
+- Rebasing onto T020 `540dbe2` retained both the target-parent Unicode and
+  normalization-only alias regression cases. Rename temporary ownership now
+  clears after consumption while a separate journaled completion flag retains
+  the information needed for case-only rollback.
+- Verification: normal and bootstrap builds passed; the isolated SafeWriter
+  suite passed 70 runnable cases with 4 platform-appropriate skips (673
+  assertions), and `git diff --check` passed.
+
+### Stack rebase follow-up (T020 ef7ab98)
+
+- Retained-output preflight from T020 now honors T021's force policy: a
+  modified retained output keeps ownership with its current hash, including
+  while a case-only parent migration retargets its manifest spelling.
+- Verification: normal and bootstrap builds passed; the isolated SafeWriter
+  suite passed 72 runnable cases with 4 platform-appropriate skips (691
+  assertions), and `git diff --check` passed.
+
+### Review follow-up (interrupted parent migration)
+
+- Parent spelling migration now records a durable migration intent before the
+  physical directory move. Recovery distinguishes an unchanged source tree
+  from a completed destination tree; only in the latter case it applies one
+  deterministic transform to every path-bearing transaction field and writes
+  the cleared intent back to the journal. Repeated recovery is therefore
+  idempotent and cannot mix old and moved sibling artifacts.
+- Rename-temporary ownership is also released after rollback consumes that
+  temporary, matching the forward rename cleanup boundary.
+- Verification: normal and bootstrap builds passed; the isolated SafeWriter
+  suite passed 72 runnable cases with 4 platform-appropriate skips (691
+  assertions), and `git diff --check` passed.
+
+### Review follow-up (parent-migration reconciliation)
+
+- Recovery keeps logical rename source and destination spellings unchanged for
+  rollback and manifest restoration; only physical transaction artifacts move
+  with a proven completed parent migration.
+- Pending parent migrations now inspect the exact directory-entry spelling,
+  rather than mutually exclusive path existence, so case-insensitive volumes
+  distinguish pre-move from post-move state safely.
+
+### Review follow-up (interrupted reverse parent migration)
+
+- Rollback now persists a reverse parent-migration intent before restoring a
+  directory's original spelling. Recovery accepts only staging paths that the
+  pending source-to-destination transform maps to their canonical location,
+  then retargets all physical transaction artifacts before rollback resumes.
+- Recovery accepts a claimed reverse-rename temporary only when its content
+  matches the journaled pre- or post-transaction hash, covering interruption
+  after the directory move without weakening unowned-file protection.
+- Verification: the interrupted reverse-parent recovery test passed (17
+  assertions); the isolated SafeWriter suite passed 73 runnable cases with 4
+  platform-appropriate skips (712 assertions); the normal test target and
+  bootstrap generator build passed; `git diff --check` passed.

@@ -1029,6 +1029,13 @@ Result<bool> FilesystemCapabilities::equivalent(std::string_view left, std::stri
     return destination.parent_path() / name;
 }
 
+[[nodiscard]] std::filesystem::path rename_transaction_temp_path(const std::filesystem::path& destination,
+                                                                 const std::filesystem::path& source = {}) {
+    const auto parent = source.empty() ? destination.parent_path() : source.parent_path();
+    return parent /
+           ("." + destination.filename().string() + ".cmakegen-rename.tmp");
+}
+
 [[nodiscard]] std::string transaction_backup_name(std::size_t index) {
     std::ostringstream output;
     output << "backups/" << std::setw(6) << std::setfill('0') << index << ".bak";
@@ -1123,6 +1130,54 @@ Result<bool> FilesystemCapabilities::equivalent(std::string_view left, std::stri
     if (ec) {
         return std::unexpected{error("cannot remove stale transaction temporary: " + ec.message(),
                                      temporary.generic_string())};
+    }
+    return {};
+}
+
+[[nodiscard]] Result<void> move_path(const std::filesystem::path& source,
+                                      const std::filesystem::path& destination,
+                                      std::string_view description) {
+    std::error_code ec;
+#ifdef _WIN32
+    if (!::MoveFileExW(source.c_str(), destination.c_str(), MOVEFILE_WRITE_THROUGH)) {
+        ec = {static_cast<int>(::GetLastError()), std::system_category()};
+    }
+#else
+    std::filesystem::rename(source, destination, ec);
+#endif
+    if (ec) {
+        return std::unexpected{error("cannot " + std::string{description} + ": " + ec.message(),
+                                     source.generic_string())};
+    }
+    return {};
+}
+
+[[nodiscard]] Result<void> copy_to_backup(const std::filesystem::path& source,
+                                           const std::filesystem::path& backup,
+                                           std::string_view expected_hash) {
+    std::error_code ec;
+    const auto source_status = std::filesystem::symlink_status(source, ec);
+    if (ec || !std::filesystem::is_regular_file(source_status)) {
+        return std::unexpected{error("cannot copy rename source into transaction backup: " +
+                                         (ec ? ec.message() : std::string{"source is not a regular file"}),
+                                     source.generic_string())};
+    }
+    const auto backup_status = std::filesystem::symlink_status(backup, ec);
+    if (!is_not_found(ec) && (ec || backup_status.type() != std::filesystem::file_type::not_found)) {
+        return std::unexpected{error("transaction backup already exists", backup.generic_string())};
+    }
+    ec.clear();
+    if (!std::filesystem::copy_file(source, backup, std::filesystem::copy_options::none, ec) || ec) {
+        return std::unexpected{error("cannot copy rename source into transaction backup: " + ec.message(),
+                                     source.generic_string())};
+    }
+    auto content = read_file(backup);
+    if (!content) return std::unexpected{content.error()};
+    if (SafeWriter::sha256(*content) != expected_hash) {
+        std::error_code ignored;
+        std::filesystem::remove(backup, ignored);
+        return std::unexpected{error("rename source changed while transaction was being prepared",
+                                     source.generic_string())};
     }
     return {};
 }
@@ -1230,6 +1285,7 @@ constexpr std::array<std::uint32_t, 64> sha_constants = {
 enum class TransactionEntryKind {
     remove,
     replace,
+    rename,
     manifest,
 };
 
@@ -1250,6 +1306,8 @@ enum class TransactionEntryStatus {
         return "remove";
     case TransactionEntryKind::replace:
         return "replace";
+    case TransactionEntryKind::rename:
+        return "rename";
     case TransactionEntryKind::manifest:
         return "manifest";
     }
@@ -1281,6 +1339,7 @@ enum class TransactionEntryStatus {
 [[nodiscard]] Result<TransactionEntryKind> parse_entry_kind(std::string_view value) {
     if (value == "remove") return TransactionEntryKind::remove;
     if (value == "replace") return TransactionEntryKind::replace;
+    if (value == "rename") return TransactionEntryKind::rename;
     if (value == "manifest") return TransactionEntryKind::manifest;
     return std::unexpected{error("transaction journal contains an unknown entry kind")};
 }
@@ -1335,14 +1394,17 @@ struct PlannedEntry {
     bool post_exists = false;
     std::string post_hash;
     std::string content;
+    std::filesystem::path source;
 };
 
 struct TransactionEntry {
     TransactionEntryKind kind = TransactionEntryKind::replace;
     TransactionEntryStatus status = TransactionEntryStatus::pending;
     std::string logical_path;
+    std::filesystem::path source;
     std::filesystem::path destination;
     std::filesystem::path temporary;
+    std::filesystem::path rename_temporary;
     std::filesystem::path backup;
     bool had_original = false;
     std::string pre_hash;
@@ -1350,6 +1412,8 @@ struct TransactionEntry {
     std::string post_hash;
     std::string content;
     bool staging_claimed = false;
+    bool rename_claimed = false;
+    bool rename_completed = false;
 };
 
 struct Transaction {
@@ -1374,6 +1438,7 @@ struct Transaction {
     // Persisted before create_directory so recovery can distinguish an
     // interrupted file-to-directory transition from an unrelated directory.
     std::optional<std::filesystem::path> creating_directory;
+    std::optional<std::pair<std::filesystem::path, std::filesystem::path>> parent_migration;
     FilesystemCapabilities capabilities;
 };
 
@@ -1384,6 +1449,111 @@ struct PreparedPlan {
     WriteResult result;
     FilesystemCapabilities capabilities;
 };
+
+[[nodiscard]] Result<void> validate_generated_rename_collisions(
+    const std::vector<PlannedEntry>& entries,
+    const Manifest& post_manifest,
+    const FilesystemCapabilities& capabilities) {
+    for (const auto& entry : entries) {
+        if (entry.kind != TransactionEntryKind::rename) continue;
+        const auto rename_temporary = rename_transaction_temp_path(entry.destination, entry.source)
+                                          .lexically_relative(capabilities.project_root)
+                                          .generic_string();
+        for (const auto& [other, hash] : post_manifest.files) {
+            (void)hash;
+            auto equivalent = capabilities.equivalent(other, rename_temporary);
+            if (!equivalent) return std::unexpected{equivalent.error()};
+            auto temporary_ancestor = is_path_ancestor(rename_temporary, other, capabilities);
+            if (!temporary_ancestor) return std::unexpected{temporary_ancestor.error()};
+            auto output_ancestor = is_path_ancestor(other, rename_temporary, capabilities);
+            if (!output_ancestor) return std::unexpected{output_ancestor.error()};
+            if (*equivalent || *temporary_ancestor || *output_ancestor) {
+                return std::unexpected{error("generated output collides with a case-only rename temporary",
+                                             other)};
+            }
+        }
+    }
+    return {};
+}
+
+[[nodiscard]] Result<void> validate_planned_staging_collisions(
+    const std::vector<PlannedEntry>& entries,
+    const Manifest& post_manifest,
+    const FilesystemCapabilities& capabilities) {
+    for (const auto& entry : entries) {
+        const bool needs_staging = entry.kind == TransactionEntryKind::replace ||
+                                   (entry.kind == TransactionEntryKind::rename &&
+                                    entry.pre_hash != entry.post_hash);
+        if (!needs_staging) continue;
+        const auto staging_parent = entry.kind == TransactionEntryKind::rename &&
+                                            entry.source.parent_path() != entry.destination.parent_path()
+                                        ? entry.source.parent_path()
+                                        : entry.destination.parent_path();
+        const auto staging = transaction_temp_path(staging_parent / entry.destination.filename())
+                                 .lexically_relative(capabilities.project_root)
+                                 .generic_string();
+        for (const auto& [other, hash] : post_manifest.files) {
+            (void)hash;
+            auto equivalent = capabilities.equivalent(other, staging);
+            if (!equivalent) return std::unexpected{equivalent.error()};
+            auto staging_ancestor = is_path_ancestor(staging, other, capabilities);
+            if (!staging_ancestor) return std::unexpected{staging_ancestor.error()};
+            auto output_ancestor = is_path_ancestor(other, staging, capabilities);
+            if (!output_ancestor) return std::unexpected{output_ancestor.error()};
+            if (*equivalent || *staging_ancestor || *output_ancestor) {
+                return std::unexpected{error("generated output collides with a transaction staging path",
+                                             other)};
+            }
+        }
+    }
+    return {};
+}
+
+[[nodiscard]] Result<void> validate_planned_staging_occupancy(
+    const std::vector<PlannedEntry>& entries, const FilesystemCapabilities& capabilities) {
+    for (const auto& entry : entries) {
+        const bool needs_staging = entry.kind == TransactionEntryKind::replace ||
+                                   (entry.kind == TransactionEntryKind::rename &&
+                                    entry.pre_hash != entry.post_hash);
+        if (!needs_staging) continue;
+        const auto staging_parent = entry.kind == TransactionEntryKind::rename &&
+                                            entry.source.parent_path() != entry.destination.parent_path()
+                                        ? entry.source.parent_path()
+                                        : entry.destination.parent_path();
+        const auto staging = transaction_temp_path(staging_parent / entry.destination.filename());
+        const auto relative = staging.lexically_relative(capabilities.project_root).generic_string();
+
+        bool removed_by_plan = false;
+        for (const auto& candidate : entries) {
+            if (candidate.kind != TransactionEntryKind::remove) continue;
+            const auto candidate_relative = candidate.destination.lexically_relative(capabilities.project_root)
+                                                .generic_string();
+            auto equivalent = capabilities.equivalent(candidate_relative, relative);
+            if (!equivalent) return std::unexpected{equivalent.error()};
+            auto removal_ancestor = is_path_ancestor(candidate_relative, relative, capabilities);
+            if (!removal_ancestor) return std::unexpected{removal_ancestor.error()};
+            if (*equivalent || *removal_ancestor) {
+                removed_by_plan = true;
+                break;
+            }
+        }
+        if (removed_by_plan) continue;
+
+        auto resolved = resolve_existing_alias(capabilities.project_root, relative, capabilities);
+        if (!resolved) return std::unexpected{resolved.error()};
+
+        std::error_code ec;
+        const auto status = std::filesystem::symlink_status(*resolved, ec);
+        if (ec && !is_not_found(ec)) {
+            return std::unexpected{error("cannot inspect transaction staging path: " + ec.message(),
+                                         resolved->generic_string())};
+        }
+        if (!is_not_found(ec) && std::filesystem::exists(status)) {
+            return std::unexpected{error("transaction staging path is occupied", resolved->generic_string())};
+        }
+    }
+    return {};
+}
 
 [[nodiscard]] std::string relative_path(const std::filesystem::path& root,
                                         const std::filesystem::path& path) {
@@ -1416,22 +1586,34 @@ struct PreparedPlan {
     } else {
         json["creating_directory"] = nullptr;
     }
+    if (transaction.parent_migration) {
+        json["parent_migration"] = {{"source", relative_path(transaction.root, transaction.parent_migration->first)},
+                                    {"destination", relative_path(transaction.root, transaction.parent_migration->second)}};
+    } else {
+        json["parent_migration"] = nullptr;
+    }
     json["entries"] = nlohmann::ordered_json::array();
     for (const auto& entry : transaction.entries) {
         nlohmann::ordered_json serialized;
         serialized["kind"] = entry_kind_name(entry.kind);
         serialized["status"] = entry_status_name(entry.status);
         serialized["path"] = entry.logical_path;
+        serialized["source"] = entry.source.empty() ? "" : relative_path(transaction.root, entry.source);
         serialized["destination"] = relative_path(transaction.root, entry.destination);
         serialized["temporary"] = entry.temporary.empty()
                                         ? ""
                                         : temporary_relative_path(transaction, entry.temporary);
+        serialized["rename_temporary"] = entry.rename_temporary.empty()
+                                                ? ""
+                                                : temporary_relative_path(transaction, entry.rename_temporary);
         serialized["backup"] = backup_relative_path(transaction, entry.backup);
         serialized["had_original"] = entry.had_original;
         serialized["pre_sha256"] = entry.pre_hash;
         serialized["post_exists"] = entry.post_exists;
         serialized["post_sha256"] = entry.post_hash;
         serialized["staging_claimed"] = entry.staging_claimed;
+        serialized["rename_claimed"] = entry.rename_claimed;
+        serialized["rename_completed"] = entry.rename_completed;
         json["entries"].push_back(std::move(serialized));
     }
     return json;
@@ -1472,6 +1654,8 @@ std::deque<detail::safe_writer_testing::FailureInjection> failure_injections;
         return "rollback";
     case Point::recovery:
         return "recovery";
+    case Point::after_reverse_parent_migration:
+        return "after reverse parent migration";
     }
     return "transaction";
 }
@@ -1752,6 +1936,19 @@ private:
             if (!unicode_valid) return std::unexpected{unicode_valid.error()};
             transaction.creating_directory = root / path_from_utf8(*normalized);
         }
+        if (json.contains("parent_migration") && !json["parent_migration"].is_null()) {
+            const auto& migration = json["parent_migration"];
+            if (!migration.is_object() || !migration.contains("source") || !migration["source"].is_string() ||
+                !migration.contains("destination") || !migration["destination"].is_string()) {
+                return std::unexpected{error("transaction journal contains an invalid parent migration", journal.generic_string())};
+            }
+            auto source = normalize_relative_path(std::filesystem::path{migration["source"].get<std::string>()});
+            auto destination = normalize_relative_path(std::filesystem::path{migration["destination"].get<std::string>()});
+            if (!source || !destination || is_reserved_metadata_path(*source) || is_reserved_metadata_path(*destination)) {
+                return std::unexpected{error("transaction journal contains an unsafe parent migration", journal.generic_string())};
+            }
+            transaction.parent_migration = std::pair{root / *source, root / *destination};
+        }
 
         std::size_t index = 0;
         for (const auto& value : json["entries"]) {
@@ -1784,10 +1981,31 @@ private:
                 }
                 staging_claimed = value["staging_claimed"].get<bool>();
             }
+            // Older journals did not record rename ownership.  Treat that
+            // state as unclaimed so recovery never deletes an ambiguous
+            // sibling merely because its content matches the source hash.
+            bool rename_claimed = false;
+            if (value.contains("rename_claimed")) {
+                if (!value["rename_claimed"].is_boolean()) {
+                    return std::unexpected{error("transaction journal contains an invalid rename ownership flag",
+                                                 journal.generic_string())};
+                }
+                rename_claimed = value["rename_claimed"].get<bool>();
+            }
+            bool rename_completed = false;
+            if (value.contains("rename_completed")) {
+                if (!value["rename_completed"].is_boolean()) {
+                    return std::unexpected{error("transaction journal contains an invalid rename completion flag",
+                                                 journal.generic_string())};
+                }
+                rename_completed = value["rename_completed"].get<bool>();
+            }
 
             const auto logical_path = value["path"].get<std::string>();
+            const auto source_value = value.value("source", "");
             const auto destination = value["destination"].get<std::string>();
             const bool is_manifest = *kind == TransactionEntryKind::manifest;
+            const bool is_rename = *kind == TransactionEntryKind::rename;
             auto safe_destination = validate_transaction_destination(destination, is_manifest, journal, capabilities);
             if (!safe_destination) return std::unexpected{safe_destination.error()};
             if (is_manifest && (logical_path != manifest_relative_path || destination != manifest_relative_path)) {
@@ -1802,6 +2020,20 @@ private:
                 }
                 auto unicode_valid = capabilities.validate_path(*safe_logical);
                 if (!unicode_valid) return std::unexpected{unicode_valid.error()};
+            }
+            std::filesystem::path source;
+            if (is_rename) {
+                auto safe_source = normalize_relative_path(path_from_utf8(source_value));
+                if (!safe_source || generic_utf8_string(*safe_source) != source_value) {
+                    return std::unexpected{error("transaction journal contains an unsafe rename source",
+                                                 journal.generic_string())};
+                }
+                auto unicode_valid = capabilities.validate_path(*safe_source);
+                if (!unicode_valid) return std::unexpected{unicode_valid.error()};
+                source = root / *safe_source;
+            } else if (!source_value.empty()) {
+                return std::unexpected{error("transaction journal contains an unexpected rename source",
+                                             journal.generic_string())};
             }
             for (const auto& existing : transaction.entries) {
                 auto equivalent = capabilities.equivalent(existing.logical_path, logical_path);
@@ -1820,16 +2052,91 @@ private:
             const auto temporary_value = value["temporary"].get<std::string>();
             std::filesystem::path temporary;
             if (*kind == TransactionEntryKind::replace ||
+                (is_rename && value["post_exists"].get<bool>() &&
+                 value["pre_sha256"].get<std::string>() != value["post_sha256"].get<std::string>()) ||
                 (is_manifest && value["post_exists"].get<bool>())) {
                 temporary = root / path_from_utf8(temporary_value);
-                if (temporary_value != generic_utf8_string(
-                                           transaction_temp_path(root / path_from_utf8(destination))
-                                               .lexically_relative(root))) {
-                    return std::unexpected{error("transaction journal contains an invalid temporary path",
-                                                 journal.generic_string())};
+                if (is_rename) {
+                    auto normalized_temporary = normalize_relative_path(path_from_utf8(temporary_value));
+                    const auto expected_temporary_name =
+                        generic_utf8_string(transaction_temp_path(
+                                                root / path_from_utf8(destination)).filename());
+                    const auto temporary_parent = path_from_utf8(temporary_value).parent_path();
+                    const auto source_parent = source.lexically_relative(root).parent_path();
+                    const auto destination_parent = path_from_utf8(destination).parent_path();
+                    if (!normalized_temporary || generic_utf8_string(*normalized_temporary) != temporary_value ||
+                        generic_utf8_string(path_from_utf8(temporary_value).filename()) !=
+                            expected_temporary_name ||
+                        portable_equivalence_key(generic_utf8_string(temporary_parent)).starts_with(".cmakegen")) {
+                        return std::unexpected{error("transaction journal contains an invalid temporary path",
+                                                     journal.generic_string())};
+                    }
+                    auto matches_source_parent = capabilities.equivalent(generic_utf8_string(temporary_parent),
+                                                                          generic_utf8_string(source_parent));
+                    if (!matches_source_parent) return std::unexpected{matches_source_parent.error()};
+                    auto matches_destination_parent = capabilities.equivalent(generic_utf8_string(temporary_parent),
+                                                                               generic_utf8_string(destination_parent));
+                    if (!matches_destination_parent) return std::unexpected{matches_destination_parent.error()};
+                    if (!*matches_source_parent && !*matches_destination_parent) {
+                        return std::unexpected{error("transaction journal contains an unsafe temporary path",
+                                                     journal.generic_string())};
+                    }
+                } else {
+                    const auto expected_temporary = transaction_temp_path(root / path_from_utf8(destination));
+                    bool valid_temporary = root / path_from_utf8(temporary_value) == expected_temporary;
+                    if (!valid_temporary && transaction.parent_migration) {
+                        const auto& [migration_source, migration_destination] =
+                            *transaction.parent_migration;
+                        const auto relative_to_source =
+                            (root / path_from_utf8(temporary_value)).lexically_relative(migration_source);
+                        const auto relative_value = generic_utf8_string(relative_to_source);
+                        if (!relative_to_source.empty() && !relative_to_source.is_absolute() &&
+                            relative_value != ".." && !relative_value.starts_with("../")) {
+                            const auto migrated_temporary = relative_value == "."
+                                                                ? migration_destination
+                                                                : migration_destination / relative_to_source;
+                            valid_temporary = migrated_temporary == expected_temporary;
+                        }
+                    }
+                    if (!valid_temporary) {
+                        return std::unexpected{error("transaction journal contains an invalid temporary path",
+                                                     journal.generic_string())};
+                    }
                 }
             } else if (!temporary_value.empty()) {
                 return std::unexpected{error("transaction journal contains an unexpected temporary path",
+                                             journal.generic_string())};
+            }
+            const auto rename_temporary_value = value.value("rename_temporary", "");
+            std::filesystem::path rename_temporary;
+            if (is_rename && !rename_temporary_value.empty()) {
+                auto normalized_temporary = normalize_relative_path(path_from_utf8(rename_temporary_value));
+                const auto expected_temporary_name =
+                    generic_utf8_string(rename_transaction_temp_path(
+                                            root / path_from_utf8(destination), source).filename());
+                const auto temporary_parent = path_from_utf8(rename_temporary_value).parent_path();
+                const auto source_parent = source.lexically_relative(root).parent_path();
+                const auto destination_parent = path_from_utf8(destination).parent_path();
+                if (!normalized_temporary || generic_utf8_string(*normalized_temporary) != rename_temporary_value ||
+                    generic_utf8_string(path_from_utf8(rename_temporary_value).filename()) !=
+                        expected_temporary_name ||
+                    portable_equivalence_key(generic_utf8_string(temporary_parent)).starts_with(".cmakegen")) {
+                    return std::unexpected{error("transaction journal contains an invalid rename temporary path",
+                                                 journal.generic_string())};
+                }
+                auto matches_source_parent = capabilities.equivalent(generic_utf8_string(temporary_parent),
+                                                                      generic_utf8_string(source_parent));
+                if (!matches_source_parent) return std::unexpected{matches_source_parent.error()};
+                auto matches_destination_parent = capabilities.equivalent(generic_utf8_string(temporary_parent),
+                                                                           generic_utf8_string(destination_parent));
+                if (!matches_destination_parent) return std::unexpected{matches_destination_parent.error()};
+                if (!*matches_source_parent && !*matches_destination_parent) {
+                    return std::unexpected{error("transaction journal contains an unsafe rename temporary path",
+                                                 journal.generic_string())};
+                }
+                rename_temporary = root / *normalized_temporary;
+            } else if (!is_rename && !rename_temporary_value.empty()) {
+                return std::unexpected{error("transaction journal contains an unexpected rename temporary path",
                                              journal.generic_string())};
             }
 
@@ -1844,15 +2151,19 @@ private:
                 *kind,
                 *status,
                 logical_path,
+                source,
                 root / path_from_utf8(destination),
                 temporary,
+                rename_temporary,
                 directory / expected_backup,
                 value["had_original"].get<bool>(),
                 pre_hash,
                 value["post_exists"].get<bool>(),
                 post_hash,
                 {},
-                staging_claimed});
+                staging_claimed,
+                rename_claimed,
+                rename_completed});
             ++index;
         }
     } catch (const nlohmann::json::exception&) {
@@ -1961,6 +2272,32 @@ private:
     return remove_if_present(entry.temporary, "staged output");
 }
 
+[[nodiscard]] Result<void> remove_rename_temporary(const Transaction& transaction,
+                                                   const TransactionEntry& entry) {
+    if (entry.rename_temporary.empty() || !entry.rename_claimed) return {};
+    auto parents = validate_recovery_path_parents(transaction, entry.rename_temporary);
+    if (!parents) return std::unexpected{parents.error()};
+    std::error_code ec;
+    const auto status = std::filesystem::symlink_status(entry.rename_temporary, ec);
+    if (is_not_found(ec) || (!ec && status.type() == std::filesystem::file_type::not_found)) return {};
+    if (ec) return std::unexpected{error("cannot inspect rename temporary: " + ec.message(),
+                                         entry.rename_temporary.generic_string())};
+    if (std::filesystem::is_symlink(status) || !std::filesystem::is_regular_file(status)) {
+        return std::unexpected{error("rename temporary is not a regular file",
+                                     entry.rename_temporary.generic_string())};
+    }
+    auto content = read_file(entry.rename_temporary);
+    if (!content) return std::unexpected{content.error()};
+    const auto content_hash = SafeWriter::sha256(*content);
+    if (content_hash != entry.pre_hash && content_hash != entry.post_hash) {
+        return std::unexpected{error("rename temporary changed outside the active transaction",
+                                     entry.rename_temporary.generic_string())};
+    }
+    parents = validate_recovery_path_parents(transaction, entry.rename_temporary);
+    if (!parents) return std::unexpected{parents.error()};
+    return remove_if_present(entry.rename_temporary, "rename temporary");
+}
+
 [[nodiscard]] Result<void> cleanup_transaction(Transaction& transaction) {
     for (auto& entry : transaction.entries) {
         auto staged = remove_staged_file(transaction, entry);
@@ -1973,6 +2310,8 @@ private:
             auto journal = write_journal(transaction);
             if (!journal) return std::unexpected{journal.error()};
         }
+        auto rename_temporary = remove_rename_temporary(transaction, entry);
+        if (!rename_temporary) return std::unexpected{rename_temporary.error()};
     }
     auto backup_parents = validate_recovery_path_parents(
         transaction, transaction.backups_directory / ".cmakegen-backup-check");
@@ -2165,6 +2504,686 @@ private:
     return reject_symlink_parents(transaction.root, relative, transaction.capabilities);
 }
 
+[[nodiscard]] Result<std::pair<bool, std::string>> existing_file_content(
+    const std::filesystem::path& path,
+    std::string_view description);
+
+[[nodiscard]] Result<void> ensure_rename_temporary_is_absent(const Transaction& transaction,
+                                                              const TransactionEntry& entry) {
+    const auto relative = relative_path(transaction.root, entry.rename_temporary);
+    auto resolved = resolve_existing_alias(transaction.root, relative, transaction.capabilities);
+    if (!resolved) return std::unexpected{resolved.error()};
+    if (*resolved != entry.rename_temporary) {
+        return std::unexpected{error("case-only rename temporary path is occupied by an equivalent file",
+                                     entry.rename_temporary.generic_string())};
+    }
+    std::filesystem::file_status status;
+    auto inspected = safe_status(entry.rename_temporary, status);
+    if (!inspected) return std::unexpected{inspected.error()};
+    if (std::filesystem::exists(status)) {
+        return std::unexpected{error("case-only rename temporary path is occupied",
+                                     entry.rename_temporary.generic_string())};
+    }
+    return {};
+}
+
+[[nodiscard]] Result<void> claim_rename_temporary(Transaction& transaction,
+                                                  TransactionEntry& entry) {
+    if (entry.rename_temporary.empty()) return {};
+    auto temporary_absent = ensure_rename_temporary_is_absent(transaction, entry);
+    if (!temporary_absent) return std::unexpected{temporary_absent.error()};
+    entry.rename_claimed = true;
+    return write_journal(transaction);
+}
+
+[[nodiscard]] std::vector<std::string> relative_component_strings(const std::filesystem::path& root,
+                                                                   const std::filesystem::path& path) {
+    std::vector<std::string> result;
+    const auto relative = path.lexically_relative(root);
+    for (const auto& component : relative) result.push_back(component.generic_string());
+    return result;
+}
+
+[[nodiscard]] std::filesystem::path component_prefix(const std::filesystem::path& root,
+                                                      const std::vector<std::string>& components,
+                                                      std::size_t count) {
+    auto result = root;
+    for (std::size_t index = 0; index < count; ++index) result /= components[index];
+    return result;
+}
+
+[[nodiscard]] Result<bool> is_transaction_owned_path(const Transaction& transaction,
+                                                      const std::filesystem::path& path) {
+    for (const auto& transaction_entry : transaction.entries) {
+        const std::array<std::filesystem::path, 6> candidates{
+            transaction_entry.source,
+            transaction_entry.destination,
+            transaction_entry.temporary,
+            transaction_entry.rename_temporary,
+            transaction_entry.source.parent_path(),
+            transaction_entry.destination.parent_path(),
+        };
+        for (const auto& candidate : candidates) {
+            if (candidate.empty()) continue;
+            auto ancestor = candidate;
+            while (!ancestor.empty()) {
+                auto equivalent = transaction.capabilities.equivalent(
+                    relative_path(transaction.root, ancestor),
+                    relative_path(transaction.root, path));
+                if (!equivalent) return std::unexpected{equivalent.error()};
+                if (*equivalent) return true;
+                if (ancestor == transaction.root) break;
+                const auto parent = ancestor.parent_path();
+                if (parent == ancestor) break;
+                ancestor = parent;
+            }
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] Result<void> ensure_transaction_owned_subtree(
+    const Transaction& transaction, const std::filesystem::path& directory) {
+    std::error_code ec;
+    const auto status = std::filesystem::symlink_status(directory, ec);
+    if (ec || std::filesystem::is_symlink(status) || !std::filesystem::is_directory(status)) {
+        return std::unexpected{error("rename parent contains an unexpected directory",
+                                     directory.generic_string())};
+    }
+    std::filesystem::directory_iterator entries(directory, ec);
+    if (ec) {
+        return std::unexpected{error("cannot inspect rename descendant: " + ec.message(),
+                                     directory.generic_string())};
+    }
+    for (const auto& child : entries) {
+        auto owned = is_transaction_owned_path(transaction, child.path());
+        if (!owned) return std::unexpected{owned.error()};
+        if (!*owned) {
+            return std::unexpected{error("cannot migrate a rename parent containing an unowned descendant",
+                                         child.path().generic_string())};
+        }
+        const auto child_status = std::filesystem::symlink_status(child.path(), ec);
+        if (ec || std::filesystem::is_symlink(child_status)) {
+            return std::unexpected{error("rename descendant is not a regular transaction entry",
+                                         child.path().generic_string())};
+        }
+        if (std::filesystem::is_directory(child_status)) {
+            auto nested = ensure_transaction_owned_subtree(transaction, child.path());
+            if (!nested) return std::unexpected{nested.error()};
+        } else if (!std::filesystem::is_regular_file(child_status)) {
+            return std::unexpected{error("rename descendant is not a regular transaction entry",
+                                         child.path().generic_string())};
+        }
+    }
+    return {};
+}
+
+[[nodiscard]] Result<void> ensure_parent_directory_contains_only(
+    const Transaction& transaction, const std::filesystem::path& directory,
+    std::string_view allowed_name,
+    bool allowed_directory, std::string_view additional_file_name = {}) {
+    std::error_code ec;
+    const auto status = std::filesystem::symlink_status(directory, ec);
+    if (ec || !std::filesystem::is_directory(status) || std::filesystem::is_symlink(status)) {
+        return std::unexpected{error("rename parent is not a regular directory",
+                                     directory.generic_string())};
+    }
+    std::filesystem::directory_iterator entries(directory, ec);
+    if (ec) {
+        return std::unexpected{error("cannot inspect rename parent: " + ec.message(),
+                                     directory.generic_string())};
+    }
+    bool found_allowed = false;
+    for (const auto& entry : entries) {
+        const auto name = entry.path().filename().generic_string();
+        const bool is_allowed = name == allowed_name;
+        const bool is_additional_file = !additional_file_name.empty() && name == additional_file_name;
+        auto transaction_owned = is_transaction_owned_path(transaction, entry.path());
+        if (!transaction_owned) return std::unexpected{transaction_owned.error()};
+        const bool is_transaction_owned = *transaction_owned;
+        if (!is_allowed && !is_additional_file && !is_transaction_owned) {
+            return std::unexpected{error("cannot migrate a rename parent containing an unowned entry",
+                                         directory.generic_string())};
+        }
+        found_allowed = found_allowed || is_allowed;
+        const auto child_status = std::filesystem::symlink_status(entry.path(), ec);
+        if (ec || std::filesystem::is_symlink(child_status) ||
+            (is_allowed && allowed_directory && !std::filesystem::is_directory(child_status)) ||
+            (is_allowed && !allowed_directory && !std::filesystem::is_regular_file(child_status)) ||
+            (is_additional_file && !std::filesystem::is_regular_file(child_status)) ||
+            (is_transaction_owned && !std::filesystem::is_directory(child_status) &&
+             !std::filesystem::is_regular_file(child_status))) {
+            return std::unexpected{error("rename parent contains an unexpected transaction entry",
+                                         entry.path().generic_string())};
+        }
+        if ((is_transaction_owned || (is_allowed && allowed_directory)) &&
+            std::filesystem::is_directory(child_status)) {
+            auto descendants = ensure_transaction_owned_subtree(transaction, entry.path());
+            if (!descendants) return std::unexpected{descendants.error()};
+        }
+    }
+    if (!found_allowed) {
+        return std::unexpected{error("rename parent no longer contains the transaction entry",
+                                     directory.generic_string())};
+    }
+    return {};
+}
+
+// Parent spelling migrations move transaction-owned staging artifacts along
+// with the output subtree. Keep logical source/destination spellings stable
+// so rollback can still identify the pre-transaction names.
+void retarget_transaction_artifacts_after_directory_move(
+    Transaction& transaction,
+    const std::filesystem::path& source_directory,
+    const std::filesystem::path& destination_directory) {
+    const auto retarget = [&source_directory, &destination_directory](std::filesystem::path& path) {
+        if (path.empty()) return;
+        const auto relative = path.lexically_relative(source_directory);
+        const auto relative_value = relative.generic_string();
+        if (relative.empty() || relative.is_absolute() || relative_value == ".." ||
+            relative_value.starts_with("../")) {
+            return;
+        }
+        path = relative_value == "." ? destination_directory : destination_directory / relative;
+    };
+
+    for (auto& entry : transaction.entries) {
+        retarget(entry.temporary);
+        retarget(entry.rename_temporary);
+    }
+    for (auto& directory : transaction.created_directories) retarget(directory);
+}
+
+// Logical source/destination spellings define the pre/post transaction
+// contract and must remain stable for rollback.  Recovery retargets only
+// physical artifacts moved with the directory.
+void retarget_transaction_artifacts_after_recovered_directory_move(
+    Transaction& transaction,
+    const std::filesystem::path& source_directory,
+    const std::filesystem::path& destination_directory) {
+    const auto retarget = [&source_directory, &destination_directory](std::filesystem::path& path) {
+        if (path.empty()) return;
+        const auto relative = path.lexically_relative(source_directory);
+        const auto value = relative.generic_string();
+        if (relative.empty() || relative.is_absolute() || value == ".." || value.starts_with("../")) return;
+        path = value == "." ? destination_directory : destination_directory / relative;
+    };
+    for (auto& entry : transaction.entries) {
+        retarget(entry.temporary);
+        retarget(entry.rename_temporary);
+    }
+    for (auto& directory : transaction.created_directories) retarget(directory);
+    if (transaction.creating_directory) retarget(*transaction.creating_directory);
+}
+
+[[nodiscard]] Result<bool> has_exact_directory_entry(const std::filesystem::path& path) {
+    std::error_code ec;
+    std::filesystem::directory_iterator entries(path.parent_path(), ec);
+    if (ec) return std::unexpected{error("cannot inspect pending parent migration", path.parent_path().generic_string())};
+    for (const auto& entry : entries) {
+        if (entry.path().filename() == path.filename()) return true;
+    }
+    return false;
+}
+
+[[nodiscard]] Result<void> reconcile_parent_migration(Transaction& transaction) {
+    if (!transaction.parent_migration) return {};
+    const auto [source, destination] = *transaction.parent_migration;
+    auto source_exact = has_exact_directory_entry(source);
+    if (!source_exact) return std::unexpected{source_exact.error()};
+    auto destination_exact = has_exact_directory_entry(destination);
+    if (!destination_exact) return std::unexpected{destination_exact.error()};
+    if (*source_exact == *destination_exact) {
+        return std::unexpected{error("pending parent migration has an ambiguous physical state", source.generic_string())};
+    }
+    if (*destination_exact) {
+        retarget_transaction_artifacts_after_recovered_directory_move(transaction, source, destination);
+    }
+    transaction.parent_migration.reset();
+    return write_journal(transaction);
+}
+
+[[nodiscard]] Result<bool> has_parent_spelling_change(const Transaction& transaction,
+                                                       const TransactionEntry& entry,
+                                                       std::vector<std::string>& source_components,
+                                                       std::vector<std::string>& destination_components) {
+    source_components = relative_component_strings(transaction.root, entry.source.parent_path());
+    destination_components = relative_component_strings(transaction.root, entry.destination.parent_path());
+    if (source_components.size() != destination_components.size()) {
+        return std::unexpected{error("rename changes the parent directory structure",
+                                     entry.destination.generic_string())};
+    }
+    bool changed = false;
+    for (std::size_t index = 0; index < source_components.size(); ++index) {
+        changed = changed || source_components[index] != destination_components[index];
+    }
+    if (!changed) return false;
+
+    const auto source_parent = relative_path(transaction.root, entry.source.parent_path());
+    const auto destination_parent = relative_path(transaction.root, entry.destination.parent_path());
+    auto equivalent = transaction.capabilities.equivalent(source_parent, destination_parent);
+    if (!equivalent) return std::unexpected{equivalent.error()};
+    if (!*equivalent) {
+        return std::unexpected{error("rename parent paths are not equivalent",
+                                     entry.destination.generic_string())};
+    }
+    return true;
+}
+
+[[nodiscard]] Result<bool> is_case_only_spelling_change(
+    std::string_view existing, std::string_view requested,
+    const FilesystemCapabilities& capabilities) {
+    if (existing == requested) return false;
+    // Keep portable ASCII case-only renames working, but do not turn a
+    // trailing-dot/space alias into a physical migration.
+    if (ascii_case_fold(existing) == ascii_case_fold(requested)) return true;
+    if (!has_non_ascii(existing) && !has_non_ascii(requested)) return false;
+
+#ifdef __APPLE__
+    if (capabilities.unicode_mode == UnicodeFilesystemMode::macos_case_sensitive ||
+        capabilities.unicode_mode == UnicodeFilesystemMode::macos_case_insensitive) {
+        auto existing_normalized = macos_unicode_key(existing, false);
+        if (!existing_normalized) return std::unexpected{existing_normalized.error()};
+        auto requested_normalized = macos_unicode_key(requested, false);
+        if (!requested_normalized) return std::unexpected{requested_normalized.error()};
+        // Equal case-sensitive normalization keys differ only in their byte
+        // normalization. APFS/HFS cannot necessarily preserve that spelling,
+        // so it is already physically satisfied.
+        if (*existing_normalized == *requested_normalized) return false;
+        auto existing_folded = macos_unicode_key(existing, true);
+        if (!existing_folded) return std::unexpected{existing_folded.error()};
+        auto requested_folded = macos_unicode_key(requested, true);
+        if (!requested_folded) return std::unexpected{requested_folded.error()};
+        return *existing_folded == *requested_folded;
+    }
+#endif
+
+#ifdef _WIN32
+    if (capabilities.unicode_mode == UnicodeFilesystemMode::windows_case_sensitive ||
+        capabilities.unicode_mode == UnicodeFilesystemMode::windows_case_insensitive) {
+        auto exact = windows_unicode_equal(existing, requested, false);
+        if (!exact) return std::unexpected{exact.error()};
+        if (*exact) return false;
+        return windows_unicode_equal(existing, requested, true);
+    }
+#endif
+
+    return false;
+}
+
+// A replacement may add a new branch beneath a directory that a rename entry
+// will move later in the transaction.  Before that move, create the branch
+// below the existing source spelling so the directory move can retarget it
+// together with the other transaction artifacts.
+[[nodiscard]] Result<std::optional<std::filesystem::path>>
+pending_parent_migration_source(const Transaction& transaction,
+                                const std::filesystem::path& destination_parent) {
+    const auto parent_components = relative_component_strings(transaction.root, destination_parent);
+    for (const auto& candidate : transaction.entries) {
+        if (candidate.kind != TransactionEntryKind::rename) continue;
+        std::vector<std::string> source_components;
+        std::vector<std::string> destination_components;
+        auto changed = has_parent_spelling_change(transaction, candidate,
+                                                   source_components, destination_components);
+        if (!changed) return std::unexpected{changed.error()};
+        if (!*changed) continue;
+
+        for (std::size_t index = 0; index < source_components.size(); ++index) {
+            if (source_components[index] == destination_components[index] ||
+                parent_components.size() < index + 1 ||
+                !std::equal(destination_components.begin(),
+                            destination_components.begin() + static_cast<std::ptrdiff_t>(index + 1),
+                            parent_components.begin())) {
+                continue;
+            }
+            auto source_parent = component_prefix(transaction.root, source_components, index + 1);
+            for (std::size_t suffix = index + 1; suffix < parent_components.size(); ++suffix) {
+                source_parent /= parent_components[suffix];
+            }
+            return source_parent;
+        }
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] Result<void> migrate_parent_spelling_forward(
+    Transaction& transaction, TransactionEntry& entry,
+    const std::vector<std::string>& source_components,
+    const std::vector<std::string>& destination_components) {
+    for (std::size_t index = source_components.size(); index > 0; --index) {
+        const auto component_index = index - 1;
+        if (source_components[component_index] == destination_components[component_index]) continue;
+
+        const auto source_directory = component_prefix(transaction.root, source_components, index);
+        auto destination_directory = component_prefix(transaction.root, source_components, component_index);
+        destination_directory /= destination_components[component_index];
+        const auto allowed_name = component_index + 1 == source_components.size()
+                                      ? entry.rename_temporary.filename().generic_string()
+                                      : destination_components[component_index + 1];
+        const auto additional_file_name = entry.temporary.empty()
+                                              ? std::string{}
+                                              : entry.temporary.filename().generic_string();
+        auto contents = ensure_parent_directory_contains_only(
+            transaction, source_directory, allowed_name,
+            component_index + 1 != source_components.size(),
+            additional_file_name);
+        if (!contents) return std::unexpected{contents.error()};
+
+        std::error_code ec;
+        const auto destination_status = std::filesystem::symlink_status(destination_directory, ec);
+        if (!is_not_found(ec) && ec) {
+            return std::unexpected{error("cannot inspect requested rename parent: " + ec.message(),
+                                         destination_directory.generic_string())};
+        }
+        if (!is_not_found(ec) && std::filesystem::exists(destination_status) &&
+            !std::filesystem::equivalent(source_directory, destination_directory, ec)) {
+            return std::unexpected{error("requested rename parent is already occupied",
+                                         destination_directory.generic_string())};
+        }
+
+        transaction.parent_migration = std::pair{source_directory, destination_directory};
+        auto intent = write_journal(transaction);
+        if (!intent) return std::unexpected{intent.error()};
+        auto moved = move_path(source_directory, destination_directory,
+                               "migrate rename parent spelling");
+        if (!moved) return std::unexpected{moved.error()};
+        retarget_transaction_artifacts_after_directory_move(transaction, source_directory,
+                                                             destination_directory);
+        transaction.parent_migration.reset();
+
+        entry.rename_temporary = component_prefix(transaction.root, source_components, component_index);
+        for (std::size_t suffix = component_index; suffix < destination_components.size(); ++suffix) {
+            entry.rename_temporary /= destination_components[suffix];
+        }
+        entry.rename_temporary /= "." + entry.destination.filename().string() + ".cmakegen-rename.tmp";
+        if (!entry.temporary.empty()) {
+            entry.temporary = entry.rename_temporary.parent_path() / entry.temporary.filename();
+        }
+        auto journal = write_journal(transaction);
+        if (!journal) return std::unexpected{journal.error()};
+    }
+    return {};
+}
+
+[[nodiscard]] Result<void> restore_parent_spelling(
+    Transaction& transaction, TransactionEntry& entry) {
+    std::vector<std::string> source_components;
+    std::vector<std::string> destination_components;
+    auto parent_changed = has_parent_spelling_change(transaction, entry,
+                                                      source_components,
+                                                      destination_components);
+    if (!parent_changed) return std::unexpected{parent_changed.error()};
+    if (!*parent_changed) return {};
+
+    auto current_components = relative_component_strings(transaction.root,
+                                                         entry.rename_temporary.parent_path());
+    if (current_components.size() != source_components.size()) {
+        return std::unexpected{error("rename temporary has an unexpected parent path",
+                                     entry.rename_temporary.generic_string())};
+    }
+    const auto temporary_name = entry.rename_temporary.filename().generic_string();
+    for (std::size_t index = 0; index < source_components.size(); ++index) {
+        if (source_components[index] == destination_components[index]) continue;
+        if (current_components[index] == source_components[index]) continue;
+        if (current_components[index] != destination_components[index]) {
+            return std::unexpected{error("rename temporary has an unexpected parent spelling",
+                                         entry.rename_temporary.generic_string())};
+        }
+
+        const auto current_directory = component_prefix(transaction.root, current_components, index + 1);
+        auto source_directory = component_prefix(transaction.root, current_components, index);
+        source_directory /= source_components[index];
+        const auto allowed_name = index + 1 == current_components.size()
+                                      ? temporary_name
+                                      : current_components[index + 1];
+        const auto additional_file_name = entry.temporary.empty()
+                                              ? std::string{}
+                                              : entry.temporary.filename().generic_string();
+        auto contents = ensure_parent_directory_contains_only(
+            transaction, current_directory, allowed_name,
+            index + 1 != current_components.size(),
+            additional_file_name);
+        if (!contents) return std::unexpected{contents.error()};
+
+        transaction.parent_migration = std::pair{current_directory, source_directory};
+        auto intent = write_journal(transaction);
+        if (!intent) return std::unexpected{intent.error()};
+        auto moved = move_path(current_directory, source_directory,
+                               "restore rename parent spelling");
+        if (!moved) return std::unexpected{moved.error()};
+        using Point = detail::safe_writer_testing::FailurePoint;
+        if (consume_failure(Point::after_reverse_parent_migration, 0)) {
+            return std::unexpected{injected_failure(
+                failure_point_name(Point::after_reverse_parent_migration), source_directory)};
+        }
+        retarget_transaction_artifacts_after_directory_move(transaction, current_directory,
+                                                             source_directory);
+        transaction.parent_migration.reset();
+        current_components[index] = source_components[index];
+        entry.rename_temporary = component_prefix(transaction.root, current_components,
+                                                   current_components.size());
+        entry.rename_temporary /= temporary_name;
+        if (!entry.temporary.empty()) {
+            entry.temporary = entry.rename_temporary.parent_path() / entry.temporary.filename();
+        }
+        auto journal = write_journal(transaction);
+        if (!journal) return std::unexpected{journal.error()};
+    }
+    return {};
+}
+
+[[nodiscard]] Result<void> populate_transaction_entries(Transaction& transaction,
+                                                        const PreparedPlan& plan);
+
+[[nodiscard]] Result<void> validate_parent_migrations_before_transaction(
+    const std::filesystem::path& root, const PreparedPlan& plan) {
+    Transaction transaction{};
+    transaction.root = root;
+    transaction.directory = transaction_directory(root);
+    transaction.backups_directory = transaction.directory / "backups";
+    transaction.capabilities = plan.capabilities;
+    auto entries = populate_transaction_entries(transaction, plan);
+    if (!entries) return std::unexpected{entries.error()};
+
+    struct ParentMigration {
+        std::vector<std::string> source;
+        std::vector<std::string> destination;
+    };
+    std::vector<ParentMigration> parent_migrations;
+    for (auto& entry : transaction.entries) {
+        if (entry.kind != TransactionEntryKind::rename) continue;
+
+        std::vector<std::string> source_components;
+        std::vector<std::string> destination_components;
+        auto parent_changed = has_parent_spelling_change(transaction, entry,
+                                                          source_components,
+                                                          destination_components);
+        if (!parent_changed) return std::unexpected{parent_changed.error()};
+        if (!*parent_changed) continue;
+
+        for (std::size_t count = 1; count <= source_components.size(); ++count) {
+            if (std::ranges::equal(source_components.begin(),
+                                   source_components.begin() + static_cast<std::ptrdiff_t>(count),
+                                   destination_components.begin(),
+                                   destination_components.begin() + static_cast<std::ptrdiff_t>(count))) {
+                continue;
+            }
+            ParentMigration migration{
+                {source_components.begin(),
+                 source_components.begin() + static_cast<std::ptrdiff_t>(count)},
+                {destination_components.begin(),
+                 destination_components.begin() + static_cast<std::ptrdiff_t>(count)},
+            };
+            for (const auto& previous : parent_migrations) {
+                if (previous.source.size() != migration.source.size()) continue;
+                auto previous_source = component_prefix(transaction.root, previous.source,
+                                                        previous.source.size());
+                auto current_source = component_prefix(transaction.root, migration.source,
+                                                       migration.source.size());
+                auto equivalent = transaction.capabilities.equivalent(
+                    relative_path(transaction.root, previous_source),
+                    relative_path(transaction.root, current_source));
+                if (!equivalent) return std::unexpected{equivalent.error()};
+                if (*equivalent && !std::ranges::equal(previous.destination, migration.destination)) {
+                    return std::unexpected{error("conflicting parent migration spellings",
+                                                 component_prefix(transaction.root,
+                                                                  migration.destination,
+                                                                  migration.destination.size())
+                                                     .generic_string())};
+                }
+            }
+            parent_migrations.push_back(std::move(migration));
+        }
+
+        for (std::size_t index = source_components.size(); index > 0; --index) {
+            const auto component_index = index - 1;
+            if (source_components[component_index] == destination_components[component_index]) continue;
+
+            const auto source_directory = component_prefix(transaction.root, source_components, index);
+            const auto allowed_name = component_index + 1 == source_components.size()
+                                          ? entry.source.filename().generic_string()
+                                          : source_components[component_index + 1];
+            auto contents = ensure_parent_directory_contains_only(
+                transaction, source_directory, allowed_name,
+                component_index + 1 != source_components.size());
+            if (!contents) return std::unexpected{contents.error()};
+        }
+    }
+    return {};
+}
+
+[[nodiscard]] Result<void> validate_rename_temporaries_before_transaction(
+    const std::filesystem::path& root, const PreparedPlan& plan) {
+    Transaction transaction{};
+    transaction.root = root;
+    transaction.directory = transaction_directory(root);
+    transaction.backups_directory = transaction.directory / "backups";
+    transaction.capabilities = plan.capabilities;
+    auto entries = populate_transaction_entries(transaction, plan);
+    if (!entries) return std::unexpected{entries.error()};
+
+    for (const auto& entry : transaction.entries) {
+        if (entry.kind != TransactionEntryKind::rename) continue;
+        // Stale cleanup backs this file up before any rename is applied.  It
+        // therefore cannot occupy the temporary at the point the rename
+        // claims it, and rejecting it here would make a previously generated
+        // output name permanently block a later case-only migration.
+        bool removed_by_plan = false;
+        const auto temporary_relative = relative_path(transaction.root, entry.rename_temporary);
+        for (const auto& candidate : transaction.entries) {
+            if (candidate.kind != TransactionEntryKind::remove) continue;
+            auto equivalent = transaction.capabilities.equivalent(
+                relative_path(transaction.root, candidate.destination), temporary_relative);
+            if (!equivalent) return std::unexpected{equivalent.error()};
+            if (*equivalent) {
+                removed_by_plan = true;
+                break;
+            }
+        }
+        if (removed_by_plan) continue;
+        auto temporary_absent = ensure_rename_temporary_is_absent(transaction, entry);
+        if (!temporary_absent) return std::unexpected{temporary_absent.error()};
+    }
+    return {};
+}
+
+[[nodiscard]] Result<void> alias_aware_rename(Transaction& transaction,
+                                              TransactionEntry& entry) {
+    const auto source_relative = relative_path(transaction.root, entry.source);
+    const auto destination_relative = relative_path(transaction.root, entry.destination);
+    auto resolved_source = resolve_existing_alias(transaction.root, source_relative, transaction.capabilities);
+    if (!resolved_source) return std::unexpected{resolved_source.error()};
+    auto source_equivalent = transaction.capabilities.equivalent(
+        source_relative, relative_path(transaction.root, *resolved_source));
+    if (!source_equivalent) return std::unexpected{source_equivalent.error()};
+    if (!*source_equivalent) {
+        return std::unexpected{error("rename source changed before replacement",
+                                     entry.source.generic_string())};
+    }
+    const auto source_path = *resolved_source;
+
+    auto source_content = existing_file_content(source_path, "rename source");
+    if (!source_content) return std::unexpected{source_content.error()};
+    if (!source_content->first || SafeWriter::sha256(source_content->second) != entry.pre_hash) {
+        return std::unexpected{error("rename source changed while transaction was being applied",
+                                     source_path.generic_string())};
+    }
+
+    auto resolved_destination = resolve_existing_alias(transaction.root, destination_relative,
+                                                       transaction.capabilities);
+    if (!resolved_destination) return std::unexpected{resolved_destination.error()};
+    if (*resolved_destination != transaction.root / destination_relative &&
+        *resolved_destination != source_path) {
+        return std::unexpected{error("rename destination is occupied by an unowned equivalent path",
+                                     entry.destination.generic_string())};
+    }
+    std::filesystem::file_status destination_status;
+    auto inspected_destination = safe_status(entry.destination, destination_status);
+    if (!inspected_destination) return std::unexpected{inspected_destination.error()};
+    if (*resolved_destination == entry.destination && *resolved_destination != source_path &&
+        std::filesystem::exists(destination_status)) {
+        return std::unexpected{error("rename destination already exists", entry.destination.generic_string())};
+    }
+
+    std::vector<std::string> source_parent_components;
+    std::vector<std::string> destination_parent_components;
+    auto parent_changed = has_parent_spelling_change(transaction, entry,
+                                                      source_parent_components,
+                                                      destination_parent_components);
+    if (!parent_changed) return std::unexpected{parent_changed.error()};
+
+    if (entry.rename_temporary.parent_path() != source_path.parent_path()) {
+        entry.rename_temporary = source_path.parent_path() / entry.rename_temporary.filename();
+    }
+    if (!entry.temporary.empty() && entry.temporary.parent_path() != source_path.parent_path()) {
+        entry.temporary = source_path.parent_path() / entry.temporary.filename();
+    }
+    const auto current_source_parent_components = relative_component_strings(
+        transaction.root, source_path.parent_path());
+    // A previous rename entry may already have migrated an ancestor. Use the
+    // spelling of the currently resolved physical source tree for this entry;
+    // the logical source spelling remains stable for rollback and journaling.
+    source_parent_components = current_source_parent_components;
+    const bool parent_already_migrated = current_source_parent_components.size() ==
+                                             destination_parent_components.size() &&
+                                         std::ranges::equal(current_source_parent_components,
+                                                            destination_parent_components);
+
+    // On a case-insensitive filesystem the source and requested destination
+    // resolve to one directory entry.  A direct rename can be a no-op (and
+    // Windows may reject it), so force a distinct spelling through a sibling
+    // temporary name.  The journal is written between both moves so recovery
+    // can restore a rename interrupted after the first move.
+    if (*resolved_destination == source_path) {
+        auto claimed = claim_rename_temporary(transaction, entry);
+        if (!claimed) return std::unexpected{claimed.error()};
+        auto moved_to_temporary = move_path(source_path, entry.rename_temporary,
+                                            "move rename source to temporary path");
+        if (!moved_to_temporary) return std::unexpected{moved_to_temporary.error()};
+        auto journal = write_journal(transaction);
+        if (!journal) return std::unexpected{journal.error()};
+        if (*parent_changed && !parent_already_migrated) {
+            auto migrated = migrate_parent_spelling_forward(transaction, entry,
+                                                             source_parent_components,
+                                                             destination_parent_components);
+            if (!migrated) return std::unexpected{migrated.error()};
+        }
+        auto moved_to_destination = move_path(entry.rename_temporary, entry.destination,
+                                               "move rename temporary to requested destination");
+        if (!moved_to_destination) return std::unexpected{moved_to_destination.error()};
+        // The temporary no longer exists once the second move succeeds.  Keep
+        // completion history for rollback, but release ownership so cleanup
+        // cannot delete a later external file at this deterministic name.
+        entry.rename_claimed = false;
+        entry.rename_completed = true;
+        auto completed = write_journal(transaction);
+        if (!completed) return std::unexpected{completed.error()};
+        return {};
+    }
+
+    return move_path(source_path, entry.destination, "rename generated output");
+}
+
 [[nodiscard]] Result<void> remove_new_destination(const Transaction& transaction,
                                                   const TransactionEntry& entry,
                                                   bool may_have_been_applied) {
@@ -2303,6 +3322,37 @@ private:
     for (const auto& entry : transaction.entries) {
         auto parents = validate_recovery_path_parents(transaction, entry.destination);
         if (!parents) return std::unexpected{parents.error()};
+        if (entry.kind == TransactionEntryKind::rename) {
+            parents = validate_recovery_path_parents(transaction, entry.source);
+            if (!parents) return std::unexpected{parents.error()};
+            const auto source_relative = relative_path(transaction.root, entry.source);
+            auto resolved_source = resolve_existing_alias(transaction.root, source_relative,
+                                                          transaction.capabilities);
+            if (!resolved_source) return std::unexpected{resolved_source.error()};
+            if (*resolved_source != entry.source) {
+                return std::unexpected{error("rollback did not restore the previous rename spelling",
+                                             entry.source.generic_string())};
+            }
+            auto source_content = existing_file_content(entry.source, "restored rename source");
+            if (!source_content || !source_content->first ||
+                SafeWriter::sha256(source_content->second) != entry.pre_hash) {
+                return std::unexpected{error("rollback restored unexpected rename source content",
+                                             entry.source.generic_string())};
+            }
+
+            const auto destination_relative = relative_path(transaction.root, entry.destination);
+            auto resolved_destination = resolve_existing_alias(transaction.root, destination_relative,
+                                                               transaction.capabilities);
+            if (!resolved_destination) return std::unexpected{resolved_destination.error()};
+            std::filesystem::file_status destination_status;
+            auto inspected_destination = safe_status(*resolved_destination, destination_status);
+            if (!inspected_destination) return std::unexpected{inspected_destination.error()};
+            if (std::filesystem::exists(destination_status) && *resolved_destination != entry.source) {
+                return std::unexpected{error("rollback left the renamed destination",
+                                             entry.destination.generic_string())};
+            }
+            continue;
+        }
         std::filesystem::file_status status;
         auto inspected = safe_status(entry.destination, status);
         if (!inspected) return std::unexpected{inspected.error()};
@@ -2428,6 +3478,165 @@ private:
     return {};
 }
 
+[[nodiscard]] Result<void> rollback_rename_entry(Transaction& transaction,
+                                                  TransactionEntry& entry,
+                                                  std::size_t rollback_index,
+                                                  bool recovery_mode) {
+    using Point = detail::safe_writer_testing::FailurePoint;
+    if (recovery_mode && consume_failure(Point::recovery, rollback_index)) {
+        return std::unexpected{injected_failure(failure_point_name(Point::recovery), entry.destination)};
+    }
+    if (!recovery_mode && consume_failure(Point::rollback, rollback_index)) {
+        return std::unexpected{injected_failure(failure_point_name(Point::rollback), entry.destination)};
+    }
+
+    if (entry.status == TransactionEntryStatus::restored) return {};
+
+    auto source_relative = relative_path(transaction.root, entry.source);
+    auto destination_relative = relative_path(transaction.root, entry.destination);
+    if (entry.rename_claimed && !entry.rename_temporary.empty()) {
+        auto temporary_relative = relative_path(transaction.root, entry.rename_temporary);
+        auto resolved_temporary = resolve_existing_alias(transaction.root, temporary_relative,
+                                                         transaction.capabilities);
+        if (!resolved_temporary) return std::unexpected{resolved_temporary.error()};
+        std::filesystem::file_status temporary_status;
+        auto inspected_temporary = safe_status(*resolved_temporary, temporary_status);
+        if (!inspected_temporary) return std::unexpected{inspected_temporary.error()};
+        if (std::filesystem::exists(temporary_status)) {
+            if (resolved_temporary->filename() != entry.rename_temporary.filename() ||
+                std::filesystem::is_symlink(temporary_status) ||
+                !std::filesystem::is_regular_file(temporary_status)) {
+                return std::unexpected{error("rename temporary changed while transaction recovery was pending",
+                                             entry.rename_temporary.generic_string())};
+            }
+            // A crash can leave the journal with the old parent spelling after a
+            // case-only directory move.  Adopt the resolved transaction-owned
+            // alias before attempting rollback.
+            entry.rename_temporary = *resolved_temporary;
+            if (!entry.temporary.empty()) {
+                entry.temporary = entry.rename_temporary.parent_path() / entry.temporary.filename();
+            }
+            auto content = read_file(*resolved_temporary);
+            if (!content) {
+                return std::unexpected{error("rename temporary changed while transaction recovery was pending",
+                                             entry.rename_temporary.generic_string())};
+            }
+            const auto temporary_hash = SafeWriter::sha256(*content);
+            if (temporary_hash != entry.pre_hash && temporary_hash != entry.post_hash) {
+                return std::unexpected{error("rename temporary changed while transaction recovery was pending",
+                                             entry.rename_temporary.generic_string())};
+            }
+            auto restored_parents = restore_parent_spelling(transaction, entry);
+            if (!restored_parents) return std::unexpected{restored_parents.error()};
+            auto restored = move_path(entry.rename_temporary, entry.source,
+                                      "restore interrupted rename source");
+            if (!restored) return std::unexpected{restored.error()};
+        }
+    }
+
+    auto resolved_source = resolve_existing_alias(transaction.root, source_relative,
+                                                   transaction.capabilities);
+    if (!resolved_source) return std::unexpected{resolved_source.error()};
+    auto resolved_destination = resolve_existing_alias(transaction.root, destination_relative,
+                                                       transaction.capabilities);
+    if (!resolved_destination) return std::unexpected{resolved_destination.error()};
+
+    std::filesystem::file_status source_status;
+    auto inspected_source = safe_status(*resolved_source, source_status);
+    if (!inspected_source) return std::unexpected{inspected_source.error()};
+    std::filesystem::file_status destination_status;
+    auto inspected_destination = safe_status(*resolved_destination, destination_status);
+    if (!inspected_destination) return std::unexpected{inspected_destination.error()};
+    const bool source_exists = std::filesystem::exists(source_status);
+    const bool destination_exists = std::filesystem::exists(destination_status);
+    const bool source_and_destination_share_physical_path =
+        source_exists && destination_exists && *resolved_source == *resolved_destination;
+    const bool case_only_rename_was_claimed =
+        (entry.rename_claimed || entry.rename_completed) && source_and_destination_share_physical_path;
+
+    if (source_exists && !source_and_destination_share_physical_path &&
+        *resolved_source != entry.source && *resolved_source != entry.destination) {
+        return std::unexpected{error("rename rollback found an unexpected source spelling",
+                                     entry.source.generic_string())};
+    }
+    if (destination_exists && !source_and_destination_share_physical_path &&
+        *resolved_destination != entry.destination &&
+        *resolved_destination != entry.source) {
+        return std::unexpected{error("rename rollback found an unexpected destination spelling",
+                                     entry.destination.generic_string())};
+    }
+    if (source_exists && destination_exists && *resolved_source == entry.source &&
+        *resolved_destination == entry.destination) {
+        return std::unexpected{error("rename rollback found both old and new destinations",
+                                     entry.destination.generic_string())};
+    }
+
+    if (destination_exists && (case_only_rename_was_claimed ||
+                               (*resolved_destination == entry.destination && !source_exists))) {
+        auto content = existing_file_content(*resolved_destination, "renamed output");
+        if (!content) return std::unexpected{content.error()};
+        if (!content->first ||
+            (SafeWriter::sha256(content->second) != entry.pre_hash &&
+             SafeWriter::sha256(content->second) != entry.post_hash)) {
+            return std::unexpected{error("renamed output changed while transaction recovery was pending",
+                                         entry.destination.generic_string())};
+        }
+
+        // The old and new spellings are one physical object on an
+        // insensitive filesystem.  Force the reverse spelling through the
+        // same sibling temporary used by the forward rename.
+        if (case_only_rename_was_claimed ||
+            ((entry.rename_claimed || entry.rename_completed) && source_exists && *resolved_source == entry.source)) {
+            entry.rename_temporary = resolved_destination->parent_path() / entry.rename_temporary.filename();
+            if (!entry.temporary.empty()) {
+                entry.temporary = entry.rename_temporary.parent_path() / entry.temporary.filename();
+            }
+            auto claimed = claim_rename_temporary(transaction, entry);
+            if (!claimed) return std::unexpected{claimed.error()};
+            auto moved_to_temporary = move_path(*resolved_destination, entry.rename_temporary,
+                                                "move renamed output to rollback temporary path");
+            if (!moved_to_temporary) return std::unexpected{moved_to_temporary.error()};
+            auto restored_parents = restore_parent_spelling(transaction, entry);
+            if (!restored_parents) return std::unexpected{restored_parents.error()};
+            auto moved_to_source = move_path(entry.rename_temporary, entry.source,
+                                             "restore old output spelling");
+            if (!moved_to_source) return std::unexpected{moved_to_source.error()};
+            // The rollback temporary was consumed.  Do not let later cleanup
+            // treat an externally recreated deterministic path as ours.
+            entry.rename_claimed = false;
+            entry.rename_completed = false;
+            auto restored = write_journal(transaction);
+            if (!restored) return std::unexpected{restored.error()};
+        } else {
+            auto moved_to_source = move_path(entry.destination, entry.source, "restore old output spelling");
+            if (!moved_to_source) return std::unexpected{moved_to_source.error()};
+        }
+    }
+
+    auto restored_source = existing_file_content(entry.source, "restored rename source");
+    if (!restored_source || !restored_source->first) {
+        return std::unexpected{error("rollback did not restore the previous rename source",
+                                     entry.source.generic_string())};
+    }
+    const auto restored_hash = SafeWriter::sha256(restored_source->second);
+    if (restored_hash == entry.post_hash && restored_hash != entry.pre_hash) {
+        auto backup = existing_file_content(entry.backup, "rename backup");
+        if (!backup || !backup->first || SafeWriter::sha256(backup->second) != entry.pre_hash) {
+            return std::unexpected{error("rename backup is missing; manual recovery is required",
+                                         entry.backup.generic_string())};
+        }
+        auto restored_content = replace_file(entry.backup, entry.source);
+        if (!restored_content) return std::unexpected{restored_content.error()};
+    } else if (restored_hash != entry.pre_hash) {
+        return std::unexpected{error("rollback restored unexpected rename source content",
+                                     entry.source.generic_string())};
+    }
+
+    entry.status = TransactionEntryStatus::restored;
+    transaction.phase = "rollback";
+    return write_journal(transaction);
+}
+
 [[nodiscard]] Result<void> rollback_transaction(Transaction& transaction, bool recovery_mode) {
     // Staged files can live below a directory that is being recreated for a
     // file-to-directory transition. Remove them before removing that parent;
@@ -2441,6 +3650,12 @@ private:
     for (auto iterator = transaction.entries.rbegin(); iterator != transaction.entries.rend(); ++iterator) {
         auto& entry = *iterator;
         if (entry.status == TransactionEntryStatus::restored) {
+            ++rollback_index;
+            continue;
+        }
+        if (entry.kind == TransactionEntryKind::rename) {
+            auto restored = rollback_rename_entry(transaction, entry, rollback_index, recovery_mode);
+            if (!restored) return std::unexpected{restored.error()};
             ++rollback_index;
             continue;
         }
@@ -2537,6 +3752,188 @@ private:
     return {};
 }
 
+[[nodiscard]] Result<void> populate_transaction_entries(Transaction& transaction,
+                                                        const PreparedPlan& plan) {
+    transaction.entries.reserve(plan.entries.size());
+    for (std::size_t index = 0; index < plan.entries.size(); ++index) {
+        const auto& planned = plan.entries[index];
+        TransactionEntry entry;
+        entry.kind = planned.kind;
+        entry.logical_path = planned.logical_path;
+        entry.source = planned.source;
+        entry.destination = planned.destination;
+        entry.had_original = planned.had_original;
+        entry.pre_hash = planned.pre_hash;
+        entry.post_exists = planned.post_exists;
+        entry.post_hash = planned.post_hash;
+        entry.content = planned.content;
+        entry.backup = transaction.backups_directory / transaction_backup_name(index).substr(8);
+        if (planned.kind == TransactionEntryKind::replace ||
+            (planned.kind == TransactionEntryKind::rename && planned.pre_hash != planned.post_hash) ||
+            (planned.kind == TransactionEntryKind::manifest && planned.post_exists)) {
+            auto staging_parent = planned.destination.parent_path();
+            if (planned.kind == TransactionEntryKind::replace && staging_parent != transaction.root) {
+                auto resolved_parent = resolve_existing_alias(
+                    transaction.root, relative_path(transaction.root, staging_parent), transaction.capabilities);
+                if (!resolved_parent) return std::unexpected{resolved_parent.error()};
+                std::filesystem::file_status parent_status;
+                auto inspected_parent = safe_status(*resolved_parent, parent_status);
+                if (!inspected_parent) return std::unexpected{inspected_parent.error()};
+                if (std::filesystem::exists(parent_status)) {
+                    const bool scheduled_removal = std::ranges::any_of(
+                        plan.entries, [&resolved_parent](const auto& candidate) {
+                            return candidate.kind == TransactionEntryKind::remove &&
+                                   candidate.destination == *resolved_parent;
+                        });
+                    if (std::filesystem::is_symlink(parent_status) ||
+                        (!std::filesystem::is_directory(parent_status) && !scheduled_removal)) {
+                        return std::unexpected{error("output parent is not a directory",
+                                                     resolved_parent->generic_string())};
+                    }
+                    if (std::filesystem::is_directory(parent_status)) staging_parent = *resolved_parent;
+                }
+            }
+            const auto temporary_destination = planned.kind == TransactionEntryKind::rename &&
+                                                       planned.source.parent_path() != planned.destination.parent_path()
+                                                   ? planned.source.parent_path() / planned.destination.filename()
+                                                   : staging_parent / planned.destination.filename();
+            entry.temporary = transaction_temp_path(temporary_destination);
+        }
+        if (planned.kind == TransactionEntryKind::rename) {
+            entry.rename_temporary = rename_transaction_temp_path(planned.destination, planned.source);
+        }
+        transaction.entries.push_back(std::move(entry));
+    }
+    return {};
+}
+
+[[nodiscard]] Result<void> add_retained_parent_migration_entries(
+    const std::filesystem::path& root,
+    const Manifest& old_manifest,
+    Manifest& next_manifest,
+    PreparedPlan& plan,
+    const std::map<std::string, const GeneratedFile*, std::less<>>& requested_files,
+    bool force) {
+    Transaction transaction{};
+    transaction.root = root;
+    transaction.directory = transaction_directory(root);
+    transaction.backups_directory = transaction.directory / "backups";
+    transaction.capabilities = plan.capabilities;
+    auto entries = populate_transaction_entries(transaction, plan);
+    if (!entries) return std::unexpected{entries.error()};
+
+    struct ParentMigration {
+        std::vector<std::string> source;
+        std::vector<std::string> destination;
+    };
+    std::vector<ParentMigration> migrations;
+    for (const auto& entry : transaction.entries) {
+        if (entry.kind != TransactionEntryKind::rename) continue;
+        auto source = relative_component_strings(transaction.root, entry.source.parent_path());
+        auto destination = relative_component_strings(transaction.root, entry.destination.parent_path());
+        if (source.size() != destination.size() ||
+            std::ranges::equal(source, destination)) {
+            continue;
+        }
+        // Moving a deeply nested parent also moves every retained sibling
+        // below each changed ancestor.  Keep each changed prefix so a file
+        // such as Foo/B/y.txt follows Foo -> foo even when the requested
+        // rename only mentions Foo/A/x.txt -> foo/a/x.txt.
+        for (std::size_t count = 1; count <= source.size(); ++count) {
+            if (std::ranges::equal(source.begin(), source.begin() + static_cast<std::ptrdiff_t>(count),
+                                   destination.begin(), destination.begin() + static_cast<std::ptrdiff_t>(count))) {
+                continue;
+            }
+            migrations.push_back({
+                {source.begin(), source.begin() + static_cast<std::ptrdiff_t>(count)},
+                {destination.begin(), destination.begin() + static_cast<std::ptrdiff_t>(count)},
+            });
+        }
+    }
+    if (migrations.empty()) return {};
+
+    for (const auto& [old_relative, hash] : old_manifest.files) {
+        if (!next_manifest.files.contains(old_relative)) continue;
+
+        const ParentMigration* selected = nullptr;
+        const auto old_components = relative_component_strings(root, root / old_relative);
+        for (const auto& migration : migrations) {
+            if (migration.source.size() >= old_components.size()) continue;
+            const auto source_parent = component_prefix(root, migration.source,
+                                                        migration.source.size());
+            auto under = is_path_ancestor(relative_path(root, source_parent), old_relative,
+                                           plan.capabilities);
+            if (!under) return std::unexpected{under.error()};
+            if (*under && (!selected || migration.source.size() > selected->source.size())) {
+                selected = &migration;
+            }
+        }
+        if (!selected) continue;
+
+        std::vector<std::string> migrated_components = selected->destination;
+        migrated_components.insert(migrated_components.end(),
+                                   old_components.begin() + static_cast<std::ptrdiff_t>(selected->source.size()),
+                                   old_components.end());
+        const auto migrated_relative = component_prefix(root, migrated_components,
+                                                         migrated_components.size())
+                                           .lexically_relative(root)
+                                           .generic_string();
+        if (migrated_relative == old_relative) continue;
+
+        std::optional<std::string> requested_relative;
+        for (const auto& [candidate, file] : requested_files) {
+            (void)file;
+            auto equivalent = plan.capabilities.equivalent(old_relative, candidate);
+            if (!equivalent) return std::unexpected{equivalent.error()};
+            if (*equivalent) {
+                requested_relative = candidate;
+                break;
+            }
+        }
+        if (requested_relative) {
+            // This output has an explicit requested spelling, so it is not a
+            // retained sibling. A shared parent move cannot silently rewrite
+            // that request to a different spelling or add a duplicate rename.
+            if (*requested_relative != migrated_relative) {
+                return std::unexpected{error("requested output conflicts with a parent spelling migration",
+                                             *requested_relative)};
+            }
+            continue;
+        }
+
+        auto resolved = resolve_existing_alias(root, old_relative, plan.capabilities);
+        if (!resolved) return std::unexpected{resolved.error()};
+        auto content = existing_file_content(*resolved, "retained parent-migration path");
+        if (!content) return std::unexpected{content.error()};
+        const auto retained_hash = content->first ? SafeWriter::sha256(content->second) : hash;
+        if (retained_hash != hash && !force) {
+            return std::unexpected{error("refusing to migrate a retained generated file modified since its recorded hash",
+                                         old_relative)};
+        }
+
+        next_manifest.files.erase(old_relative);
+        auto collision = find_equivalent_manifest_path(next_manifest, migrated_relative,
+                                                        plan.capabilities);
+        if (!collision) return std::unexpected{collision.error()};
+        if (*collision) {
+            return std::unexpected{error("retained manifest path collides with a parent migration",
+                                         migrated_relative)};
+        }
+        next_manifest.files.insert_or_assign(migrated_relative, retained_hash);
+        if (!content->first) continue;
+        plan.entries.push_back(PlannedEntry{TransactionEntryKind::rename,
+                                            migrated_relative,
+                                            root / migrated_relative,
+                                            true,
+                                            retained_hash,
+                                            true,
+                                            retained_hash,
+                                            {},
+                                            *resolved});
+    }
+    return {};
+}
+
 [[nodiscard]] Result<Transaction> start_transaction(const std::filesystem::path& root,
                                                     const PreparedPlan& plan) {
     Transaction transaction{root,
@@ -2550,25 +3947,8 @@ private:
     transaction.post_manifest_exists = plan.post_manifest.present;
     transaction.post_manifest_content = plan.post_manifest.content;
     transaction.capabilities = plan.capabilities;
-    transaction.entries.reserve(plan.entries.size());
-    for (std::size_t index = 0; index < plan.entries.size(); ++index) {
-        const auto& planned = plan.entries[index];
-        TransactionEntry entry;
-        entry.kind = planned.kind;
-        entry.logical_path = planned.logical_path;
-        entry.destination = planned.destination;
-        entry.had_original = planned.had_original;
-        entry.pre_hash = planned.pre_hash;
-        entry.post_exists = planned.post_exists;
-        entry.post_hash = planned.post_hash;
-        entry.content = planned.content;
-        entry.backup = transaction.backups_directory / transaction_backup_name(index).substr(8);
-        if (planned.kind == TransactionEntryKind::replace ||
-            (planned.kind == TransactionEntryKind::manifest && planned.post_exists)) {
-            entry.temporary = transaction_temp_path(planned.destination);
-        }
-        transaction.entries.push_back(std::move(entry));
-    }
+    auto entries = populate_transaction_entries(transaction, plan);
+    if (!entries) return std::unexpected{entries.error()};
 
     auto directory = ensure_transaction_directory_is_new(transaction);
     if (!directory) return std::unexpected{directory.error()};
@@ -2615,8 +3995,33 @@ private:
             return entry.kind == TransactionEntryKind::remove && entry.destination == path;
         });
     };
+    const auto has_pending_parent_migration = [&transaction](const std::filesystem::path& parent)
+        -> Result<bool> {
+        const auto parent_relative = relative_path(transaction.root, parent);
+        for (const auto& candidate : transaction.entries) {
+            if (candidate.kind != TransactionEntryKind::rename) continue;
+            std::vector<std::string> source_components;
+            std::vector<std::string> destination_components;
+            auto changed = has_parent_spelling_change(transaction, candidate,
+                                                       source_components,
+                                                       destination_components);
+            if (!changed) return std::unexpected{changed.error()};
+            if (!*changed) continue;
+            const auto destination_parent = relative_path(transaction.root,
+                                                           candidate.destination.parent_path());
+            auto equivalent = transaction.capabilities.equivalent(parent_relative,
+                                                                    destination_parent);
+            if (!equivalent) return std::unexpected{equivalent.error()};
+            if (*equivalent) return true;
+            auto ancestor = is_path_ancestor(parent_relative, destination_parent,
+                                             transaction.capabilities);
+            if (!ancestor) return std::unexpected{ancestor.error()};
+            if (*ancestor) return true;
+        }
+        return false;
+    };
     for (const auto& entry : transaction.entries) {
-        if (entry.kind != TransactionEntryKind::replace) continue;
+        if (entry.kind != TransactionEntryKind::replace && entry.kind != TransactionEntryKind::rename) continue;
         auto current = entry.destination.parent_path();
         while (current != transaction.root && !current.empty()) {
             std::filesystem::file_status status;
@@ -2637,7 +4042,38 @@ private:
                 }
                 break;
             }
+            auto migrated_source = pending_parent_migration_source(transaction, current);
+            if (!migrated_source) return std::unexpected{migrated_source.error()};
+            if (*migrated_source && **migrated_source != current) {
+                current = **migrated_source;
+                continue;
+            }
+            if (entry.kind == TransactionEntryKind::rename) {
+                const auto relative = generic_utf8_string(current.lexically_relative(transaction.root));
+                auto resolved = resolve_existing_alias(transaction.root, relative,
+                                                       transaction.capabilities);
+                if (!resolved) return std::unexpected{resolved.error()};
+                if (*resolved != current) {
+                    std::filesystem::file_status alias_status;
+                    auto inspected_alias = safe_status(*resolved, alias_status);
+                    if (!inspected_alias) return std::unexpected{inspected_alias.error()};
+                    if (std::filesystem::exists(alias_status)) {
+                        if (std::filesystem::is_symlink(alias_status) ||
+                            !std::filesystem::is_directory(alias_status)) {
+                            return std::unexpected{error("output parent is not a directory",
+                                                         resolved->generic_string())};
+                        }
+                        // A case-only rename entry migrates this existing
+                        // physical parent; creating the requested alias here
+                        // would leave two portable-equivalent directories.
+                        break;
+                    }
+                }
+            }
             const auto relative = generic_utf8_string(current.lexically_relative(transaction.root));
+            auto pending_migration = has_pending_parent_migration(current);
+            if (!pending_migration) return std::unexpected{pending_migration.error()};
+            if (*pending_migration) break;
             if (relative.empty() || is_reserved_metadata_path(relative)) {
                 return std::unexpected{error("output parent is unsafe", current.generic_string())};
             }
@@ -2683,9 +4119,11 @@ private:
     std::size_t staging_seen = 0;
     for (auto& entry : transaction.entries) {
         if ((!entry.post_exists) ||
-            (entry.kind != TransactionEntryKind::replace && entry.kind != TransactionEntryKind::manifest)) {
+            (entry.kind != TransactionEntryKind::replace && entry.kind != TransactionEntryKind::rename &&
+             entry.kind != TransactionEntryKind::manifest)) {
             continue;
         }
+        if (entry.kind == TransactionEntryKind::rename && entry.temporary.empty()) continue;
         std::error_code staging_error;
         const auto staging_status = std::filesystem::symlink_status(entry.temporary, staging_error);
         if (!is_not_found(staging_error) &&
@@ -2734,22 +4172,23 @@ private:
             entry.status = TransactionEntryStatus::backing_up;
             auto before = write_journal(transaction);
             if (!before) return std::unexpected{before.error()};
-            auto parents = validate_recovery_path_parents(transaction, entry.destination);
+            const auto& original = entry.kind == TransactionEntryKind::rename ? entry.source : entry.destination;
+            auto parents = validate_recovery_path_parents(transaction, original);
             if (!parents) return std::unexpected{parents.error()};
             std::filesystem::file_status status;
-            auto inspected = safe_status(entry.destination, status);
+            auto inspected = safe_status(original, status);
             if (!inspected) return std::unexpected{inspected.error()};
             if (!std::filesystem::exists(status) || std::filesystem::is_symlink(status) ||
                 !std::filesystem::is_regular_file(status)) {
                 return std::unexpected{error("destination changed before transaction backup",
                                              entry.destination.generic_string())};
             }
-            auto content = read_file(entry.destination);
+            auto content = read_file(original);
             if (!content || SafeWriter::sha256(*content) != entry.pre_hash) {
                 return std::unexpected{error("destination content changed before transaction backup",
                                              entry.destination.generic_string())};
             }
-            parents = validate_recovery_path_parents(transaction, entry.destination);
+            parents = validate_recovery_path_parents(transaction, original);
             if (!parents) return std::unexpected{parents.error()};
             auto backup_parents = validate_recovery_path_parents(transaction, entry.backup);
             if (!backup_parents) return std::unexpected{backup_parents.error()};
@@ -2762,8 +4201,13 @@ private:
             if (!backup_error && backup_status.type() != std::filesystem::file_type::not_found) {
                 return std::unexpected{error("transaction backup destination already exists", entry.backup.generic_string())};
             }
-            auto moved = move_to_backup(entry.destination, entry.backup);
-            if (!moved) return std::unexpected{moved.error()};
+            if (entry.kind == TransactionEntryKind::rename) {
+                auto copied = copy_to_backup(entry.source, entry.backup, entry.pre_hash);
+                if (!copied) return std::unexpected{copied.error()};
+            } else {
+                auto moved = move_to_backup(entry.destination, entry.backup);
+                if (!moved) return std::unexpected{moved.error()};
+            }
         }
         entry.status = TransactionEntryStatus::backed_up;
         auto after = write_journal(transaction);
@@ -2780,6 +4224,27 @@ private:
     for (const auto& entry : transaction.entries) {
         auto parents = validate_recovery_path_parents(transaction, entry.destination);
         if (!parents) return std::unexpected{parents.error()};
+        if (entry.kind == TransactionEntryKind::rename) {
+            parents = validate_recovery_path_parents(transaction, entry.source);
+            if (!parents) return std::unexpected{parents.error()};
+            const auto destination_relative = relative_path(transaction.root, entry.destination);
+            auto resolved_destination = resolve_existing_alias(transaction.root, destination_relative,
+                                                               transaction.capabilities);
+            if (!resolved_destination) return std::unexpected{resolved_destination.error()};
+            if (*resolved_destination != entry.destination) return false;
+            auto content = existing_file_content(entry.destination, "renamed output");
+            if (!content || !content->first || SafeWriter::sha256(content->second) != entry.post_hash) return false;
+
+            const auto source_relative = relative_path(transaction.root, entry.source);
+            auto resolved_source = resolve_existing_alias(transaction.root, source_relative,
+                                                          transaction.capabilities);
+            if (!resolved_source) return std::unexpected{resolved_source.error()};
+            std::filesystem::file_status source_status;
+            auto inspected_source = safe_status(*resolved_source, source_status);
+            if (!inspected_source) return std::unexpected{inspected_source.error()};
+            if (std::filesystem::exists(source_status) && *resolved_source == entry.source) return false;
+            continue;
+        }
         std::filesystem::file_status status;
         auto inspected = safe_status(entry.destination, status);
         if (!inspected) return std::unexpected{inspected.error()};
@@ -2879,6 +4344,11 @@ private:
     auto loaded = load_transaction(root, capabilities);
     if (!loaded) return std::unexpected{loaded.error()};
     auto& transaction = *loaded;
+    auto reconciled_migration = reconcile_parent_migration(transaction);
+    if (!reconciled_migration) {
+        return std::unexpected{recovery_required(transaction,
+                                                  reconciled_migration.error().diagnostics().front().message)};
+    }
     if (transaction.state == "committed" || transaction.state == "rolled_back") {
         auto cleanup = cleanup_transaction(transaction);
         if (!cleanup) {
@@ -2944,6 +4414,17 @@ private:
                                                   "; rollback failed: " + first_diagnostic_message(rollback.error()))};
 }
 
+[[nodiscard]] Result<void> apply_rename_entry(Transaction& transaction,
+                                              TransactionEntry& entry) {
+    auto renamed = alias_aware_rename(transaction, entry);
+    if (!renamed) return std::unexpected{renamed.error()};
+    if (!entry.temporary.empty()) {
+        auto replaced = replace_file(entry.temporary, entry.destination);
+        if (!replaced) return std::unexpected{replaced.error()};
+    }
+    return {};
+}
+
 [[nodiscard]] Result<WriteResult> execute_transaction(Transaction transaction,
                                                       const WriteResult& result) {
     auto fail = [&](const DiagnosticSet& cause) -> Result<WriteResult> {
@@ -2983,7 +4464,9 @@ private:
             if (!journal) return fail(journal.error());
             continue;
         }
-        transaction.phase = entry.kind == TransactionEntryKind::manifest ? "manifest" : "replace";
+        transaction.phase = entry.kind == TransactionEntryKind::manifest
+                                ? "manifest"
+                                : (entry.kind == TransactionEntryKind::rename ? "rename" : "replace");
         if (entry.kind == TransactionEntryKind::manifest) {
             transaction.state = "manifest_pending";
         }
@@ -2995,13 +4478,29 @@ private:
             auto injected = injected_failure(failure_point_name(Point::manifest_update), entry.destination);
             return fail(injected);
         }
-        if (entry.kind == TransactionEntryKind::replace &&
+        const bool is_output_replacement = entry.kind == TransactionEntryKind::replace ||
+                                           entry.kind == TransactionEntryKind::rename;
+        if (is_output_replacement &&
             consume_failure(Point::during_replacement, replacement_seen)) {
             auto injected = injected_failure(failure_point_name(Point::during_replacement), entry.destination);
             return fail(injected);
         }
-        auto replaced = replace_file(entry.temporary, entry.destination);
-        if (!replaced) return fail(replaced.error());
+        if (entry.kind == TransactionEntryKind::rename) {
+            auto renamed = apply_rename_entry(transaction, entry);
+            if (!renamed) return fail(renamed.error());
+        } else {
+            auto resolved_temporary = resolve_existing_alias(
+                transaction.root, relative_path(transaction.root, entry.temporary),
+                transaction.capabilities);
+            if (!resolved_temporary) return fail(resolved_temporary.error());
+            if (resolved_temporary->filename() != entry.temporary.filename()) {
+                return fail(error("transaction staging path changed while applying output",
+                                  entry.temporary.generic_string()));
+            }
+            entry.temporary = *resolved_temporary;
+            auto replaced = replace_file(entry.temporary, entry.destination);
+            if (!replaced) return fail(replaced.error());
+        }
         entry.status = TransactionEntryStatus::applied;
         // A successful replacement consumes the staging file.  A later file
         // at this deterministic path is not transaction-owned, even if it
@@ -3009,12 +4508,12 @@ private:
         entry.staging_claimed = false;
         auto after_apply = write_journal(transaction);
         if (!after_apply) return fail(after_apply.error());
-        if (entry.kind == TransactionEntryKind::replace &&
+        if (is_output_replacement &&
             consume_failure(Point::after_replacement, replacement_seen)) {
             auto injected = injected_failure(failure_point_name(Point::after_replacement), entry.destination);
             return fail(injected);
         }
-        if (entry.kind == TransactionEntryKind::replace) ++replacement_seen;
+        if (is_output_replacement) ++replacement_seen;
     }
 
     auto complete = post_state_is_complete(transaction);
@@ -3079,10 +4578,23 @@ private:
         if (!next_files.emplace(*normalized, &file).second) {
             return std::unexpected{error("generated file set contains duplicate output paths", *normalized)};
         }
-        auto existing = find_equivalent_manifest_path(next_manifest, *normalized, capabilities);
+        auto existing = find_equivalent_manifest_path(*old_manifest, *normalized, capabilities);
         if (!existing) return std::unexpected{existing.error()};
-        if (*existing) next_manifest.files.erase(**existing);
-        next_manifest.files.insert_or_assign(*normalized, SafeWriter::sha256(file.content));
+        if (*existing) {
+            auto spelling_changed = is_case_only_spelling_change(**existing, *normalized, capabilities);
+            if (!spelling_changed) return std::unexpected{spelling_changed.error()};
+            if (*spelling_changed) {
+                next_manifest.files.erase(**existing);
+                next_manifest.files.insert_or_assign(*normalized, SafeWriter::sha256(file.content));
+            } else {
+                // A normalization-only alias can resolve to the same physical
+                // name on APFS/HFS. Preserve the established manifest spelling
+                // so identical generation remains a no-op.
+                next_manifest.files.insert_or_assign(**existing, SafeWriter::sha256(file.content));
+            }
+        } else {
+            next_manifest.files.insert_or_assign(*normalized, SafeWriter::sha256(file.content));
+        }
     }
 
     auto output_valid = validate_generated_file_equivalence(next_files, capabilities);
@@ -3111,9 +4623,14 @@ private:
             if (!resolved) return std::unexpected{resolved.error()};
             auto content = existing_file_content(*resolved, "retained manifest-owned output");
             if (!content) return std::unexpected{content.error()};
-            if (!content->first || SafeWriter::sha256(content->second) != hash) {
+            if (!content->first) {
                 return std::unexpected{error("retained manifest-owned output no longer matches its recorded hash", relative)};
             }
+            const auto current_hash = SafeWriter::sha256(content->second);
+            if (current_hash != hash && !options.force) {
+                return std::unexpected{error("retained manifest-owned output no longer matches its recorded hash", relative)};
+            }
+            if (current_hash != hash) next_manifest.files.insert_or_assign(relative, current_hash);
         }
     }
 
@@ -3195,8 +4712,20 @@ private:
             }
         }
 
-        bool changed = !exists || !owned || previous_content != file->content;
-        if (changed) {
+        const auto existing_relative = relative_path(root, *resolved);
+        auto spelling_changed = is_case_only_spelling_change(existing_relative, relative, capabilities);
+        if (!spelling_changed) return std::unexpected{spelling_changed.error()};
+        if (exists && *spelling_changed && (owned || options.force)) {
+            plan.entries.push_back(PlannedEntry{TransactionEntryKind::rename,
+                                                relative,
+                                                root / relative,
+                                                true,
+                                                previous_hash,
+                                                true,
+                                                SafeWriter::sha256(file->content),
+                                                file->content,
+                                                *resolved});
+        } else if (!exists || !owned || previous_content != file->content) {
             plan.entries.push_back(PlannedEntry{TransactionEntryKind::replace,
                                                 relative,
                                                 *resolved,
@@ -3213,6 +4742,17 @@ private:
         if (!ancestors) return std::unexpected{ancestors.error()};
     }
 
+    auto retained_parent_entries = add_retained_parent_migration_entries(
+        root, *old_manifest, next_manifest, plan, next_files, options.force);
+    if (!retained_parent_entries) return std::unexpected{retained_parent_entries.error()};
+
+    auto rename_valid = validate_generated_rename_collisions(plan.entries, next_manifest, capabilities);
+    if (!rename_valid) return std::unexpected{rename_valid.error()};
+    auto staging_paths_valid = validate_planned_staging_collisions(plan.entries, next_manifest, capabilities);
+    if (!staging_paths_valid) return std::unexpected{staging_paths_valid.error()};
+    auto staging_occupancy_valid = validate_planned_staging_occupancy(plan.entries, capabilities);
+    if (!staging_occupancy_valid) return std::unexpected{staging_occupancy_valid.error()};
+
     const auto rendered_manifest = render_manifest(next_manifest);
     const bool manifest_changed = !pre_manifest.present || pre_manifest.content != rendered_manifest;
     plan.post_manifest = ManifestMetadata{true, rendered_manifest};
@@ -3227,8 +4767,28 @@ private:
                                             SafeWriter::sha256(rendered_manifest),
                                             rendered_manifest});
     }
+    std::stable_sort(plan.entries.begin(), plan.entries.end(), [](const auto& left, const auto& right) {
+        const auto priority = [](TransactionEntryKind kind) {
+            switch (kind) {
+            case TransactionEntryKind::remove:
+                return 0;
+            case TransactionEntryKind::rename:
+                return 1;
+            case TransactionEntryKind::replace:
+                return 2;
+            case TransactionEntryKind::manifest:
+                return 3;
+            }
+            return 3;
+        };
+        return priority(left.kind) < priority(right.kind);
+    });
+    auto parent_migrations_valid = validate_parent_migrations_before_transaction(root, plan);
+    if (!parent_migrations_valid) return std::unexpected{parent_migrations_valid.error()};
+    auto rename_temporaries_valid = validate_rename_temporaries_before_transaction(root, plan);
+    if (!rename_temporaries_valid) return std::unexpected{rename_temporaries_valid.error()};
     plan.result.files_written = std::ranges::count_if(plan.entries, [](const auto& entry) {
-        return entry.kind == TransactionEntryKind::replace;
+        return entry.kind == TransactionEntryKind::replace || entry.kind == TransactionEntryKind::rename;
     });
     plan.result.files_removed = std::ranges::count_if(plan.entries, [](const auto& entry) {
         return entry.kind == TransactionEntryKind::remove;

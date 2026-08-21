@@ -51,6 +51,7 @@ enum class FailurePoint {
     manifest_update,
     rollback,
     recovery,
+    after_reverse_parent_migration,
 };
 
 struct FailureInjection {
