@@ -1,4 +1,5 @@
 #include "cmakegen/fs/safe_writer.hpp"
+#include "cmakegen/fs/detail/windows_case_capability.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -129,7 +130,8 @@ struct FilesystemCapabilities {
     std::filesystem::path project_root;
     UnicodeFilesystemMode unicode_mode = UnicodeFilesystemMode::unsupported;
 #ifdef _WIN32
-    bool windows_volume_case_sensitive = false;
+    detail::WindowsVolumeCaseSensitivity windows_volume_case_sensitivity =
+        detail::WindowsVolumeCaseSensitivity::indeterminate;
 #endif
 
     [[nodiscard]] bool supports_unicode() const noexcept {
@@ -330,7 +332,9 @@ Result<void> FilesystemCapabilities::validate_path(std::string_view path) const 
     }
     const bool volume_case_sensitive = (filesystem_flags & FILE_CASE_SENSITIVE_SEARCH) != 0;
     bool case_sensitive = volume_case_sensitive;
-    result.windows_volume_case_sensitive = volume_case_sensitive;
+    result.windows_volume_case_sensitivity =
+        volume_case_sensitive ? detail::WindowsVolumeCaseSensitivity::case_sensitive
+                              : detail::WindowsVolumeCaseSensitivity::case_insensitive;
 
     // FileCaseSensitiveInfo was added for Windows 10 per-directory case
     // sensitivity.  Keep the numeric enum value local so older SDK headers
@@ -366,7 +370,10 @@ Result<void> FilesystemCapabilities::validate_path(std::string_view path) const 
                                     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
                                     FILE_FLAG_BACKUP_SEMANTICS, nullptr);
     if (handle == INVALID_HANDLE_VALUE) {
-        if (!capabilities.windows_volume_case_sensitive) return false;
+        if (const auto fallback = detail::windows_directory_case_query_fallback(
+                capabilities.windows_volume_case_sensitivity)) {
+            return *fallback;
+        }
         return std::unexpected{error("cannot determine Windows directory case sensitivity",
                                      generic_utf8_string(directory))};
     }
@@ -379,7 +386,10 @@ Result<void> FilesystemCapabilities::validate_path(std::string_view path) const 
                                                       sizeof(information));
     CloseHandle(handle);
     if (!queried) {
-        if (!capabilities.windows_volume_case_sensitive) return false;
+        if (const auto fallback = detail::windows_directory_case_query_fallback(
+                capabilities.windows_volume_case_sensitivity)) {
+            return *fallback;
+        }
         return std::unexpected{error("cannot determine Windows directory case sensitivity",
                                      generic_utf8_string(directory))};
     }

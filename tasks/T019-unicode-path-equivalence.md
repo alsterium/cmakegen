@@ -213,3 +213,19 @@ Unicode-only extension are defined in
   suite passed 17 cases with 2 platform-appropriate skips (103 assertions),
   bootstrap CTest completed with no registered tests, and `git diff --check`
   passed.
+
+### Review follow-up (indeterminate Windows volume capability)
+
+- Windows volume case sensitivity now has an explicit indeterminate state.
+  A failed per-directory case query falls back to case-insensitive behavior
+  only when `GetVolumeInformationW` previously established that mode; failed
+  volume discovery can no longer be mistaken for the boolean default.
+- Regression coverage verifies that directory-query fallback is unavailable
+  for indeterminate and case-sensitive volume states, while preserving the
+  known case-insensitive fallback.
+- Verification: normal and bootstrap builds passed; the isolated SafeWriter
+  suite passed 17 of 19 cases with 2 platform-appropriate skips (103
+  assertions), and the focused fallback test passed (3 assertions). The
+  bootstrap source-drift check passed, bootstrap CTest reported no
+  registered tests, generated CMake matched `project.yml`, and
+  `git diff --check` passed.

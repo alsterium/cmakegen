@@ -1,4 +1,5 @@
 #include "cmakegen/fs/safe_writer.hpp"
+#include "cmakegen/fs/detail/windows_case_capability.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -273,6 +274,18 @@ TEST_CASE("safe writer keeps portable ASCII aliases host independent") {
     cmakegen::GeneratedFileSet win32_aliases;
     REQUIRE(win32_aliases.add({"output", "one\n"}));
     CHECK_FALSE(win32_aliases.add({"output. ", "two\n"}));
+}
+
+TEST_CASE("Windows directory case query fallback requires a known insensitive volume") {
+    using cmakegen::detail::WindowsVolumeCaseSensitivity;
+    using cmakegen::detail::windows_directory_case_query_fallback;
+
+    CHECK_FALSE(windows_directory_case_query_fallback(
+                    WindowsVolumeCaseSensitivity::indeterminate).has_value());
+    CHECK(windows_directory_case_query_fallback(
+              WindowsVolumeCaseSensitivity::case_insensitive) == false);
+    CHECK_FALSE(windows_directory_case_query_fallback(
+                    WindowsVolumeCaseSensitivity::case_sensitive).has_value());
 }
 
 TEST_CASE("safe writer applies Win32 trailing-dot-space aliases during ownership lookup") {
