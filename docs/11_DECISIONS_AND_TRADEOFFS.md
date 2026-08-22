@@ -250,3 +250,48 @@ This changes the normalized public type of string scoped entries from
 unwrap `value`, so valid generated CMake and normalized dump output remain
 byte-for-byte unchanged. Dependency collection types and their direct members
 are unchanged.
+
+## ADR-014 — SafeWriter publishes multi-file output through a recoverable transaction
+
+Decision:
+
+SafeWriter creates a deterministic journal, pre/post manifest metadata, and
+numbered backups before replacing generated outputs. It replaces the manifest
+last. A replacement failure is rolled back in reverse order and the old output
+set is verified before the failure is reported. If rollback or automatic
+recovery cannot complete, the transaction remains explicitly uncommitted under
+`.cmakegen/transaction/` for operator recovery.
+
+Each sibling staging path is marked in the journal before it is written, so an
+interrupted partial staging file can be removed as transaction-owned during
+rollback. A pre-existing sibling staging path is explicitly recorded as
+unclaimed and preserved if staging cannot begin. Stale journal temporary files
+are discarded before the next journal write. Setup and cleanup interruptions
+that leave no journal are recoverable only for the known transaction
+scaffolding; the complete layout is validated before cleanup and unexpected
+artifacts remain protected for operator inspection. Cleanup removes the
+terminal journal before its pre/post metadata, so an interruption cannot leave
+a terminal journal that requires already-removed metadata. Recovery removes a
+transaction-created empty parent before restoring a file-to-directory
+transition and verifies every output in the post-manifest before finalizing.
+Transaction directory creation is exclusive, and a lifetime lock under
+`.cmakegen/transaction.lock` makes a competing writer fail instead of
+recovering an active transaction. Recovery revalidates destination and staging
+parents immediately before mutation and validates retained backup type/content
+before removing a destination; a competing writer never cleans another
+writer's artifacts.
+Generated destinations are also checked against every deterministic staging
+path before a transaction starts, so one output can never overwrite another
+output's staging file.
+
+Why:
+
+- sequential filesystem replacement can expose a partial generated tree
+- the manifest must never claim ownership of an incomplete new tree
+- deterministic artifacts make recovery auditable and safe to retry
+
+Tradeoff:
+
+Successful writes temporarily use additional disk space for backups and
+metadata. Check and dry-run remain write-free; successful transactions remove
+all transaction artifacts after commit verification.

@@ -270,12 +270,37 @@ Write pattern:
 
 1. render all outputs in memory
 2. validate target destinations
-3. write sibling temporary files
-4. flush/close
-5. atomically replace where supported
-6. update manifest last
+3. create a deterministic transaction journal with pre/post manifest metadata;
+   create the numbered backup directory before moving existing outputs
+4. record ownership of each sibling temporary path in the journal, then write
+   the temporary file and flush/close
+5. move existing owned outputs into the transaction backups
+6. atomically replace outputs where supported
+7. update the manifest last
+8. remove journal, backups, and temporary files only after commit verification;
+   remove the journal before its metadata so terminal recovery remains
+   loadable, and validate journal-less artifacts before removing any of them
 
 A failed render must produce no partial generated project.
+
+If replacement or manifest publication fails, SafeWriter rolls back in reverse
+order and verifies the pre-transaction hashes and manifest bytes before
+reporting the failure. If rollback or automatic recovery fails, it writes a
+deterministic uncommitted state under `.cmakegen/transaction/` containing
+`journal.json`, `pre-manifest.json`, `post-manifest.json`, and `backups/`.
+Check and dry-run stop before creating that state. Recovery removes a partial
+transaction-owned sibling temporary even when its hash is incomplete, while
+never deleting unowned files. A sibling staging path that existed before the
+transaction is never claimed or removed. A journal-less transaction is
+cleaned only after its complete contents match the known setup/cleanup
+scaffolding; validation finishes before any backup is deleted. Recovery does
+not advance the manifest until every output recorded in the complete
+post-manifest has been verified. Recreated file-to-directory parents are
+removed before their previous file backups are restored, transaction-directory
+acquisition is exclusive for the transaction lifetime, and recovery revalidates
+destination/staging parents and retained backup hashes before mutation.
+Preflight rejects generated destinations that collide with deterministic
+transaction staging paths.
 
 ## 12. Self-host architecture
 

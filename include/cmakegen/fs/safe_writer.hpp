@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace cmakegen {
@@ -35,6 +36,33 @@ struct WriteResult {
     std::size_t files_removed = 0;
     bool would_change = false;
 };
+
+// This seam is intentionally kept in an internal namespace.  It lets the
+// filesystem tests exercise failure points that are otherwise timing- and
+// platform-dependent without adding failure controls to the production write
+// options or CLI.
+namespace detail::safe_writer_testing {
+
+enum class FailurePoint {
+    before_replacement,
+    during_staging,
+    during_replacement,
+    after_replacement,
+    manifest_update,
+    rollback,
+    recovery,
+};
+
+struct FailureInjection {
+    FailurePoint point;
+    std::size_t operation_index = 0;
+};
+
+void set_failure_injection(FailureInjection injection);
+void queue_failure_injection(FailureInjection injection);
+void clear_failure_injection();
+
+} // namespace detail::safe_writer_testing
 
 /// Owns generation output below one project root.  All GeneratedFile paths are
 /// relative to that root; absolute and parent-traversal paths are rejected.
