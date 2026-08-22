@@ -24,6 +24,7 @@ target_sources(cmakegen_core
     "include/cmakegen/domain/dump.hpp"
     "include/cmakegen/domain/model.hpp"
     "include/cmakegen/domain/normalizer.hpp"
+    "include/cmakegen/fs/detail/windows_case_capability.hpp"
     "include/cmakegen/fs/safe_writer.hpp"
     "include/cmakegen/generator/presets_compatibility.hpp"
     "include/cmakegen/generator/presets_renderer.hpp"

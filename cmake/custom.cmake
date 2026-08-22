@@ -3,6 +3,11 @@
 # schema-v1 model.
 include(CTest)
 
+if(APPLE)
+  find_library(CMAKEGEN_COREFOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
+  target_link_libraries(cmakegen_core PUBLIC "${CMAKEGEN_COREFOUNDATION_FRAMEWORK}")
+endif()
+
 target_compile_definitions(cmakegen_tests PRIVATE
   CMAKEGEN_CMAKE_COMMAND="${CMAKE_COMMAND}"
   CMAKEGEN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"

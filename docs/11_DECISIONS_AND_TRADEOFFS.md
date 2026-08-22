@@ -186,10 +186,30 @@ This is a portability invariant: `Foo.txt` and `foo.txt` are
 collision-equivalent even on a case-sensitive host, so generated output cannot
 contain both portable spellings.
 
-T019 may add filesystem-capability-aware handling for additional Unicode case
-and normalization equivalences, but it must not replace or relax the portable
-ASCII/Win32 invariant. If Unicode capability cannot be detected safely, the
+The Unicode extension is filesystem-capability-aware and must not replace or
+relax the portable ASCII/Win32 invariant. On supported macOS APFS/HFS volumes,
+SafeWriter compares Unicode names using Core Foundation normalization and
+case-folding rules, re-detecting the capability at each existing parent so a
+nested mount is not compared using the project-root volume's mode. A comparison
+uses both physical parent modes and applies case-insensitive comparison if
+either destination is case-insensitive, keeping the result symmetric. On Windows,
+native paths are converted to UTF-8 before validation, then validated through
+UTF-16 and compared ordinally; the case-sensitivity flag is queried for each
+existing parent directory while a path is resolved, so per-directory
+case-sensitive settings are respected. These comparisons never use the process
+locale. If a required Unicode capability cannot be detected safely, the
 implementation must fail safe rather than claim collision safety.
+
+All manifest keys and generated relative paths are converted explicitly between
+the UTF-8 identity representation and native filesystem paths before alias
+resolution. This applies equally to writes, stale cleanup, and `clean`, so a
+non-UTF-8 Windows active code page cannot create a destination spelling that
+differs from manifest ownership.
+
+Temporary output names are derived through native `std::filesystem::path`
+operations from their destination filename. They must not convert the basename
+through a narrow string, so paths that the active Windows code page cannot
+represent remain writable atomically.
 
 Why:
 
